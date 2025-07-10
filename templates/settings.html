@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Settings - Media Player</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .form-group { margin: 15px 0; }
+        .form-group label { display: inline-block; width: 150px; }
+        .form-group input { padding: 5px; width: 200px; }
+        .button { padding: 10px 20px; font-size: 16px; margin: 10px 5px; }
+        .button.primary { background-color: #007bff; color: white; border: none; }
+        .button.secondary { background-color: #6c757d; color: white; border: none; }
+    </style>
+</head>
+<body>
+    <h1>Settings</h1>
+    
+    <form action="/save_settings" method="post">
+        <div class="form-group">
+            <label for="server_port">Server Port:</label>
+            <input type="number" id="server_port" name="server_port" value="{{ settings.server_port }}">
+        </div>
+        
+        <div class="form-group">
+            <label for="crossfade_time">Crossfade Time (seconds):</label>
+            <input type="number" id="crossfade_time" name="crossfade_time" value="{{ settings.crossfade_time }}">
+        </div>
+        
+        <button type="submit" class="button primary">Save Settings</button>
+        <button type="button" class="button secondary" onclick="window.location.href='/'">Cancel</button>
+    </form>
+</body>
+</html>
