@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Media Player</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .menu { margin-bottom: 20px; }
+        .menu button { margin: 5px; padding: 10px 20px; font-size: 16px; }
+        .content { margin-top: 20px; }
+        .hidden { display: none; }
+        .audio-player { margin: 20px 0; }
+        .metadata { margin: 20px 0; }
+        .album-art { max-width: 200px; max-height: 200px; }
+        .search-results { margin: 10px 0; }
+        .search-result { padding: 10px; border: 1px solid #ccc; margin: 5px 0; cursor: pointer; }
+        .search-result:hover { background-color: #f0f0f0; }
+        .playlist-item { padding: 10px; border: 1px solid #ccc; margin: 5px 0; cursor: pointer; }
+        .playlist-item:hover { background-color: #f0f0f0; }
+    </style>
+</head>
+<body>
+    <h1>Media Player</h1>
+
+    <div class="menu">
+        {% if is_localhost %}
+        <button onclick="scanLibrary()">Scan Library</button>
+        {% endif %}
+        <button onclick="showPlayFromPlaylist()">Play from Playlist</button>
+        <button onclick="showPlayFile()">Play a File</button>
+        <button onclick="showSettings()">Settings</button>
+    </div>
+
+    <div id="content" class="content">
+        <div id="status"></div>
+
+        <div id="playlist-section" class="hidden">
+            <h3>Select Playlist</h3>
+            <div id="playlist-list"></div>
+        </div>
+
+        <div id="search-section" class="hidden">
+            <h3>Search Songs</h3>
+            <select id="search-column">
+                <option value="artist">Artist</option>
+                <option value="song_title">Song Title</option>
+                <option value="album">Album</option>
+            </select>
+            <input type="text" id="search-input" placeholder="Enter search term...">
+            <button onclick="searchSongs()">Search</button>
+            <div id="search-results"></div>
+        </div>
+
+        <div id="player-section" class="hidden">
+            <div class="audio-player">
+                <audio id="audio1" controls></audio>
+                <audio id="audio2" controls></audio>
+            </div>
+            <div id="metadata" class="metadata"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentAudio = 1;
+        let playlist = [];
+        let currentIndex = 0;
+        let crossfadeTime = 4;
+
+        function scanLibrary() {
+            document.getElementById('status').innerHTML = 'Scanning library...';
+            fetch('/scan_library', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        document.getElementById('status').innerHTML = data.message;
+                    } else {
+                        document.getElementById('status').innerHTML = 'Error: ' + data.error;
+                    }
+                });
+        }
+
+        function showPlayFromPlaylist() {
+            hideAllSections();
+            document.getElementById('playlist-section').classList.remove('hidden');
+            loadPlaylists();
+        }
+
+        function showPlayFile() {
+            hideAllSections();
+            document.getElementById('search-section').classList.remove('hidden');
+        }
+
+        function showSettings() {
+            window.location.href = '/settings';
+        }
+
+        function hideAllSections() {
+            document.getElementById('playlist-section').classList.add('hidden');
+            document.getElementById('search-section').classList.add('hidden');
+            document.getElementById('player-section').classList.add('hidden');
+        }
+
+        function loadPlaylists() {
+            fetch('/get_playlists')
+                .then(response => response.json())
+                .then(data => {
+                    const listDiv = document.getElementById('playlist-list');
+                    listDiv.innerHTML = '';
+                    data.forEach(playlist => {
+                        const div = document.createElement('div');
+                        div.className = 'playlist-item';
+                        div.textContent = playlist.name;
+                        div.onclick = () => loadPlaylist(playlist.id);
+                        listDiv.appendChild(div);
+                    });
+                });
+        }
+
+        function loadPlaylist(playlistId) {
+            fetch(`/load_playlist/${playlistId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        playlist = data.playlist;
+                        currentIndex = 0;
+                        showPlayerSection();
+                        playCurrentSong();
+                    } else {
+                        document.getElementById('status').innerHTML = 'Error: ' + data.error;
+                    }
+                });
+        }
+
+        function searchSongs() {
+            const column = document.getElementById('search-column').value;
+            const query = document.getElementById('search-input').value;
+
+            if (!query) return;
+
+            fetch(`/search_songs?column=${column}&query=${encodeURIComponent(query)}`)
+                .then(response => response.json())
+                .then(data => {
+                    const resultsDiv = document.getElementById('search-results');
+                    resultsDiv.innerHTML = '';
+
+                    if (data.error) {
+                        resultsDiv.innerHTML = 'Error: ' + data.error;
+                        return;
+                    }
+
+                    data.forEach(song => {
+                        const div = document.createElement('div');
+                        div.className = 'search-result';
+                        div.innerHTML = `<strong>${song.artist}</strong> - ${song.title} (${song.album})`;
+                        div.onclick = () => playSingleSong(song.path);
+                        resultsDiv.appendChild(div);
+                    });
+                });
+        }
+
+        function playSingleSong(filePath) {
+            playlist = [filePath];
+            currentIndex = 0;
+            showPlayerSection();
+            playCurrentSong();
+        }
+
+        function showPlayerSection() {
+            hideAllSections();
+            document.getElementById('player-section').classList.remove('hidden');
+        }
+
+        function playCurrentSong() {
+            if (currentIndex >= playlist.length) return;
+
+            const currentSong = playlist[currentIndex];
+            const audio = document.getElementById(`audio${currentAudio}`);
+
+            audio.src = `/serve_audio/${encodeURIComponent(currentSong)}`;
+            audio.play();
+
+            // Load metadata
+            fetch(`/get_song_metadata/${encodeURIComponent(currentSong)}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.error) {
+                        displayMetadata(data);
+                    }
+                });
+
+            // Setup next song
+            setupNextSong();
+        }
+
+        function setupNextSong() {
+            const currentAudioElement = document.getElementById(`audio${currentAudio}`);
+            let hasPreloaded = false;
+            let hasStarted = false;
+            currentAudioElement.addEventListener('timeupdate', function() {
+                const timeLeft = this.duration - this.currentTime;
+                if (timeLeft <= crossfadeTime + 5 && currentIndex + 1 < playlist.length && !hasPreloaded) {
+                    preloadNextSong();
+                    hasPreloaded = true;
+                };
+                if (timeLeft <= crossfadeTime && currentIndex + 1 < playlist.length && !hasStarted) {
+                    playNextSong();
+                    hasStarted = true;
+                 };
+            });
+
+         //   currentAudioElement.addEventListener('ended', function() {
+
+        }
+
+        function preloadNextSong() {
+            if (currentIndex + 1 >= playlist.length) return;
+
+            const nextAudio = currentAudio === 1 ? 2 : 1;
+            const nextSong = playlist[currentIndex + 1];
+
+            document.getElementById(`audio${nextAudio}`).src = `/serve_audio/${encodeURIComponent(nextSong)}`;
+        }
+
+        function playNextSong() {
+            currentIndex++;
+            if (currentIndex >= playlist.length) return;
+
+            currentAudio = currentAudio === 1 ? 2 : 1;
+            const audio = document.getElementById(`audio${currentAudio}`);
+
+            audio.play();
+
+            // Load metadata for new song
+            const currentSong = playlist[currentIndex];
+            fetch(`/get_song_metadata/${encodeURIComponent(currentSong)}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.error) {
+                        displayMetadata(data);
+                    }
+                });
+
+            setupNextSong();
+        }
+
+        function displayMetadata(metadata) {
+            const metadataDiv = document.getElementById('metadata');
+            let html = '<h3>Now Playing</h3>';
+
+            if (metadata.picture) {
+                html += `<img src="data:image/jpeg;base64,${metadata.picture}" class="album-art"><br>`;
+            }
+
+            html += `<strong>Artist:</strong> ${metadata.artist}<br>`;
+            html += `<strong>Title:</strong> ${metadata.title}<br>`;
+            html += `<strong>Album:</strong> ${metadata.album}<br>`;
+            html += `<strong>Year:</strong> ${metadata.year}<br>`;
+            html += `<strong>Duration:</strong> ${Math.floor(metadata.duration / 60)}:${(metadata.duration % 60).toString().padStart(2, '0')}`;
+
+            metadataDiv.innerHTML = html;
+        }
+    </script>
+</body>
+</html>

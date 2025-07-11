@@ -192,7 +192,8 @@ def parse_playlist_file(playlist_path):
         with open(playlist_path, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
-                if line and not line.startswith('#'):
+                line = line.strip('.\\')
+                if line and not line.startswith(('#', '﻿#')):
                     # Convert relative path to absolute path
                     if not os.path.isabs(line):
                         line = os.path.join(playlist_dir, line)
