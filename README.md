@@ -19,9 +19,9 @@ pip install flask mutagen fuzzywuzzy python-levenshtein
    ```   
 **Additional Files Needed:**
 ```sh
-- Create a templates folder and add:
-index.html template
-settings.html template
+Create a templates folder and add:
+  index.html template
+  settings.html template
    ``` 
 ### Setup Instructions:
 
@@ -54,5 +54,5 @@ Key Features Implemented:
 - **Web Interface:** Clean, responsive interface with all required functionality
 
 *The application will start a web server on port 5000 (configurable) 
-and provide a complete media player experience with all the features you requested. 
+and provide a complete media player experience with all the features mentioned above. 
 The interface is intuitive and handles errors gracefully while providing feedback to users.*
