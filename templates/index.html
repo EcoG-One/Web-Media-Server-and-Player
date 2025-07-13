@@ -2,21 +2,8 @@
 <html>
 <head>
     <title>Media Player</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        .menu { margin-bottom: 20px; }
-        .menu button { margin: 5px; padding: 10px 20px; font-size: 16px; }
-        .content { margin-top: 20px; }
-        .hidden { display: none; }
-        .audio-player { margin: 20px 0; }
-        .metadata { margin: 20px 0; }
-        .album-art { max-width: 200px; max-height: 200px; }
-        .search-results { margin: 10px 0; }
-        .search-result { padding: 10px; border: 1px solid #ccc; margin: 5px 0; cursor: pointer; }
-        .search-result:hover { background-color: #f0f0f0; }
-        .playlist-item { padding: 10px; border: 1px solid #ccc; margin: 5px 0; cursor: pointer; }
-        .playlist-item:hover { background-color: #f0f0f0; }
-    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="static/css/style.css">
 </head>
 <body>
     <h1>Media Player</h1>
@@ -56,14 +43,25 @@
                 <audio id="audio2" controls></audio>
             </div>
             <div id="metadata" class="metadata"></div>
+            <div id="playlist-display" class="playlist-display hidden">
+                <h3>Playlist</h3>
+                <div id="playlist-songs"></div>
+            </div>
         </div>
     </div>
 
-    <script>
+<script>
         let currentAudio = 1;
         let playlist = [];
         let currentIndex = 0;
         let crossfadeTime = 4;
+        let playlistMetadata = [];
+        let playedSongs = new Set();
+        
+        // Add state management for preventing race conditions
+        let isTransitioning = false;
+        let crossfadeActive = false;
+        let currentEventListeners = new Map(); // Track active listeners
 
         function scanLibrary() {
             document.getElementById('status').innerHTML = 'Scanning library...';
@@ -122,7 +120,12 @@
                     if (data.success) {
                         playlist = data.playlist;
                         currentIndex = 0;
+                        playedSongs.clear();
+                        playlistMetadata = [];
+                        isTransitioning = false;
+                        crossfadeActive = false;
                         showPlayerSection();
+                        loadPlaylistMetadata();
                         playCurrentSong();
                     } else {
                         document.getElementById('status').innerHTML = 'Error: ' + data.error;
@@ -147,11 +150,32 @@
                         return;
                     }
 
-                    data.forEach(song => {
+                    if (data.length === 0) {
+                        resultsDiv.innerHTML = 'No songs found.';
+                        return;
+                    }
+
+                    // Add "Play All" button
+                    const playAllDiv = document.createElement('div');
+                    playAllDiv.style.marginBottom = '10px';
+                    playAllDiv.innerHTML = `
+                        <button onclick="playSearchResults()" style="padding: 8px 16px; background-color: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                            Play All (${data.length} songs)
+                        </button>
+                    `;
+                    resultsDiv.appendChild(playAllDiv);
+
+                    // Store search results globally
+                    window.searchResults = data;
+
+                    data.forEach((song, index) => {
                         const div = document.createElement('div');
                         div.className = 'search-result';
-                        div.innerHTML = `<strong>${song.artist}</strong> - ${song.title} (${song.album})`;
-                        div.onclick = () => playSingleSong(song.path);
+                        div.innerHTML = `
+                            <span class="song-number">${index + 1}.</span>
+                            <strong>${song.artist}</strong> - ${song.title} (${song.album})
+                        `;
+                        div.onclick = () => playSearchResultsFrom(index);
                         resultsDiv.appendChild(div);
                     });
                 });
@@ -160,6 +184,10 @@
         function playSingleSong(filePath) {
             playlist = [filePath];
             currentIndex = 0;
+            playedSongs.clear();
+            playlistMetadata = [];
+            isTransitioning = false;
+            crossfadeActive = false;
             showPlayerSection();
             playCurrentSong();
         }
@@ -167,16 +195,78 @@
         function showPlayerSection() {
             hideAllSections();
             document.getElementById('player-section').classList.remove('hidden');
+            if (playlist.length > 1) {
+                document.getElementById('playlist-display').classList.remove('hidden');
+            }
+        }
+
+        // Improved event listener management
+        function removeAllEventListeners() {
+            const audio1 = document.getElementById('audio1');
+            const audio2 = document.getElementById('audio2');
+            
+            // Remove all tracked listeners
+            currentEventListeners.forEach((listeners, audioId) => {
+                const audio = document.getElementById(audioId);
+                listeners.forEach(({event, handler}) => {
+                    audio.removeEventListener(event, handler);
+                });
+            });
+            
+            // Clear the tracking map
+            currentEventListeners.clear();
+        }
+
+        function addEventListenerTracked(audioId, event, handler) {
+            const audio = document.getElementById(audioId);
+            audio.addEventListener(event, handler);
+            
+            // Track the listener
+            if (!currentEventListeners.has(audioId)) {
+                currentEventListeners.set(audioId, []);
+            }
+            currentEventListeners.get(audioId).push({event, handler});
         }
 
         function playCurrentSong() {
             if (currentIndex >= playlist.length) return;
+            if (isTransitioning) return; // Prevent multiple simultaneous calls
 
             const currentSong = playlist[currentIndex];
             const audio = document.getElementById(`audio${currentAudio}`);
 
+            // Reset states
+            isTransitioning = true;
+            crossfadeActive = false;
+
+            // Clean up any existing listeners
+            removeAllEventListeners();
+
+            // Reset volume to full for the current song
+            audio.volume = 1;
+
+            // Stop any other audio that might be playing
+            const otherAudio = document.getElementById(`audio${currentAudio === 1 ? 2 : 1}`);
+            otherAudio.pause();
+            otherAudio.currentTime = 0;
+
+            // Set the source and play
             audio.src = `/serve_audio/${encodeURIComponent(currentSong)}`;
-            audio.play();
+            audio.play().then(() => {
+                // Mark current song as played
+                playedSongs.add(currentIndex);
+
+                // Update playlist display
+                updatePlaylistDisplay();
+
+                // Setup next song handling
+                setupNextSong();
+                
+                isTransitioning = false;
+            }).catch(error => {
+                console.error('Error playing song:', error);
+                isTransitioning = false;
+            });
 
             // Load metadata
             fetch(`/get_song_metadata/${encodeURIComponent(currentSong)}`)
@@ -186,60 +276,180 @@
                         displayMetadata(data);
                     }
                 });
-
-            // Setup next song
-            setupNextSong();
         }
 
         function setupNextSong() {
-            const currentAudioElement = document.getElementById(`audio${currentAudio}`);
-            let hasPreloaded = false;
-            let hasStarted = false;
-            currentAudioElement.addEventListener('timeupdate', function() {
+            const currentAudioId = `audio${currentAudio}`;
+            const currentAudioElement = document.getElementById(currentAudioId);
+            
+            let hasStartedCrossfade = false;
+
+            // Create the timeupdate handler
+            const timeUpdateHandler = function() {
+                if (isTransitioning) return; // Prevent actions during transitions
+                
                 const timeLeft = this.duration - this.currentTime;
-                if (timeLeft <= crossfadeTime + 5 && currentIndex + 1 < playlist.length && !hasPreloaded) {
-                    preloadNextSong();
-                    hasPreloaded = true;
-                };
-                if (timeLeft <= crossfadeTime && currentIndex + 1 < playlist.length && !hasStarted) {
-                    playNextSong();
-                    hasStarted = true;
-                 };
-            });
+                if (timeLeft <= crossfadeTime && currentIndex + 1 < playlist.length && !hasStartedCrossfade && !crossfadeActive) {
+                    hasStartedCrossfade = true;
+                    startCrossfade();
+                }
+            };
 
-         //   currentAudioElement.addEventListener('ended', function() {
+            // Create the ended handler
+            const endedHandler = function() {
+                if (isTransitioning) return; // Prevent multiple calls
+                
+                // Small delay to ensure crossfade logic completes if active
+                setTimeout(() => {
+                    if (!crossfadeActive) {
+                        playNextSong();
+                    }
+                }, 100);
+            };
 
+            // Add tracked event listeners
+            addEventListenerTracked(currentAudioId, 'timeupdate', timeUpdateHandler);
+            addEventListenerTracked(currentAudioId, 'ended', endedHandler);
         }
 
-        function preloadNextSong() {
+        function startCrossfade() {
             if (currentIndex + 1 >= playlist.length) return;
+            if (crossfadeActive) return; // Prevent multiple crossfades
 
+            crossfadeActive = true;
+            const currentAudioElement = document.getElementById(`audio${currentAudio}`);
             const nextAudio = currentAudio === 1 ? 2 : 1;
+            const nextAudioElement = document.getElementById(`audio${nextAudio}`);
             const nextSong = playlist[currentIndex + 1];
 
-            document.getElementById(`audio${nextAudio}`).src = `/serve_audio/${encodeURIComponent(nextSong)}`;
+            // Set up the next song
+            nextAudioElement.src = `/serve_audio/${encodeURIComponent(nextSong)}`;
+            nextAudioElement.volume = 0; // Start with volume at 0
+
+            // Start playing the next song
+            nextAudioElement.play().then(() => {
+                // Begin crossfade
+                performCrossfade(currentAudioElement, nextAudioElement);
+
+                // Load metadata for next song (but don't display it yet)
+                fetch(`/get_song_metadata/${encodeURIComponent(nextSong)}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (!data.error) {
+                            // Store metadata for when the song officially starts
+                            window.nextSongMetadata = data;
+                        }
+                    });
+            }).catch(error => {
+                console.error('Error starting next song:', error);
+                crossfadeActive = false;
+            });
+        }
+
+        function performCrossfade(currentAudio, nextAudio) {
+            const fadeSteps = 20; // Number of volume adjustment steps
+            const fadeInterval = (crossfadeTime * 1000) / fadeSteps; // Interval between steps in ms
+            let step = 0;
+
+            const fadeTimer = setInterval(() => {
+                step++;
+                const progress = step / fadeSteps;
+
+                // Fade out current audio
+                currentAudio.volume = Math.max(0, 1 - progress);
+
+                // Fade in next audio
+                nextAudio.volume = Math.min(1, progress);
+
+                if (step >= fadeSteps) {
+                    clearInterval(fadeTimer);
+                    currentAudio.volume = 0;
+                    nextAudio.volume = 1;
+                    
+                    // Trigger next song logic after crossfade completes
+                    setTimeout(() => {
+                        playNextSong();
+                    }, 100);
+                }
+            }, fadeInterval);
         }
 
         function playNextSong() {
+            if (isTransitioning) return; // Prevent multiple calls
+            
             currentIndex++;
-            if (currentIndex >= playlist.length) return;
+            if (currentIndex >= playlist.length) {
+                crossfadeActive = false;
+                return;
+            }
 
+            isTransitioning = true;
             currentAudio = currentAudio === 1 ? 2 : 1;
             const audio = document.getElementById(`audio${currentAudio}`);
 
-            audio.play();
+            // Check if crossfade is active
+            if (crossfadeActive) {
+                // Song is already playing from crossfade, just update metadata and display
+                audio.volume = 1; // Ensure volume is at full
 
-            // Load metadata for new song
-            const currentSong = playlist[currentIndex];
-            fetch(`/get_song_metadata/${encodeURIComponent(currentSong)}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (!data.error) {
-                        displayMetadata(data);
-                    }
+                // Mark current song as played
+                playedSongs.add(currentIndex);
+
+                // Update playlist display
+                updatePlaylistDisplay();
+
+                // Display metadata if we have it from crossfade
+                if (window.nextSongMetadata) {
+                    displayMetadata(window.nextSongMetadata);
+                    window.nextSongMetadata = null; // Clear it
+                } else {
+                    // Load metadata normally
+                    const currentSong = playlist[currentIndex];
+                    fetch(`/get_song_metadata/${encodeURIComponent(currentSong)}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            if (!data.error) {
+                                displayMetadata(data);
+                            }
+                        });
+                }
+
+                // Reset crossfade flag
+                crossfadeActive = false;
+            } else {
+                // Normal playback (no crossfade happened)
+                const currentSong = playlist[currentIndex];
+                
+                // Stop the other audio
+                const otherAudio = document.getElementById(`audio${currentAudio === 1 ? 2 : 1}`);
+                otherAudio.pause();
+                otherAudio.currentTime = 0;
+                
+                audio.volume = 1;
+                audio.src = `/serve_audio/${encodeURIComponent(currentSong)}`;
+                audio.play().then(() => {
+                    // Mark current song as played
+                    playedSongs.add(currentIndex);
+
+                    // Update playlist display
+                    updatePlaylistDisplay();
+                }).catch(error => {
+                    console.error('Error playing next song:', error);
                 });
 
+                // Load metadata
+                fetch(`/get_song_metadata/${encodeURIComponent(currentSong)}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (!data.error) {
+                            displayMetadata(data);
+                        }
+                    });
+            }
+
+            // Setup next song handling
             setupNextSong();
+            isTransitioning = false;
         }
 
         function displayMetadata(metadata) {
@@ -257,6 +467,165 @@
             html += `<strong>Duration:</strong> ${Math.floor(metadata.duration / 60)}:${(metadata.duration % 60).toString().padStart(2, '0')}`;
 
             metadataDiv.innerHTML = html;
+        }
+
+        function loadPlaylistMetadata() {
+            // Load metadata for all songs in the playlist
+            playlist.forEach((songPath, index) => {
+                fetch(`/get_song_metadata/${encodeURIComponent(songPath)}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (!data.error) {
+                            playlistMetadata[index] = data;
+                        } else {
+                            // Fallback to filename if metadata unavailable
+                            const fileName = songPath.split('/').pop().split('\\').pop();
+                            playlistMetadata[index] = {
+                                artist: 'Unknown Artist',
+                                title: fileName,
+                                album: 'Unknown Album',
+                                duration: 0
+                            };
+                        }
+                        // Update display when metadata is loaded
+                        updatePlaylistDisplay();
+                    })
+                    .catch(() => {
+                        // Fallback for network errors
+                        const fileName = songPath.split('/').pop().split('\\').pop();
+                        playlistMetadata[index] = {
+                            artist: 'Unknown Artist',
+                            title: fileName,
+                            album: 'Unknown Album',
+                            duration: 0
+                        };
+                        updatePlaylistDisplay();
+                    });
+            });
+        }
+
+        function updatePlaylistDisplay() {
+            if (playlist.length <= 1) return;
+
+            const playlistSongsDiv = document.getElementById('playlist-songs');
+            playlistSongsDiv.innerHTML = '';
+
+            playlist.forEach((songPath, index) => {
+                const songDiv = document.createElement('div');
+                songDiv.className = 'playlist-song';
+
+                // Add current, played, and hover classes
+                if (index === currentIndex) {
+                    songDiv.classList.add('current');
+                } else if (playedSongs.has(index)) {
+                    songDiv.classList.add('played');
+                }
+
+                const metadata = playlistMetadata[index];
+                const songInfo = document.createElement('div');
+                songInfo.className = 'song-info';
+
+                if (metadata) {
+                    const duration = metadata.duration > 0 ?
+                        `${Math.floor(metadata.duration / 60)}:${(metadata.duration % 60).toString().padStart(2, '0')}` :
+                        '';
+
+                    songInfo.innerHTML = `
+                        <span class="song-number">${index + 1}.</span>
+                        <strong>${metadata.artist}</strong> - ${metadata.title}
+                        ${metadata.album ? `<span style="color: #666;"> (${metadata.album})</span>` : ''}
+                        ${duration ? `<span style="float: right; color: #666;">${duration}</span>` : ''}
+                    `;
+                } else {
+                    const fileName = songPath.split('/').pop().split('\\').pop();
+                    songInfo.innerHTML = `
+                        <span class="song-number">${index + 1}.</span>
+                        Loading... (${fileName})
+                    `;
+                }
+
+                songDiv.appendChild(songInfo);
+                songDiv.onclick = () => jumpToSong(index);
+                playlistSongsDiv.appendChild(songDiv);
+            });
+        }
+
+        function jumpToSong(index) {
+            if (index < 0 || index >= playlist.length) return;
+            if (isTransitioning) return; // Prevent jumps during transitions
+
+            // Clean up all existing listeners and stop all audio
+            removeAllEventListeners();
+            
+            const audio1 = document.getElementById('audio1');
+            const audio2 = document.getElementById('audio2');
+            
+            audio1.pause();
+            audio2.pause();
+            audio1.currentTime = 0;
+            audio2.currentTime = 0;
+
+            // Reset states
+            isTransitioning = false;
+            crossfadeActive = false;
+
+            // Update current index
+            currentIndex = index;
+
+            // Play the selected song
+            playCurrentSong();
+        }
+
+        function playSearchResults() {
+            if (!window.searchResults || window.searchResults.length === 0) return;
+
+            // Convert search results to playlist format
+            playlist = window.searchResults.map(song => song.path);
+            currentIndex = 0;
+            playedSongs.clear();
+            playlistMetadata = [];
+            isTransitioning = false;
+            crossfadeActive = false;
+
+            // Populate metadata from search results
+            window.searchResults.forEach((song, index) => {
+                playlistMetadata[index] = {
+                    artist: song.artist,
+                    title: song.title,
+                    album: song.album,
+                    duration: 0 // Will be loaded when played
+                };
+            });
+
+            showPlayerSection();
+            updatePlaylistDisplay();
+            playCurrentSong();
+        }
+
+        function playSearchResultsFrom(startIndex) {
+            if (!window.searchResults || window.searchResults.length === 0) return;
+
+            // Convert search results to playlist format
+            playlist = window.searchResults.map(song => song.path);
+            currentIndex = startIndex;
+            playedSongs.clear();
+            playlistMetadata = [];
+            isTransitioning = false;
+            crossfadeActive = false;
+
+            // Populate metadata from search results
+            window.searchResults.forEach((song, index) => {
+                playlistMetadata[index] = {
+                    artist: song.artist,
+                    title: song.title,
+                    album: song.album,
+                    duration: 0 // Will be loaded when played
+                };
+            });
+
+            showPlayerSection();
+            updatePlaylistDisplay();
+            playCurrentSong();
         }
     </script>
 </body>
