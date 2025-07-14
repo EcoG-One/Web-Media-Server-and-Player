@@ -1,20 +1,20 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Media Player</title>
+    <title>EcoG's Media Player</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="static/css/style.css">
 </head>
 <body>
-    <h1>Media Player</h1>
+    <h1>EcoG's Media Player</h1>
 
     <div class="menu">
         {% if is_localhost %}
         <button onclick="scanLibrary()">Scan Library</button>
-        {% endif %}
-        <button onclick="showPlayFromPlaylist()">Play from Playlist</button>
-        <button onclick="showPlayFile()">Play a File</button>
         <button onclick="showSettings()">Settings</button>
+        {% endif %}
+        <button onclick="showPlayFromPlaylist()">Play Playlists</button>
+        <button onclick="showPlayFile()">Play Songs</button>
     </div>
 
     <div id="content" class="content">
@@ -44,7 +44,7 @@
             </div>
             <div id="metadata" class="metadata"></div>
             <div id="playlist-display" class="playlist-display hidden">
-                <h3>Playlist</h3>
+                <h3 id="playlist_name"></h3>
                 <div id="playlist-songs"></div>
             </div>
         </div>
@@ -126,6 +126,7 @@
                         crossfadeActive = false;
                         showPlayerSection();
                         loadPlaylistMetadata();
+                        document.getElementById('playlist_name').innerHTML = data.name
                         playCurrentSong();
                     } else {
                         document.getElementById('status').innerHTML = 'Error: ' + data.error;
@@ -599,6 +600,8 @@
 
             showPlayerSection();
             updatePlaylistDisplay();
+           // document.getElementById('playlist_name').innerHTML = playlistMetadata[currentIndex].album
+           document.getElementById('playlist_name').innerHTML = ''
             playCurrentSong();
         }
 
@@ -625,6 +628,7 @@
 
             showPlayerSection();
             updatePlaylistDisplay();
+            document.getElementById('playlist_name').innerHTML = ''
             playCurrentSong();
         }
     </script>
