@@ -449,8 +449,10 @@ def index():
 def scan_library():
     try:
         logger.info("Starting library scan")
-        
-        # Run scan_folder.py script first
+
+        # Run openfile.py (or openfile.exe if app will be converted to
+        # windows executable) to select music library folder
+      # result = subprocess.run(['python', 'openfile.py'], capture_output=True, text=True)
         result = subprocess.run(["openfile.exe"], capture_output=True, text=True, timeout=30)
         folder_path = result.stdout.strip("\n")
         

@@ -41,7 +41,7 @@ pip install flask mutagen fuzzywuzzy python-levenshtein
    ``` 
 **Run the application:**
 ```sh
-python media_server.py
+python ecoserver.py
    ``` 
 
 Key Features Implemented:
