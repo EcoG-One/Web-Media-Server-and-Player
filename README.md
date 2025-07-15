@@ -11,6 +11,7 @@
 - **Audio Metadata:** Extracts and displays metadata including album art
 - **Crossfading:** Dual audio elements for seamless crossfading between songs
 - **Settings:** Configurable server port and crossfade time
+- **Logging** Multi-Level Logging System
 
 **Dependencies Required:**
 You'll need to install these Python packages:
@@ -52,6 +53,52 @@ Key Features Implemented:
 - **Playlist Support:** Parses M3U and PLS files with relative path resolution
 - **Database Integration:** Prevents duplicate entries and maintains library state
 - **Web Interface:** Clean, responsive interface with all required functionality
+
+🔧 Logging Features:
+1. **Multi-Level Logging System**
+Debug logs: Detailed function calls and data processing
+Info logs: General operation status and user actions
+Warning logs: Non-critical issues that don't break functionality
+Error logs: Critical errors with full stack traces
+2. **Multiple Log Destinations**
+logs/ecoserver.log: Complete application logs (all levels)
+logs/errors.log: Error-only logs for quick troubleshooting
+Console output: Real-time monitoring during development
+3. **Enhanced Error Handling**
+Database operations: Proper SQLite error handling
+File operations: Checks for file existence and permissions
+Metadata extraction: Graceful handling of corrupt audio files
+Network requests: Timeout handling for external processes
+Flask routes: Global exception handlers for web requests
+4. **Detailed Error Context**
+Function names and line numbers in logs
+Full stack traces for debugging
+Request information (IP addresses, URLs)
+Performance metrics (file counts, processing times)
+5. **Key Monitoring Points**
+Library scanning progress and errors
+Database operations success/failure
+File accessibility issues
+Metadata extraction problems
+Playlist parsing errors
+Search operation performance
+
+📁 Log Files Created:
+The application will automatically create a logs/ directory with:
+```sh
+ecoserver.log - Complete application activity
+errors.log - Critical errors only
+```
+🚀 Additional Benefits:
+
+- **Startup logging** - Records Python version, working directory
+- **Request tracking** - Logs all incoming HTTP requests
+- **Performance monitoring** - Tracks file processing times
+- **Security logging** - Records localhost vs. remote access attempts
+- **Graceful degradation** - Application continues running even with non-critical errors
+
+The enhanced logging provides detailed insights into what's happening under the hood. 
+This will make it much easier to diagnose issues, monitor performance, and maintain the application in production.
 
 *The application will start a web server on port 5000 (configurable) 
 and provide a complete media player experience with all the features mentioned above. 

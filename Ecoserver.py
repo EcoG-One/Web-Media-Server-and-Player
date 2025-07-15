@@ -10,7 +10,7 @@ from mutagen.id3 import ID3, APIC
 import base64
 from fuzzywuzzy import fuzz, process
 import json
-import pyperclip
+# import pyperclip
 
 app = Flask(__name__)
 
@@ -223,7 +223,9 @@ def index():
 def scan_library():
     try:
         # Run scan_folder.py script first
-        folder_path = pyperclip.paste()
+        # folder_path = pyperclip.paste()
+        result = subprocess.run(["openfile.exe"], capture_output=True, text=True)
+        folder_path = result.stdout.strip("\n")
 
         if not folder_path or folder_path == "No file selected.":
             return jsonify({'error': 'No folder selected'})
