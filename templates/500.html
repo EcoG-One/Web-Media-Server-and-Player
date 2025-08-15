@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{500 Error</title>
+ <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        h1 {
+            text-shadow: 1px 1px 2px black, 0 0 25px blue, 0 0 5px darkblue;
+        }
+        @keyframes flash {
+          0% { opacity: 1; }
+          50% { opacity: 0; }
+          100% { opacity: 1; }
+        }
+
+        @tailwind base;
+        @tailwind components;
+        @tailwind utilities;
+
+        @layer utilities {
+          .animate-flash {
+            animation: flash 1s infinite;
+          }
+        }
+        /* Style the dropdown button */
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            background-color: #f9f9f9;
+            min-width: 160px;
+            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+            z-index: 1;
+        }
+
+        .dropdown-content a {
+            color: black;
+            padding: 12px 16px;
+            text-decoration: none;
+            display: block;
+        }
+
+        .dropdown-content a:hover {background-color: #f1f1f1}
+
+        .dropdown:hover .dropdown-content {
+            display: block;
+        }
+
+        .dropdown:hover .dropbtn {
+            background-color: #3e8e41;
+        }
+    </style>
+ </head>
+<body class="bg-gradient-to-br from-emerald-400 to-indigo-400 text-white min-h-screen flex flex-col font-mono">
+
+<h1 class="text-4xl font-semibold text-center p-4 text-gray-300">500</h1>
+<h2 class="text-2xl font-semibold text-center mt-12 text-indigo-800">The server encountered an unexpected condition that prevented it from fulfilling the request.</h2>
+<img src="/static/images/500.png" alt="Error 404">
+</body>
+</html>
