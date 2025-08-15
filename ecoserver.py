@@ -452,8 +452,8 @@ def scan_library():
 
         # Run openfile.py (or openfile.exe if app will be converted to
         # windows executable) to select music library folder
-      # result = subprocess.run(['python', 'openfile.py'], capture_output=True, text=True)
-        result = subprocess.run(["openfile.exe"], capture_output=True, text=True, timeout=30)
+        result = subprocess.run(['python', 'openfile.py'], capture_output=True, text=True)
+        # result = subprocess.run(["openfile.exe"], capture_output=True, text=True, timeout=30)
         folder_path = result.stdout.strip("\n")
         
         logger.info(f"Selected folder: {folder_path}")

@@ -38,6 +38,27 @@
         </div>
 
         <div id="player-section" class="hidden">
+            <!-- Gap Killer Controls -->
+            <div class="gap-killer-controls" style="margin-bottom: 15px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; background-color: #f9f9f9;">
+                <h4 style="margin: 0 0 10px 0;">Gap Killer Settings</h4>
+                <label>
+                    <input type="checkbox" id="gap-killer-enabled" checked> Enable Gap Killer (-46dB)
+                </label>
+                <div style="margin-top: 8px;">
+                    <label for="silence-threshold">Silence Threshold: </label>
+                    <input type="range" id="silence-threshold" min="-60" max="-20" value="-46" step="1">
+                    <span id="threshold-display">-46dB</span>
+                </div>
+                <div style="margin-top: 8px;">
+                    <label for="silence-duration">Minimum Silence Duration: </label>
+                    <input type="range" id="silence-duration" min="0.5" max="5" value="2" step="0.1">
+                    <span id="duration-display">2.0s</span>
+                </div>
+                <div id="silence-indicator" style="margin-top: 8px; padding: 5px; border-radius: 3px; background-color: #e8f5e8; color: #2d5016;">
+                    Status: Active - Monitoring audio levels
+                </div>
+            </div>
+            
             <div class="audio-player">
                 <audio id="audio1" controls></audio>
                 <audio id="audio2" controls></audio>
@@ -62,6 +83,188 @@
         let isTransitioning = false;
         let crossfadeActive = false;
         let currentEventListeners = new Map(); // Track active listeners
+
+        // Gap Killer variables
+        let audioContext = null;
+        let analyser1 = null;
+        let analyser2 = null;
+        let source1 = null;
+        let source2 = null;
+        let silenceStartTime = null;
+        let gapKillerEnabled = true;
+        let silenceThreshold = -46; // dB
+        let minimumSilenceDuration = 2.0; // seconds
+        let audioAnalysisInterval = null;
+
+        // Initialize Gap Killer controls
+        function initializeGapKillerControls() {
+            const enabledCheckbox = document.getElementById('gap-killer-enabled');
+            const thresholdSlider = document.getElementById('silence-threshold');
+            const durationSlider = document.getElementById('silence-duration');
+            const thresholdDisplay = document.getElementById('threshold-display');
+            const durationDisplay = document.getElementById('duration-display');
+
+            enabledCheckbox.addEventListener('change', (e) => {
+                gapKillerEnabled = e.target.checked;
+                updateSilenceIndicator(gapKillerEnabled ? 'Active - Monitoring audio levels' : 'Disabled', 
+                                     gapKillerEnabled ? '#e8f5e8' : '#f5e8e8',
+                                     gapKillerEnabled ? '#2d5016' : '#501616');
+            });
+
+            thresholdSlider.addEventListener('input', (e) => {
+                silenceThreshold = parseInt(e.target.value);
+                thresholdDisplay.textContent = `${silenceThreshold}dB`;
+            });
+
+            durationSlider.addEventListener('input', (e) => {
+                minimumSilenceDuration = parseFloat(e.target.value);
+                durationDisplay.textContent = `${minimumSilenceDuration.toFixed(1)}s`;
+            });
+        }
+
+        function updateSilenceIndicator(text, bgColor = '#e8f5e8', color = '#2d5016') {
+            const indicator = document.getElementById('silence-indicator');
+            if (indicator) {
+                indicator.textContent = `Status: ${text}`;
+                indicator.style.backgroundColor = bgColor;
+                indicator.style.color = color;
+            }
+        }
+
+        // Initialize Web Audio API for audio analysis
+        function initializeAudioAnalysis() {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                const audio1 = document.getElementById('audio1');
+                const audio2 = document.getElementById('audio2');
+
+                // Create analysers
+                analyser1 = audioContext.createAnalyser();
+                analyser2 = audioContext.createAnalyser();
+                
+                analyser1.fftSize = 2048;
+                analyser2.fftSize = 2048;
+
+                // Create sources (will be connected when audio plays)
+                if (!source1) {
+                    source1 = audioContext.createMediaElementSource(audio1);
+                    source1.connect(analyser1);
+                    analyser1.connect(audioContext.destination);
+                }
+                
+                if (!source2) {
+                    source2 = audioContext.createMediaElementSource(audio2);
+                    source2.connect(analyser2);
+                    analyser2.connect(audioContext.destination);
+                }
+
+                startAudioAnalysis();
+            } catch (error) {
+                console.error('Error initializing audio analysis:', error);
+                updateSilenceIndicator('Error - Audio analysis unavailable', '#f5e8e8', '#501616');
+            }
+        }
+
+        // Start continuous audio level monitoring
+        function startAudioAnalysis() {
+            if (audioAnalysisInterval) {
+                clearInterval(audioAnalysisInterval);
+            }
+
+            audioAnalysisInterval = setInterval(() => {
+                if (!gapKillerEnabled || isTransitioning || crossfadeActive) return;
+
+                const currentAudioElement = document.getElementById(`audio${currentAudio}`);
+                const currentAnalyser = currentAudio === 1 ? analyser1 : analyser2;
+
+                if (currentAudioElement && !currentAudioElement.paused && currentAnalyser) {
+                    const audioLevel = getAudioLevel(currentAnalyser);
+                    checkForSilence(audioLevel, currentAudioElement);
+                }
+            }, 100); // Check every 100ms
+        }
+
+        // Get current audio level in dB
+        function getAudioLevel(analyser) {
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            analyser.getByteFrequencyData(dataArray);
+
+            // Calculate RMS (Root Mean Square) value
+            let sum = 0;
+            for (let i = 0; i < bufferLength; i++) {
+                const normalized = dataArray[i] / 255.0;
+                sum += normalized * normalized;
+            }
+            const rms = Math.sqrt(sum / bufferLength);
+            
+            // Convert to decibels
+            const db = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+            return db;
+        }
+
+        // Check if current audio level indicates silence
+        function checkForSilence(audioLevel, audioElement) {
+            const currentTime = Date.now();
+
+            if (audioLevel < silenceThreshold) {
+                // Audio is below silence threshold
+                if (silenceStartTime === null) {
+                    silenceStartTime = currentTime;
+                    updateSilenceIndicator(`Silence detected (${audioLevel.toFixed(1)}dB)`, '#fff3cd', '#856404');
+                } else {
+                    const silenceDuration = (currentTime - silenceStartTime) / 1000;
+                    updateSilenceIndicator(`Silent for ${silenceDuration.toFixed(1)}s (${audioLevel.toFixed(1)}dB)`, '#fff3cd', '#856404');
+                    
+                    if (silenceDuration >= minimumSilenceDuration) {
+                        // Trigger gap killer
+                        triggerGapKiller(audioElement);
+                    }
+                }
+            } else {
+                // Audio is above silence threshold
+                if (silenceStartTime !== null) {
+                    updateSilenceIndicator(`Audio resumed (${audioLevel.toFixed(1)}dB)`, '#e8f5e8', '#2d5016');
+                }
+                silenceStartTime = null;
+            }
+        }
+
+        // Trigger the gap killer to skip silence
+        function triggerGapKiller(audioElement) {
+            updateSilenceIndicator('Gap Killer activated - Skipping silence', '#d4edda', '#155724');
+            
+            // Find the next non-silent part
+            findNextAudioSection(audioElement);
+            
+            // Reset silence detection
+            silenceStartTime = null;
+        }
+
+        // Find and jump to the next section with audio
+        function findNextAudioSection(audioElement) {
+            const currentTime = audioElement.currentTime;
+            const duration = audioElement.duration;
+            
+            // Jump forward by small increments to find audio
+            const jumpIncrement = 10; // seconds
+            let searchTime = Math.min(currentTime + jumpIncrement, duration - 5);
+            
+            // Set new playback position
+            audioElement.currentTime = searchTime;
+            
+            updateSilenceIndicator('Jumped forward - Resuming playback', '#e8f5e8', '#2d5016');
+        }
+
+        // Resume AudioContext if suspended (required for some browsers)
+        function resumeAudioContext() {
+            if (audioContext && audioContext.state === 'suspended') {
+                audioContext.resume().then(() => {
+                    console.log('AudioContext resumed');
+                });
+            }
+        }
 
         function scanLibrary() {
             document.getElementById('status').innerHTML = 'Scanning library...';
@@ -199,6 +402,11 @@
             if (playlist.length > 1) {
                 document.getElementById('playlist-display').classList.remove('hidden');
             }
+            
+            // Initialize gap killer when player section is shown
+            if (!audioContext) {
+                initializeAudioAnalysis();
+            }
         }
 
         // Improved event listener management
@@ -239,6 +447,7 @@
             // Reset states
             isTransitioning = true;
             crossfadeActive = false;
+            silenceStartTime = null; // Reset gap killer state
 
             // Clean up any existing listeners
             removeAllEventListeners();
@@ -254,6 +463,9 @@
             // Set the source and play
             audio.src = `/serve_audio/${encodeURIComponent(currentSong)}`;
             audio.play().then(() => {
+                // Resume audio context for gap killer
+                resumeAudioContext();
+                
                 // Mark current song as played
                 playedSongs.add(currentIndex);
 
@@ -388,6 +600,9 @@
             currentAudio = currentAudio === 1 ? 2 : 1;
             const audio = document.getElementById(`audio${currentAudio}`);
 
+            // Reset gap killer state for new song
+            silenceStartTime = null;
+
             // Check if crossfade is active
             if (crossfadeActive) {
                 // Song is already playing from crossfade, just update metadata and display
@@ -429,6 +644,9 @@
                 audio.volume = 1;
                 audio.src = `/serve_audio/${encodeURIComponent(currentSong)}`;
                 audio.play().then(() => {
+                    // Resume audio context
+                    resumeAudioContext();
+                    
                     // Mark current song as played
                     playedSongs.add(currentIndex);
 
@@ -569,6 +787,7 @@
             // Reset states
             isTransitioning = false;
             crossfadeActive = false;
+            silenceStartTime = null; // Reset gap killer state
 
             // Update current index
             currentIndex = index;
@@ -631,6 +850,11 @@
             document.getElementById('playlist_name').innerHTML = ''
             playCurrentSong();
         }
+
+        // Initialize gap killer controls when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeGapKillerControls();
+        });
     </script>
 </body>
 </html>
