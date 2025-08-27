@@ -1,18 +1,19 @@
 import os
 import sqlite3
 import subprocess
-import threading
+# import threading
 import logging
 import traceback
-from datetime import datetime
+# from datetime import datetime
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, redirect, url_for, \
     send_file
 from mutagen import File
-from mutagen.id3 import ID3, APIC
+# from mutagen.id3 import ID3, APIC
 import base64
 from fuzzywuzzy import fuzz, process
-import json
+import webbrowser
+# import json
 # import pyperclip
 
 app = Flask(__name__)
@@ -71,8 +72,8 @@ logger = logging.getLogger(__name__)
 
 # Global settings
 SETTINGS = {
-    'server_port'   : 5000,
-    'crossfade_time': 4
+    'crossfade_time': 4,
+    'fade_in'       : 0
 }
 
 
@@ -150,6 +151,8 @@ def get_audio_metadata(file_path):
                 metadata['artist'] = str(audio_file['TPE1'])
             elif 'ARTIST' in audio_file:
                 metadata['artist'] = str(audio_file['ARTIST'][0])
+            elif '©ART' in audio_file:
+                metadata['artist'] = str(audio_file['©ART'][0])
         except Exception as e:
             logger.warning(f"Error reading artist metadata from {file_path}: {e}")
 
@@ -158,6 +161,8 @@ def get_audio_metadata(file_path):
                 metadata['title'] = str(audio_file['TIT2'])
             elif 'TITLE' in audio_file:
                 metadata['title'] = str(audio_file['TITLE'][0])
+            elif '©nam' in audio_file:
+                metadata['title'] = str(audio_file['©nam'][0])
         except Exception as e:
             logger.warning(f"Error reading title metadata from {file_path}: {e}")
 
@@ -166,6 +171,8 @@ def get_audio_metadata(file_path):
                 metadata['album'] = str(audio_file['TALB'])
             elif 'ALBUM' in audio_file:
                 metadata['album'] = str(audio_file['ALBUM'][0])
+            elif '©alb' in audio_file:
+                metadata['album'] = str(audio_file['©alb'][0])
         except Exception as e:
             logger.warning(f"Error reading album metadata from {file_path}: {e}")
 
@@ -174,6 +181,8 @@ def get_audio_metadata(file_path):
                 metadata['year'] = str(audio_file['TDRC'])
             elif 'DATE' in audio_file:
                 metadata['year'] = str(audio_file['DATE'][0])
+            elif '©day' in audio_file:
+                metadata['year'] = str(audio_file['©day'][0])
         except Exception as e:
             logger.warning(f"Error reading year metadata from {file_path}: {e}")
 
@@ -190,6 +199,8 @@ def get_audio_metadata(file_path):
                 metadata['picture'] = audio_file['APIC:'].data
             elif hasattr(audio_file, 'pictures') and audio_file.pictures:
                 metadata['picture'] = audio_file.pictures[0].data
+            elif 'covr' in audio_file:
+                metadata['picture'] = audio_file['covr'][0]
         except Exception as e:
             logger.warning(f"Error reading album art from {file_path}: {e}")
 
@@ -384,11 +395,11 @@ def parse_playlist_file(playlist_path):
         playlist_dir = os.path.dirname(playlist_path)
         line_count = 0
 
-        with open(playlist_path, 'r', encoding='utf-8') as f:
+        with open(playlist_path, 'r', encoding='utf-8-sig') as f:
             for line in f:
                 line_count += 1
                 try:
-                    line = line.strip('ufeff01')
+                   # line = line.strip('ufeff01')
                     line = line.strip()
                     line = line.strip('.\\')
                     if line and not line.startswith(('#', '﻿#')):
@@ -448,25 +459,32 @@ def index():
 @app.route('/scan_library', methods=['POST'])
 def scan_library():
     try:
-        logger.info("Starting library scan")
+        data = request.get_json()
+        if data:
+            folder_path = data.get('folder_path')
+            logger.info(f"Received folder: {folder_path}")
+        if folder_path == None:
+            # Run openfile.py (or openfile.exe if app will be converted to
+            # windows executable) to select music library folder
+            # result = subprocess.run(['python', 'openfile.py'], capture_output=True, text=True)
+            result = subprocess.run(["openfile.exe"], capture_output=True, text=True, timeout=30)
+            folder_path = result.stdout.strip("\n")
 
-        # Run openfile.py (or openfile.exe if app will be converted to
-        # windows executable) to select music library folder
-        result = subprocess.run(['python', 'openfile.py'], capture_output=True, text=True)
-        # result = subprocess.run(["openfile.exe"], capture_output=True, text=True, timeout=30)
-        folder_path = result.stdout.strip("\n")
-        
-        logger.info(f"Selected folder: {folder_path}")
+            logger.info(f"Selected folder: {folder_path}")
 
-        if not folder_path or folder_path == "No file selected.":
-            logger.warning("No folder selected for scanning")
-            return jsonify({'error': 'No folder selected'})
+            if not folder_path or folder_path == "No file selected.":
+                logger.warning("No folder selected for scanning")
+                return jsonify({'error': 'No folder selected'})
 
-        if not os.path.isdir(folder_path):
-            logger.error(f"Invalid folder path: {folder_path}")
-            return jsonify({'error': 'Invalid folder path'})
-
+            if not os.path.isdir(folder_path):
+                logger.error(f"Invalid folder path: {folder_path}")
+                return jsonify({'error': 'Invalid folder path'})
+    except subprocess.TimeoutExpired:
+            logger.error("Timeout waiting for folder selection")
+            return jsonify({'error': 'Timeout waiting for folder selection'})
+    try:
         # Scan for audio files and playlists
+        logger.info("Starting library scan")
         audio_files, playlist_files = scan_for_audio_files(folder_path)
 
         # Add to database
@@ -481,9 +499,6 @@ def scan_library():
             'message': success_msg
         })
 
-    except subprocess.TimeoutExpired:
-        logger.error("Timeout waiting for folder selection")
-        return jsonify({'error': 'Timeout waiting for folder selection'})
     except Exception as e:
         logger.error(f"Error during library scan: {e}")
         logger.error(traceback.format_exc())
@@ -671,9 +686,9 @@ def save_settings():
         
         global SETTINGS
         old_settings = SETTINGS.copy()
-        
-        SETTINGS['server_port'] = int(request.form.get('server_port', 5000))
+
         SETTINGS['crossfade_time'] = int(request.form.get('crossfade_time', 4))
+        SETTINGS['fade_in'] = int(request.form.get('fade_in', 0))
         
         logger.info(f"Settings updated: {old_settings} -> {SETTINGS}")
         return redirect(url_for('index'))
@@ -690,8 +705,10 @@ def save_settings():
 if __name__ == '__main__':
     try:
         init_database()
-        logger.info(f"Starting Flask server on port {SETTINGS['server_port']}")
-        app.run(host='0.0.0.0', port=SETTINGS['server_port'], debug=True)
+        logger.info(f"Starting Flask server on port 5000")
+        if os.environ.get('WERKZEUG_RUN_MAIN') is None:
+            webbrowser.open('http://127.0.0.1:5000')
+        app.run(host='0.0.0.0', port=5000, debug=True)
     except Exception as e:
         logger.error(f"Failed to start server: {e}")
         logger.error(traceback.format_exc())

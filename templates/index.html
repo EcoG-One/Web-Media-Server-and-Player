@@ -19,8 +19,9 @@
 
     <div id="content" class="content">
         <div id="status"></div>
-
         <div id="playlist-section" class="hidden">
+                <label for="randomize">Play in Random Order</label>
+                <input type="checkbox" id="randomize" name="randomize" value=0 onclick="this.value=this.checked ? '1' : '0';">
             <h3>Select Playlist</h3>
             <div id="playlist-list"></div>
         </div>
@@ -42,12 +43,12 @@
             <div class="gap-killer-controls" style="margin-bottom: 15px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; background-color: #f9f9f9;">
                 <h4 style="margin: 0 0 10px 0;">Gap Killer Settings</h4>
                 <label>
-                    <input type="checkbox" id="gap-killer-enabled" checked> Enable Gap Killer (-28dB)
+                    <input type="checkbox" id="gap-killer-enabled" checked> Enable Gap Killer (-46dB)
                 </label>
                 <div style="margin-top: 8px;">
                     <label for="silence-threshold">Silence Threshold: </label>
-                    <input type="range" id="silence-threshold" min="-60" max="-20" value="-28" step="1">
-                    <span id="threshold-display">-28dB</span>
+                    <input type="range" id="silence-threshold" min="-60" max="-20" value="-46" step="1">
+                    <span id="threshold-display">-46dB</span>
                 </div>
                 <div style="margin-top: 8px;">
                     <label for="silence-duration">Minimum Silence Duration: </label>
@@ -92,7 +93,7 @@
         let source2 = null;
         let silenceStartTime = null;
         let gapKillerEnabled = true;
-        let silenceThreshold = -28; // dB
+        let silenceThreshold = -46; // dB
         let minimumSilenceDuration = 0.5; // seconds
         let audioAnalysisInterval = null;
 
@@ -274,8 +275,14 @@
         }
 
         function scanLibrary() {
-            document.getElementById('status').innerHTML = 'Scanning library...';
-            fetch('/scan_library', { method: 'POST' })
+            document.getElementById('status').innerHTML = 'Please select a Folder to scan for music.<BR>The Scan may take a while, depending on the library size.';
+            fetch('/scan_library', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({"folder_path": null})
+        })
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
@@ -287,12 +294,14 @@
         }
 
         function showPlayFromPlaylist() {
+            document.getElementById('status').innerHTML = '';
             hideAllSections();
             document.getElementById('playlist-section').classList.remove('hidden');
             loadPlaylists();
         }
 
         function showPlayFile() {
+            document.getElementById('status').innerHTML = '';
             hideAllSections();
             document.getElementById('search-section').classList.remove('hidden');
         }
@@ -323,12 +332,23 @@
                 });
         }
 
+        function shuffleArray(array) {
+          for (let i = array.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [array[i], array[j]] = [array[j], array[i]];
+          }
+          return array;
+        }
+
         function loadPlaylist(playlistId) {
             fetch(`/load_playlist/${playlistId}`)
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
                         playlist = data.playlist;
+                        if (document.getElementById('randomize').value == 1) {
+                            shuffleArray(playlist)
+                        }
                         currentIndex = 0;
                         playedSongs.clear();
                         playlistMetadata = [];
@@ -544,7 +564,10 @@
 
             // Set up the next song
             nextAudioElement.src = `/serve_audio/${encodeURIComponent(nextSong)}`;
-            nextAudioElement.volume = 0; // Start with volume at 0
+            if ({{settings.fade_in}} == 1) {
+                nextAudioElement.volume = 0; // Start with volume at 0
+            } else {nextAudioElement.volume = 1;
+            }
 
             // Start playing the next song
             nextAudioElement.play().then(() => {
@@ -579,7 +602,9 @@
                 currentAudio.volume = Math.max(0, 1 - progress);
 
                 // Fade in next audio
-                nextAudio.volume = Math.min(1, progress);
+                if ({{settings.fade_in}} == 1) {
+                    nextAudio.volume = Math.min(1, progress);
+                }
 
                 if (step >= fadeSteps) {
                     clearInterval(fadeTimer);
@@ -693,6 +718,7 @@
             html += `<strong>Duration:</strong> ${Math.floor(metadata.duration / 60)}:${(metadata.duration % 60).toString().padStart(2, '0')}`;
 
             metadataDiv.innerHTML = html;
+            document.title = metadata.artist + ' - ' + metadata.title;
         }
 
         function loadPlaylistMetadata() {
