@@ -1,11 +1,12 @@
 import sys
 import os
 from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect
-from PySide6.QtGui import QPixmap, QTextCursor, QImage, QIcon
+from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
-    QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog)
+    QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QCheckBox,
+    QMainWindow, QStatusBar,QToolBar)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 from mutagen import File
 from mutagen.flac import FLAC
@@ -13,7 +14,64 @@ import re
 import requests
 import base64
 
+
 API_URL = "http://localhost:5000"
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("My App")
+
+        label = QLabel("Hello!")
+
+        # The `Qt` namespace has a lot of attributes to customize
+        # widgets. See: http://doc.qt.io/qt-6/qt.html
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Set the central widget of the Window. Widget will expand
+        # to take up all the space in the window by default.
+        self.setCentralWidget(label)
+
+        toolbar = QToolBar("My main toolbar")
+        toolbar.setIconSize(QSize(16, 16))
+        self.addToolBar(toolbar)
+
+        button_action = QAction(QIcon("bug.png"), "&Your button", self)
+        button_action.setStatusTip("This is your button")
+        button_action.triggered.connect(self.toolbar_button_clicked)
+        button_action.setCheckable(True)
+        # You can enter keyboard shortcuts using key names (e.g. Ctrl+p)
+        # Qt.namespace identifiers (e.g. Qt.CTRL + Qt.Key_P)
+        # or system agnostic identifiers (e.g. QKeySequence.Print)
+        button_action.setShortcut(QKeySequence("Ctrl+p"))
+        toolbar.addAction(button_action)
+
+        toolbar.addSeparator()
+
+        button_action2 = QAction(QIcon("bug.png"), "Your &button2", self)
+        button_action2.setStatusTip("This is your button2")
+        button_action2.triggered.connect(self.toolbar_button_clicked)
+        button_action2.setCheckable(True)
+        toolbar.addAction(button_action2)
+
+        toolbar.addWidget(QLabel("Hello"))
+        toolbar.addWidget(QCheckBox())
+
+        self.setStatusBar(QStatusBar(self))
+
+        menu = self.menuBar()
+
+        file_menu = menu.addMenu("&File")
+        file_menu.addAction(button_action)
+
+        file_menu.addSeparator()
+
+        file_submenu = file_menu.addMenu("Submenu")
+
+        file_submenu.addAction(button_action2)
+
+    def toolbar_button_clicked(self, s):
+        print("click", s)
 
 class SynchronizedLyrics:
     def __init__(self, audio_path=None):
@@ -265,6 +323,10 @@ class AudioPlayer(QWidget):
         self.silence_check.setChecked(self.skip_silence)
         self.silence_check.toggled.connect(self.set_skip_silence)
 
+        # StatusBar
+        self.status_bar = QStatusBar()
+        self.status_bar.showMessage("Welcome!")
+
         mix_form = QFormLayout()
         mix_form.addRow("Mix Method:", self.mix_method_combo)
         mix_form.addRow("Transition:", self.transition_spin)
@@ -302,9 +364,12 @@ class AudioPlayer(QWidget):
         playlist_layout = QVBoxLayout()
         playlist_layout.addWidget(self.playlist_label)
         playlist_layout.addWidget(self.playlist_widget)
+        playlist_layout.addWidget(self.status_bar)
+
         main_layout = QHBoxLayout(self)
         main_layout.addLayout(playlist_layout, 1)
         main_layout.addLayout(left_layout, 2)
+
         self.setLayout(main_layout)
 
         # Connections
@@ -481,7 +546,7 @@ class AudioPlayer(QWidget):
             self.artist_label.setText("-- Artist --")
             self.album_label.setText("-- Album --")
             self.year_label.setText("-- Date --")
-            self.codec_label.setText("-- Date --")
+            self.codec_label.setText("-- Audio --")
             self.set_album_art(path)
             self.load_lyrics(path)
             if auto_play:
@@ -807,8 +872,8 @@ class AudioPlayer(QWidget):
                     artist = data.get('artist', "--")
                     album = data.get('album', "--")
                     year = data.get('year', "--")
-                    codec = "--"
-                 #   codec = data.get('codec', "--")
+                    codec = data.get('codec', "--")
+                    codec = data.get('codec', "--")
                     # Set album art using meta_json
                     self.set_album_art(path)
                 else:
@@ -873,23 +938,36 @@ class AudioPlayer(QWidget):
         return "--"
 
     def extract_audio_info(self):
-        audio = File(self.playlist[self.current_index])
-        if not audio:
-            print("Unsupported or corrupted file.")
-            return
-
-        # Codec
-        codec = audio.mime[0] if hasattr(audio,
-                                         'mime') and audio.mime else audio.__class__.__name__
-
-        # Sample rate and bitrate
-        sample_rate = getattr(audio.info, 'sample_rate', None)
-        bits = getattr(audio.info, 'bits_per_sample', None)
-        bitrate = getattr(audio.info, 'bitrate', None)
-        if codec == 'audio/mp3':
-            return codec + ' ' + str(sample_rate/1000) + 'kHz ' + str(round(bitrate/1000)) + 'kbps'
+        path = self.playlist[self.current_index]
+        if self.is_remote_file(path):
+            try:
+                filename = path.split('5000/')[1]
+                url = f"{self.remote_base}/get_song_metadata/{filename}"
+                r = requests.get(url, timeout=5)
+                if r.status_code == 200:
+                    data = r.json()
+                    codec = data.get('codec')
+                    return codec
+            except Exception as e:
+                print("Remote metadata fetch error:", e)
         else:
-            return codec + ' ' + str(sample_rate/1000) + 'kHz/' + str(round(bits)) + 'bits  ' + str(round(bitrate/1000)) + 'kbps'
+            audio = File(self.playlist[self.current_index])
+            if not audio:
+                print("Unsupported or corrupted file.")
+                return
+
+            # Codec
+            codec = audio.mime[0] if hasattr(audio,
+                                             'mime') and audio.mime else audio.__class__.__name__
+
+            # Sample rate and bitrate
+            sample_rate = getattr(audio.info, 'sample_rate', None)
+            bits = getattr(audio.info, 'bits_per_sample', None)
+            bitrate = getattr(audio.info, 'bitrate', None)
+            if codec == 'audio/mp3':
+                return codec + ' ' + str(sample_rate/1000) + 'kHz ' + str(round(bitrate/1000)) + 'kbps'
+            else:
+                return codec + ' ' + str(sample_rate/1000) + 'kHz/' + str(round(bits)) + 'bits  ' + str(round(bitrate/1000)) + 'kbps'
 
     def selectDirectoryDialog(self):
         file_dialog = QFileDialog(self)

@@ -143,6 +143,7 @@ def get_audio_metadata(file_path):
             'year'    : '',
             'duration': 0,
             'lyrics'  : '',
+            'codec'   : '',
             'picture' : None
         }
 
@@ -223,6 +224,25 @@ def get_audio_metadata(file_path):
                     metadata['lyrics'] = "--"
         except Exception as e:
             logger.warning(f"Error reading lyrics from {file_path}: {e}")
+
+        # Codec
+        try:
+            codec = audio_file.mime[0] if hasattr(audio_file,
+                                             'mime') and audio_file.mime else audio_file.__class__.__name__
+
+            # Sample rate and bitrate
+            sample_rate = getattr(audio_file.info, 'sample_rate', None)
+            bits = getattr(audio_file.info, 'bits_per_sample', None)
+            bitrate = getattr(audio_file.info, 'bitrate', None)
+            if codec == 'audio/mp3':
+                metadata['codec'] = codec + ' ' + str(sample_rate / 1000) + 'kHz ' + str(
+                    round(bitrate / 1000)) + 'kbps'
+            else:
+                metadata['codec'] = codec + ' ' + str(sample_rate / 1000) + 'kHz/' + str(
+                    round(bits)) + 'bits  ' + str(
+                    round(bitrate / 1000)) + 'kbps'
+        except Exception as e:
+            logger.warning(f"Error reading codec from {file_path}: {e}")
 
         # Album art
         try:
