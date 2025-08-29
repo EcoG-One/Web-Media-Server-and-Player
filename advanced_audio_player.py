@@ -5,7 +5,7 @@ from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequ
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
-    QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QCheckBox,
+    QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar, QMenu,
     QMainWindow, QStatusBar,QToolBar)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 from mutagen import File
@@ -16,62 +16,6 @@ import base64
 
 
 API_URL = "http://localhost:5000"
-
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("My App")
-
-        label = QLabel("Hello!")
-
-        # The `Qt` namespace has a lot of attributes to customize
-        # widgets. See: http://doc.qt.io/qt-6/qt.html
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Set the central widget of the Window. Widget will expand
-        # to take up all the space in the window by default.
-        self.setCentralWidget(label)
-
-        toolbar = QToolBar("My main toolbar")
-        toolbar.setIconSize(QSize(16, 16))
-        self.addToolBar(toolbar)
-
-        button_action = QAction(QIcon("bug.png"), "&Your button", self)
-        button_action.setStatusTip("This is your button")
-        button_action.triggered.connect(self.toolbar_button_clicked)
-        button_action.setCheckable(True)
-        # You can enter keyboard shortcuts using key names (e.g. Ctrl+p)
-        # Qt.namespace identifiers (e.g. Qt.CTRL + Qt.Key_P)
-        # or system agnostic identifiers (e.g. QKeySequence.Print)
-        button_action.setShortcut(QKeySequence("Ctrl+p"))
-        toolbar.addAction(button_action)
-
-        toolbar.addSeparator()
-
-        button_action2 = QAction(QIcon("bug.png"), "Your &button2", self)
-        button_action2.setStatusTip("This is your button2")
-        button_action2.triggered.connect(self.toolbar_button_clicked)
-        button_action2.setCheckable(True)
-        toolbar.addAction(button_action2)
-
-        toolbar.addWidget(QLabel("Hello"))
-        toolbar.addWidget(QCheckBox())
-
-        self.setStatusBar(QStatusBar(self))
-
-        menu = self.menuBar()
-
-        file_menu = menu.addMenu("&File")
-        file_menu.addAction(button_action)
-
-        file_menu.addSeparator()
-
-        file_submenu = file_menu.addMenu("Submenu")
-
-        file_submenu.addAction(button_action2)
-
-    def toolbar_button_clicked(self, s):
-        print("click", s)
 
 class SynchronizedLyrics:
     def __init__(self, audio_path=None):
@@ -232,6 +176,41 @@ class AudioPlayer(QWidget):
         self.mix_method = "Fade"  # Default
         self.transition_duration = 4  # seconds
 
+        # Layout
+        layout = QVBoxLayout(self)
+
+        # ----- Menu bar -----
+        menubar = QMenuBar(self)
+
+        # File menu
+        file_menu = QMenu("&File", self)
+        menubar.addMenu(file_menu)
+
+        self.open_action = QAction("&Open", self)
+        self.open_action.setShortcut(QKeySequence.Open)
+        self.open_action.triggered.connect(self.open_file)
+        file_menu.addAction(self.open_action)
+
+        self.save_action = QAction("&Save", self)
+        self.save_action.setShortcut(QKeySequence.Save)
+        self.save_action.triggered.connect(self.save_file)
+        file_menu.addAction(self.save_action)
+
+        file_menu.addSeparator()
+
+        self.exit_action = QAction("E&xit", self)
+        self.exit_action.setShortcut(QKeySequence.Quit)
+        self.exit_action.triggered.connect(self.close)
+        file_menu.addAction(self.exit_action)
+
+        # Help menu
+        help_menu = QMenu("&Help", self)
+        menubar.addMenu(help_menu)
+
+        self.about_action = QAction("&About", self)
+        self.about_action.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(self.about_action)
+
         # Audio/Player
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -364,13 +343,16 @@ class AudioPlayer(QWidget):
         playlist_layout = QVBoxLayout()
         playlist_layout.addWidget(self.playlist_label)
         playlist_layout.addWidget(self.playlist_widget)
-        playlist_layout.addWidget(self.status_bar)
+      #  playlist_layout.addWidget(self.status_bar)
 
         main_layout = QHBoxLayout(self)
         main_layout.addLayout(playlist_layout, 1)
         main_layout.addLayout(left_layout, 2)
+        layout.addWidget(menubar)
+        layout.addLayout(main_layout, 1)
+        layout.addWidget(self.status_bar)
 
-        self.setLayout(main_layout)
+        self.setLayout(layout)
 
         # Connections
         self.player.positionChanged.connect(self.update_slider)
@@ -388,6 +370,45 @@ class AudioPlayer(QWidget):
         # Init
         self.update_play_button()
         self.show()
+
+    # --- Actions ---
+    def open_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open File", "", "Text Files (*.txt);;All Files (*)"
+        )
+        if path:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    self.editor.setPlainText(f.read())
+                self.statusbar.showMessage(f"Opened: {path}")
+            except Exception as e:
+                QMessageBox.warning(self, "Error",
+                                    f"Could not open file:\n{e}")
+
+    def save_file(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save File", "", "Text Files (*.txt);;All Files (*)"
+        )
+        if path:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(self.editor.toPlainText())
+                self.statusbar.showMessage(f"Saved: {path}")
+            except Exception as e:
+                QMessageBox.warning(self, "Error",
+                                    f"Could not save file:\n{e}")
+
+    def show_about_dialog(self):
+        QMessageBox.about(
+            self,
+            "About AudioPlayer",
+            "<h3>AudioPlayer</h3>"
+            "<p>This is a demo application using PySide6.</p>"
+            "<p>Includes:<br>"
+            "• File and Help menus<br>"
+            "• Toolbar with actions<br>"
+            "• Status bar at the bottom</p>"
+        )
 
     # --- Mixing/transition config slots ---
     def set_mix_method(self, method):
