@@ -20,14 +20,27 @@ class SynchronizedLyrics:
         self.times = []
         self.lines = []
         self.raw_lyrics = ""
-        if audio_path:
-            lrc_path = os.path.splitext(audio_path)[0] + ".lrc"
-            if os.path.exists(lrc_path):
-                with open(lrc_path, encoding='utf-8') as f:
-                    self.raw_lyrics = f.read()
-            else:
-                self.raw_lyrics = self.get_embedded_lyrics(audio_path)
-            self.parse_lyrics(self.raw_lyrics)
+        if w.is_remote_file(audio_path):
+            try:
+                filename = audio_path.split('5000/')[1]
+                url = f"{w.remote_base}/get_song_metadata/{filename}"
+                r = requests.get(url, timeout=5)
+                if r.status_code == 200:
+                    data = r.json()
+                    self.raw_lyrics = data['lyrics']
+                else:
+                    self.raw_lyrics = "--"
+            except Exception as e:
+                print("Remote lyrics fetch error:", e)
+        else:
+            if audio_path:
+                lrc_path = os.path.splitext(audio_path)[0] + ".lrc"
+                if os.path.exists(lrc_path):
+                    with open(lrc_path, encoding='utf-8') as f:
+                        self.raw_lyrics = f.read()
+                else:
+                    self.raw_lyrics = self.get_embedded_lyrics(audio_path)
+        self.parse_lyrics(self.raw_lyrics)
 
     def get_embedded_lyrics(self, audio_path):
         audio = File(audio_path)
@@ -470,7 +483,7 @@ class AudioPlayer(QWidget):
             self.year_label.setText("-- Date --")
             self.codec_label.setText("-- Date --")
             self.set_album_art(path)
-         #   self.load_lyrics(path)
+            self.load_lyrics(path)
             if auto_play:
                 self.player.play()
             self.lyrics_timer.start()
@@ -556,7 +569,7 @@ class AudioPlayer(QWidget):
                 # If remote base is set, treat as filename on remote
                 remote_url = f"{self.remote_base}/{f}"
                 self.playlist.append(remote_url)
-                item = QListWidgetItem(f)
+                item = QListWidgetItem(os.path.basename(f))
                 self.playlist_widget.addItem(item)
             if self.current_index == -1 and self.playlist:
                 self.load_track(0)
@@ -689,22 +702,7 @@ class AudioPlayer(QWidget):
 
 
     def load_lyrics(self, audio_path):
-        if self.is_remote_file(audio_path):
-            try:
-                filename = os.path.basename(audio_path)
-                url = f"{self.remote_base}/lyrics/{filename}"
-                r = requests.get(url, timeout=5)
-                if r.status_code == 200 and r.text.strip():
-                    lyrics_text = r.text
-                else:
-                    lyrics_text = ""
-            except Exception as e:
-                print("Remote lyrics fetch error:", e)
-                lyrics_text = ""
-            self.lyrics = SynchronizedLyrics()
-            self.lyrics.parse_lyrics(lyrics_text)
-        else:
-            self.lyrics = SynchronizedLyrics(audio_path)
+        self.lyrics = SynchronizedLyrics(audio_path)
         self.lyrics_display.set_lyrics(self.lyrics.lines, self.lyrics.is_synchronized())
         self.update_lyrics_display()
 

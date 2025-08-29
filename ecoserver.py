@@ -142,6 +142,7 @@ def get_audio_metadata(file_path):
             'album'   : '',
             'year'    : '',
             'duration': 0,
+            'lyrics'  : '',
             'picture' : None
         }
 
@@ -192,6 +193,36 @@ def get_audio_metadata(file_path):
                 metadata['duration'] = int(audio_file.info.length)
         except Exception as e:
             logger.warning(f"Error reading duration from {file_path}: {e}")
+            
+        # Lyrics
+        try:
+            lrc_path = os.path.splitext(file_path)[0] + ".lrc"
+            if os.path.exists(lrc_path):
+                with open(lrc_path, encoding='utf-8') as f:
+                    metadata['lyrics'] = f.read()
+            else:
+                # FLAC/Vorbis
+                if audio_file.__class__.__name__ == 'FLAC':
+                    for key in audio_file:
+                        if key.lower() in ('lyrics', 'unsyncedlyrics',
+                                           'lyric'):
+                            metadata['lyrics'] = audio_file[key][0]
+                    # MP3 (ID3)
+                elif hasattr(audio_file, 'tags') and audio_file.tags:
+                    # USLT (unsynchronized lyrics) is the standard for ID3
+                    for k in audio_file.tags.keys():
+                        if k.startswith('USLT') or k.startswith('SYLT'):
+                            metadata['lyrics'] = str(audio_file.tags[k])
+                        if k.lower() in ('lyrics', 'unsyncedlyrics', 'lyric'):
+                            metadata['lyrics'] = str(audio_file.tags[k])
+                    # MP4/AAC
+                elif hasattr(audio_file, 'tags') and hasattr(audio_file.tags, 'get'):
+                    if audio_file.tags.get('\xa9lyr'):
+                        metadata['lyrics'] = audio_file.tags['\xa9lyr'][0]
+                else:
+                    metadata['lyrics'] = "--"
+        except Exception as e:
+            logger.warning(f"Error reading lyrics from {file_path}: {e}")
 
         # Album art
         try:
@@ -211,6 +242,7 @@ def get_audio_metadata(file_path):
         logger.error(f"Error extracting metadata from {file_path}: {e}")
         logger.error(traceback.format_exc())
         return None
+
 
 
 def scan_for_audio_files(directory):
