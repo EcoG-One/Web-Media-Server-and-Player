@@ -5,158 +5,20 @@ from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequ
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
-    QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar, QMenu,
-    QMainWindow, QStatusBar,QToolBar)
+    QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar,
+    QMenu, QStatusBar,QProgressBar)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 from mutagen import File
 from mutagen.flac import FLAC
+from pathlib import Path
 import re
 import requests
 import base64
 
 
 API_URL = "http://localhost:5000"
-
-class SynchronizedLyrics:
-    def __init__(self, audio_path=None):
-        self.times = []
-        self.lines = []
-        self.raw_lyrics = ""
-        if w.is_remote_file(audio_path):
-            try:
-                filename = audio_path.split('5000/')[1]
-                url = f"{w.remote_base}/get_song_metadata/{filename}"
-                r = requests.get(url, timeout=5)
-                if r.status_code == 200:
-                    data = r.json()
-                    self.raw_lyrics = data['lyrics']
-                else:
-                    self.raw_lyrics = "--"
-            except Exception as e:
-                print("Remote lyrics fetch error:", e)
-        else:
-            if audio_path:
-                lrc_path = os.path.splitext(audio_path)[0] + ".lrc"
-                if os.path.exists(lrc_path):
-                    with open(lrc_path, encoding='utf-8') as f:
-                        self.raw_lyrics = f.read()
-                else:
-                    self.raw_lyrics = self.get_embedded_lyrics(audio_path)
-        self.parse_lyrics(self.raw_lyrics)
-
-    def get_embedded_lyrics(self, audio_path):
-        audio = File(audio_path)
-        if audio is None:
-            return ""
-
-            # FLAC/Vorbis
-        if audio.__class__.__name__ == 'FLAC':
-            for key in audio:
-                if key.lower() in ('lyrics', 'unsyncedlyrics', 'lyric'):
-                    return audio[key][0]
-            return ""
-
-            # MP3 (ID3)
-        if hasattr(audio, 'tags') and audio.tags:
-            # USLT (unsynchronized lyrics) is the standard for ID3
-            for k in audio.tags.keys():
-                if k.startswith('USLT') or k.startswith('SYLT'):
-                    return str(audio.tags[k])
-                if k.lower() in ('lyrics', 'unsyncedlyrics', 'lyric'):
-                    return str(audio.tags[k])
-            # MP4/AAC
-        if hasattr(audio, 'tags') and hasattr(audio.tags, 'get'):
-            if audio.tags.get('\xa9lyr'):
-                return audio.tags['\xa9lyr'][0]
-        return ""
-
-    def parse_lyrics(self, lyrics_text):
-        time_tag = re.compile(r"\[(\d+):(\d+)(?:\.(\d+))?\]")
-        self.times = []
-        self.lines = []
-        for line in lyrics_text.splitlines():
-            matches = list(time_tag.finditer(line))
-            if matches:
-                lyric = time_tag.sub('', line).strip()
-                for m in matches:
-                    min, sec, ms = m.groups()
-                    total_ms = int(min) * 60 * 1000 + int(sec) * 1000 + int(ms or 0)
-                    self.times.append(total_ms)
-                    self.lines.append(lyric)
-            elif line.strip():
-                self.times.append(0)
-                self.lines.append(line.strip())
-
-    def get_current_line(self, pos_ms):
-        for i, t in enumerate(self.times):
-            if pos_ms < t:
-                return max(0, i-1)
-        return len(self.lines)-1 if self.lines else -1
-
-    def is_synchronized(self):
-        """Return True if lyrics are synchronized (have time tags)."""
-        # Synchronized if any time tag is nonzero
-        return any(t > 0 for t in self.times)
-
-class LyricsDisplay(QTextEdit):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.setReadOnly(True)
-        self.setStyleSheet("font-size: 18px;")
-        self.current_line_idx = -1
-        self.lines = []
-        self.is_synchronized = False
-
-    def set_lyrics(self, lines, is_synchronized):
-        self.lines = lines
-        self.is_synchronized = is_synchronized
-        self.current_line_idx = -1
-        self.update_display(-1)
-
-    def update_display(self, highlight_idx):
-        html = ""
-        for idx, line in enumerate(self.lines):
-            if self.is_synchronized and idx == highlight_idx:
-                html += f"<div style='color: #3A89FF; font-weight: bold; background: #E0F0FF'>{line}</div>"
-            else:
-                html += f"<div>{line}</div>"
-        self.setHtml(html)
-        if self.is_synchronized and 0 <= highlight_idx < len(self.lines):
-            cursor = self.textCursor()
-            cursor.movePosition(QTextCursor.Start)
-            for _ in range(highlight_idx):
-                cursor.movePosition(QTextCursor.Down)
-            self.setTextCursor(cursor)
-            self.ensureCursorVisible()
-
-    def highlight_line(self, idx):
-        # Only highlight if lyrics are synchronized
-        if self.is_synchronized:
-            if idx != self.current_line_idx:
-                self.current_line_idx = idx
-                self.update_display(idx)
-        else:
-            # For unsynchronized lyrics, never highlight any line
-            if self.current_line_idx != -1:
-                self.current_line_idx = -1
-                self.update_display(-1)
-
-def split_image(image_path, tile_width, tile_height):
-    image = QImage(image_path)
-    if image.isNull():
-        print("Failed to load image:", image_path)
-        return []
-
-    img_width = image.width()
-    img_height = image.height()
-    sub_images = []
-
-    for top in range(0, img_height, tile_height):
-        for left in range(0, img_width, tile_width):
-            rect = QRect(left, top, min(tile_width, img_width - left), min(tile_height, img_height - top))
-            sub_img = image.copy(rect)
-            sub_images.append(sub_img)
-    return sub_images
+APP_DIR = Path.home() / "Web-Media-Server-and-Player"
+APP_DIR.mkdir(exist_ok=True)
 
 class AudioPlayer(QWidget):
     def __init__(self):
@@ -183,17 +45,32 @@ class AudioPlayer(QWidget):
         menubar = QMenuBar(self)
 
         # File menu
-        file_menu = QMenu("&File", self)
+        file_menu = QMenu("&Actions", self)
         menubar.addMenu(file_menu)
 
-        self.open_action = QAction("&Open", self)
+        self.open_action = QAction("&Open Playlist | Add Songs", self)
         self.open_action.setShortcut(QKeySequence.Open)
-        self.open_action.triggered.connect(self.open_file)
+        self.open_action.triggered.connect(self.show_playlist_menu)
         file_menu.addAction(self.open_action)
 
-        self.save_action = QAction("&Save", self)
+        self.open_action = QAction("Load &Playlists from Server", self)
+        self.open_action.setShortcut(QKeySequence.Print)
+        self.open_action.triggered.connect(self.get_playlists)
+        file_menu.addAction(self.open_action)
+
+        self.open_action = QAction("Scan &Library", self)
+        self.open_action.setShortcut(QKeySequence("Ctrl+L"))
+        self.open_action.triggered.connect(self.scan_library)
+        file_menu.addAction(self.open_action)
+
+        self.save_action = QAction("&Save Playlist", self)
         self.save_action.setShortcut(QKeySequence.Save)
-        self.save_action.triggered.connect(self.save_file)
+        self.save_action.triggered.connect(self.save_current_playlist)
+        file_menu.addAction(self.save_action)
+
+        self.save_action = QAction("&Clear Playlist", self)
+        self.save_action.setShortcut(QKeySequence.Delete)
+        self.save_action.triggered.connect(self.save_current_playlist)
         file_menu.addAction(self.save_action)
 
         file_menu.addSeparator()
@@ -220,7 +97,7 @@ class AudioPlayer(QWidget):
         self.next_output = None
 
         # Silence elimination config
-        self.skip_silence = True  # Optionally configurable
+        self.skip_silence = False  # Optionally configurable
 
         # Playlist browser with context menu support
         self.playlist_widget = QListWidget()
@@ -242,6 +119,9 @@ class AudioPlayer(QWidget):
         # Controls/UI
         self.album_art = QLabel(); self.album_art.setFixedSize(256, 256)
         self.album_art.setScaledContents(True)
+        self.album_art.setPixmap(
+            QPixmap("static/images/default_album_art.png") if os.path.exists(
+                "static/images/default_album_art.png") else QPixmap())
         self.title_label = QLabel("-- Title --")
         self.artist_label = QLabel("-- Artist --")
         self.album_label = QLabel("-- Album --")
@@ -260,7 +140,7 @@ class AudioPlayer(QWidget):
         image_path = 'static/images/buttons.jpg'
         tile_width = 1650
         tile_height = 1650
-        self.sub_images = split_image(image_path, tile_width, tile_height)
+        self.sub_images = self.split_image(image_path, tile_width, tile_height)
 
         self.prev_button = QPushButton()
         pixmap = QPixmap.fromImage(self.sub_images[2])
@@ -304,7 +184,7 @@ class AudioPlayer(QWidget):
 
         # StatusBar
         self.status_bar = QStatusBar()
-        self.status_bar.showMessage("Welcome!")
+        self.status_bar.showMessage("Welcome! Drag-and-drop Playlists or/and Songs to Playlist pane to start the music.")
 
         mix_form = QFormLayout()
         mix_form.addRow("Mix Method:", self.mix_method_combo)
@@ -343,7 +223,6 @@ class AudioPlayer(QWidget):
         playlist_layout = QVBoxLayout()
         playlist_layout.addWidget(self.playlist_label)
         playlist_layout.addWidget(self.playlist_widget)
-      #  playlist_layout.addWidget(self.status_bar)
 
         main_layout = QHBoxLayout(self)
         main_layout.addLayout(playlist_layout, 1)
@@ -371,43 +250,51 @@ class AudioPlayer(QWidget):
         self.update_play_button()
         self.show()
 
-    # --- Actions ---
-    def open_file(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open File", "", "Text Files (*.txt);;All Files (*)"
-        )
-        if path:
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    self.editor.setPlainText(f.read())
-                self.statusbar.showMessage(f"Opened: {path}")
-            except Exception as e:
-                QMessageBox.warning(self, "Error",
-                                    f"Could not open file:\n{e}")
+    def split_image(self, image_path, tile_width, tile_height):
+        image = QImage(image_path)
+        if image.isNull():
+            print("Failed to load image:", image_path)
+            return []
 
-    def save_file(self):
+        img_width = image.width()
+        img_height = image.height()
+        sub_images = []
+
+        for top in range(0, img_height, tile_height):
+            for left in range(0, img_width, tile_width):
+                rect = QRect(left, top, min(tile_width, img_width - left),
+                             min(tile_height, img_height - top))
+                sub_img = image.copy(rect)
+                sub_images.append(sub_img)
+        return sub_images
+
+    def save_current_playlist(self):
+        if not self.playlist:
+            QMessageBox.information(self, "Playlists",
+                                    "No current queue to save.")
+            return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save File", "", "Text Files (*.txt);;All Files (*)"
+            self, "Save Current Playlist", "", "Playlist Files (*.m3u8);;All Files (*)"
         )
         if path:
             try:
                 with open(path, "w", encoding="utf-8") as f:
-                    f.write(self.editor.toPlainText())
-                self.statusbar.showMessage(f"Saved: {path}")
+                    for item in self.playlist:
+                        f.write(item + '\n')
+                    f.write("# Playlist created with EcoG's Ultimate Audio Player")
+                self.status_bar.showMessage(f"Saved: {path}")
             except Exception as e:
                 QMessageBox.warning(self, "Error",
                                     f"Could not save file:\n{e}")
 
+
     def show_about_dialog(self):
         QMessageBox.about(
             self,
-            "About AudioPlayer",
-            "<h3>AudioPlayer</h3>"
-            "<p>This is a demo application using PySide6.</p>"
-            "<p>Includes:<br>"
-            "• File and Help menus<br>"
-            "• Toolbar with actions<br>"
-            "• Status bar at the bottom</p>"
+            "About...",
+            "<h3>Ultimate Audio Player</h3>"
+            "<p>HiRes Audio Player / API Client</p>"
+            "<p>Created with ❤️ by EcoG</p>"
         )
 
     # --- Mixing/transition config slots ---
@@ -558,6 +445,8 @@ class AudioPlayer(QWidget):
             # Use the new get_media_source logic
             if self.is_remote_file(path):
                 abs_path = path.split('5000/')[1]
+                if self.remote_base == None:
+                    self.remote_base = path.split('5000/')[0] + '5000/'
                 media_url = f"{self.remote_base}/serve_audio/{abs_path}"
             else:
                 media_url = self.get_media_source(path)
@@ -659,8 +548,7 @@ class AudioPlayer(QWidget):
                 self.playlist_widget.addItem(item)
             if self.current_index == -1 and self.playlist:
                 self.load_track(0)
-   #     if self.current_index == -1 and self.playlist:
-    #        self.load_track(0)
+        self.status_bar.clearMessage()
 
     def load_m3u_playlist(self, path):
         tracks = []
@@ -1004,6 +892,11 @@ class AudioPlayer(QWidget):
         folder_path = self.selectDirectoryDialog()
         if not folder_path:
             return
+        self.status_bar.showMessage('Scanning your Music Library. Please Wait, it might take some time depending on the library side')
+        progress = QProgressBar()
+        progress.setValue(50)
+        self.status_bar.addWidget(progress)
+        self.status_bar.repaint()
         try:
             r = requests.post(f"{API_URL}/scan_library",
                               json={"folder_path": folder_path})
@@ -1012,16 +905,25 @@ class AudioPlayer(QWidget):
                 QMessageBox.warning(self, "Scan Error", data['error'])
             else:
                 QMessageBox.information(self, "Success", data['message'])
+            self.status_bar.clearMessage()
         except Exception as e:
+            self.status_bar.clearMessage()
             QMessageBox.critical(self, "Error", str(e))
 
     def get_playlists(self):
         text, ok_pressed = QInputDialog.getText(self, "Input",
-                    "Enter Server name or IP:", QLineEdit.Normal, "");
+                    "Enter Server name or IP:\n Cancel for Local Server", QLineEdit.Normal, "");
         if ok_pressed and text != '':
             global API_URL
             API_URL = f'http://{text}:5000'
             self.remote_base = API_URL
+        self.status_bar.showMessage(
+            'Loading Playlists from Server. Please Wait, it might take some time...')
+        self.status_bar.repaint()
+        progress = QProgressBar()
+        progress.setValue(50)
+        self.status_bar.addWidget(progress)
+        self.status_bar.repaint()
         self.playlist_widget.clear()
         self.playlist.clear()
         try:
@@ -1029,7 +931,9 @@ class AudioPlayer(QWidget):
             self.playlists = r.json()
             for item in self.playlists:
                 self.playlist_widget.addItem(item['name'])
+            self.status_bar.clearMessage()
         except Exception as e:
+            self.status_bar.clearMessage()
             QMessageBox.critical(self, "Error", str(e))
 
 
@@ -1040,6 +944,12 @@ class AudioPlayer(QWidget):
         if item is not None:
             item_ext = item.text().split('.')[-1]
             if item_ext == 'm3u' or item_ext == 'm3u8':
+                self.status_bar.showMessage(
+                    'Loading Playlist from Server. Please Wait, it might take some time...')
+                progress = QProgressBar()
+                progress.setValue(50)
+                self.status_bar.addWidget(progress)
+                self.status_bar.repaint()
                 try:
                     playlist_id = self.playlists[idx]['id']
                     r = requests.get(f"{API_URL}/load_playlist/{playlist_id}")
@@ -1049,8 +959,135 @@ class AudioPlayer(QWidget):
                             files.append(track)
                         self.clear_playlist()
                         self.add_files(files)
+
                 except Exception as e:
                     QMessageBox.critical(self, "Error", str(e))
+                self.status_bar.clearMessage()
+
+
+class SynchronizedLyrics:
+    def __init__(self, audio_path=None):
+        self.times = []
+        self.lines = []
+        self.raw_lyrics = ""
+        if w.is_remote_file(audio_path):
+            try:
+                filename = audio_path.split('5000/')[1]
+                url = f"{w.remote_base}/get_song_metadata/{filename}"
+                r = requests.get(url, timeout=5)
+                if r.status_code == 200:
+                    data = r.json()
+                    self.raw_lyrics = data['lyrics']
+                else:
+                    self.raw_lyrics = "--"
+            except Exception as e:
+                print("Remote lyrics fetch error:", e)
+        else:
+            if audio_path:
+                lrc_path = os.path.splitext(audio_path)[0] + ".lrc"
+                if os.path.exists(lrc_path):
+                    with open(lrc_path, encoding='utf-8') as f:
+                        self.raw_lyrics = f.read()
+                else:
+                    self.raw_lyrics = self.get_embedded_lyrics(audio_path)
+        self.parse_lyrics(self.raw_lyrics)
+
+    def get_embedded_lyrics(self, audio_path):
+        audio = File(audio_path)
+        if audio is None:
+            return ""
+
+            # FLAC/Vorbis
+        if audio.__class__.__name__ == 'FLAC':
+            for key in audio:
+                if key.lower() in ('lyrics', 'unsyncedlyrics', 'lyric'):
+                    return audio[key][0]
+            return ""
+
+            # MP3 (ID3)
+        if hasattr(audio, 'tags') and audio.tags:
+            # USLT (unsynchronized lyrics) is the standard for ID3
+            for k in audio.tags.keys():
+                if k.startswith('USLT') or k.startswith('SYLT'):
+                    return str(audio.tags[k])
+                if k.lower() in ('lyrics', 'unsyncedlyrics', 'lyric'):
+                    return str(audio.tags[k])
+            # MP4/AAC
+        if hasattr(audio, 'tags') and hasattr(audio.tags, 'get'):
+            if audio.tags.get('\xa9lyr'):
+                return audio.tags['\xa9lyr'][0]
+        return ""
+
+    def parse_lyrics(self, lyrics_text):
+        time_tag = re.compile(r"\[(\d+):(\d+)(?:\.(\d+))?\]")
+        self.times = []
+        self.lines = []
+        for line in lyrics_text.splitlines():
+            matches = list(time_tag.finditer(line))
+            if matches:
+                lyric = time_tag.sub('', line).strip()
+                for m in matches:
+                    min, sec, ms = m.groups()
+                    total_ms = int(min) * 60 * 1000 + int(sec) * 1000 + int(ms or 0)
+                    self.times.append(total_ms)
+                    self.lines.append(lyric)
+            elif line.strip():
+                self.times.append(0)
+                self.lines.append(line.strip())
+
+    def get_current_line(self, pos_ms):
+        for i, t in enumerate(self.times):
+            if pos_ms < t:
+                return max(0, i-1)
+        return len(self.lines)-1 if self.lines else -1
+
+    def is_synchronized(self):
+        """Return True if lyrics are synchronized (have time tags)."""
+        # Synchronized if any time tag is nonzero
+        return any(t > 0 for t in self.times)
+
+class LyricsDisplay(QTextEdit):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setReadOnly(True)
+        self.setStyleSheet("font-size: 18px;")
+        self.current_line_idx = -1
+        self.lines = []
+        self.is_synchronized = False
+
+    def set_lyrics(self, lines, is_synchronized):
+        self.lines = lines
+        self.is_synchronized = is_synchronized
+        self.current_line_idx = -1
+        self.update_display(-1)
+
+    def update_display(self, highlight_idx):
+        html = ""
+        for idx, line in enumerate(self.lines):
+            if self.is_synchronized and idx == highlight_idx:
+                html += f"<div style='color: #3A89FF; font-weight: bold; background: #E0F0FF'>{line}</div>"
+            else:
+                html += f"<div>{line}</div>"
+        self.setHtml(html)
+        if self.is_synchronized and 0 <= highlight_idx < len(self.lines):
+            cursor = self.textCursor()
+            cursor.movePosition(QTextCursor.Start)
+            for _ in range(highlight_idx):
+                cursor.movePosition(QTextCursor.Down)
+            self.setTextCursor(cursor)
+            self.ensureCursorVisible()
+
+    def highlight_line(self, idx):
+        # Only highlight if lyrics are synchronized
+        if self.is_synchronized:
+            if idx != self.current_line_idx:
+                self.current_line_idx = idx
+                self.update_display(idx)
+        else:
+            # For unsynchronized lyrics, never highlight any line
+            if self.current_line_idx != -1:
+                self.current_line_idx = -1
+                self.update_display(-1)
 
 
 if __name__ == "__main__":
