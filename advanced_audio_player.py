@@ -1,12 +1,12 @@
 import sys
 import os
-from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect
+from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal
 from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
     QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar,
-    QMenu, QStatusBar,QProgressBar)
+    QMenu, QStatusBar,QProgressBar, QFrame)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 from mutagen import File
 from mutagen.flac import FLAC
@@ -21,6 +21,7 @@ APP_DIR = Path.home() / "Web-Media-Server-and-Player"
 APP_DIR.mkdir(exist_ok=True)
 
 class AudioPlayer(QWidget):
+    request_search = Signal(str, str)
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Ultimate Media Player")
@@ -33,6 +34,8 @@ class AudioPlayer(QWidget):
         self.lyrics_timer.setInterval(200)
         self.lyrics_timer.timeout.connect(self.update_lyrics_display)
         self.remote_base = None
+
+
 
         # Mixing/transition config
         self.mix_method = "Fade"  # Default
@@ -98,6 +101,16 @@ class AudioPlayer(QWidget):
 
         # Silence elimination config
         self.skip_silence = False  # Optionally configurable
+
+        top = QHBoxLayout()
+        self.combo = QComboBox();
+        self.combo.addItems(["artist", "title", "album"])
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search…")
+        self.btn_go = QPushButton("Search")
+        top.addWidget(self.combo)
+        top.addWidget(self.search, 2)
+        top.addWidget(self.btn_go)
 
         # Playlist browser with context menu support
         self.playlist_widget = QListWidget()
@@ -214,6 +227,7 @@ class AudioPlayer(QWidget):
         controls_layout.addWidget(self.next_button)
 
         left_layout = QVBoxLayout()
+        left_layout.addLayout(top, 2)
         left_layout.addLayout(info_layout)
         left_layout.addLayout(progress_layout)
         left_layout.addLayout(controls_layout)
@@ -228,12 +242,18 @@ class AudioPlayer(QWidget):
         main_layout.addLayout(playlist_layout, 1)
         main_layout.addLayout(left_layout, 2)
         layout.addWidget(menubar)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(separator)
         layout.addLayout(main_layout, 1)
         layout.addWidget(self.status_bar)
 
         self.setLayout(layout)
 
         # Connections
+        self.btn_go.clicked.connect(self.on_go)
+        self.request_search.connect(self.search_tracks)
         self.player.positionChanged.connect(self.update_slider)
         self.player.durationChanged.connect(self.update_duration)
         self.player.mediaStatusChanged.connect(self.media_status_changed)
@@ -296,6 +316,28 @@ class AudioPlayer(QWidget):
             "<p>HiRes Audio Player / API Client</p>"
             "<p>Created with ❤️ by EcoG</p>"
         )
+
+    def on_go(self):
+        col = self.combo.currentText()
+        q = self.search.text().strip()
+        if q:
+            self.search_tracks(col, q)
+
+    def search_tracks(self, column: str, query: str):
+        q = query.lower()
+        params = {"column":column, "query":q}
+        url = f"{API_URL}/search_songs"
+        r = requests.get(url, params=params, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            if data:
+                files = []
+                for track in data:
+                    files.append(track["path"])
+                self.clear_playlist()
+                self.add_files(files)
+
+
 
     # --- Mixing/transition config slots ---
     def set_mix_method(self, method):
