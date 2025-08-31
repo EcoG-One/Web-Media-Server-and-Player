@@ -11,9 +11,11 @@ from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 from mutagen import File
 from mutagen.flac import FLAC
 from pathlib import Path
+from random import shuffle
 import re
 import requests
 import base64
+import webbrowser
 
 
 API_URL = "http://localhost:5000"
@@ -87,6 +89,10 @@ class AudioPlayer(QWidget):
         help_menu = QMenu("&Help", self)
         menubar.addMenu(help_menu)
 
+        self.web_action = QAction("&Launch Web UI", self)
+        self.web_action.triggered.connect(self.launch_web_ui)
+        help_menu.addAction(self.web_action)
+
         self.about_action = QAction("&About", self)
         self.about_action.triggered.connect(self.show_about_dialog)
         help_menu.addAction(self.about_action)
@@ -113,8 +119,11 @@ class AudioPlayer(QWidget):
         top.addWidget(self.btn_go)
 
         # Playlist browser with context menu support
+        shuffle_box = QHBoxLayout()
         self.playlist_widget = QListWidget()
         self.playlist_label = QLabel("Playlist")
+        self.btn_shuffle = QPushButton("Shuffle")
+        self.btn_shuffle.setFixedSize(QSize(60, 26))
         self.playlist_widget.setDragDropMode(QListWidget.InternalMove)
         self.playlist_widget.itemClicked.connect(
             self.play_selected_playlist)
@@ -227,7 +236,7 @@ class AudioPlayer(QWidget):
         controls_layout.addWidget(self.next_button)
 
         left_layout = QVBoxLayout()
-        left_layout.addLayout(top, 2)
+        left_layout.addLayout(top)
         left_layout.addLayout(info_layout)
         left_layout.addLayout(progress_layout)
         left_layout.addLayout(controls_layout)
@@ -235,7 +244,9 @@ class AudioPlayer(QWidget):
         left_layout.addWidget(mix_group)
 
         playlist_layout = QVBoxLayout()
-        playlist_layout.addWidget(self.playlist_label)
+        shuffle_box.addWidget(self.playlist_label, )
+        shuffle_box.addWidget(self.btn_shuffle, )
+        playlist_layout.addLayout(shuffle_box)
         playlist_layout.addWidget(self.playlist_widget)
 
         main_layout = QHBoxLayout(self)
@@ -253,6 +264,7 @@ class AudioPlayer(QWidget):
 
         # Connections
         self.btn_go.clicked.connect(self.on_go)
+        self.btn_shuffle.clicked.connect(self.do_shuffle)
         self.request_search.connect(self.search_tracks)
         self.player.positionChanged.connect(self.update_slider)
         self.player.durationChanged.connect(self.update_duration)
@@ -321,6 +333,12 @@ class AudioPlayer(QWidget):
         col = self.combo.currentText()
         q = self.search.text().strip()
         if q:
+            self.status_bar.showMessage(
+                f'Searching for {q}. Please Wait...')
+            progress = QProgressBar()
+            progress.setValue(50)
+            self.status_bar.addWidget(progress)
+            self.status_bar.repaint()
             self.search_tracks(col, q)
 
     def search_tracks(self, column: str, query: str):
@@ -337,6 +355,14 @@ class AudioPlayer(QWidget):
                 self.clear_playlist()
                 self.add_files(files)
 
+
+    def do_shuffle(self):
+        shuffle(self.playlist)
+        self.playlist_widget.clear()
+        self.current_index = -1
+        for song in self.playlist:
+            item = QListWidgetItem(os.path.basename(song))
+            self.playlist_widget.addItem(item)
 
 
     # --- Mixing/transition config slots ---
@@ -1005,6 +1031,10 @@ class AudioPlayer(QWidget):
                 except Exception as e:
                     QMessageBox.critical(self, "Error", str(e))
                 self.status_bar.clearMessage()
+
+    def launch_web_ui(self):
+        if os.environ.get('WERKZEUG_RUN_MAIN') is None:
+            webbrowser.open(API_URL)
 
 
 class SynchronizedLyrics:

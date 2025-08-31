@@ -12,7 +12,6 @@ from mutagen import File
 # from mutagen.id3 import ID3, APIC
 import base64
 from fuzzywuzzy import fuzz, process
-import webbrowser
 # import json
 # import pyperclip
 
@@ -758,8 +757,6 @@ if __name__ == '__main__':
     try:
         init_database()
         logger.info(f"Starting Flask server on port 5000")
-        if os.environ.get('WERKZEUG_RUN_MAIN') is None:
-            webbrowser.open('http://127.0.0.1:5000')
         app.run(host='0.0.0.0', port=5000, debug=True)
     except Exception as e:
         logger.error(f"Failed to start server: {e}")
