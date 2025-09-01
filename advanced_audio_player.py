@@ -1,6 +1,6 @@
 import sys
 import os
-from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal
+from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread
 from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -13,10 +13,16 @@ from mutagen.flac import FLAC
 from pathlib import Path
 from random import shuffle
 import re
+import asyncio
+import aiohttp
+# from PyQt5.QtCore import QThread, pyqtSignal
 import requests
 import base64
 import webbrowser
+from dotenv import load_dotenv
 
+load_dotenv()
+SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
 
 API_URL = "http://localhost:5000"
 APP_DIR = Path.home() / "Web-Media-Server-and-Player"
@@ -36,7 +42,7 @@ class AudioPlayer(QWidget):
         self.lyrics_timer.setInterval(200)
         self.lyrics_timer.timeout.connect(self.update_lyrics_display)
         self.remote_base = None
-
+        self.data = None
 
 
         # Mixing/transition config
@@ -50,48 +56,83 @@ class AudioPlayer(QWidget):
         menubar = QMenuBar(self)
 
         # File menu
-        file_menu = QMenu("&Actions", self)
-        menubar.addMenu(file_menu)
+        local_menu = QMenu("&Local", self)
+        menubar.addMenu(local_menu)
 
         self.open_action = QAction("&Open Playlist | Add Songs", self)
         self.open_action.setShortcut(QKeySequence.Open)
         self.open_action.triggered.connect(self.show_playlist_menu)
-        file_menu.addAction(self.open_action)
-
-        self.open_action = QAction("Load &Playlists from Server", self)
-        self.open_action.setShortcut(QKeySequence.Print)
-        self.open_action.triggered.connect(self.get_playlists)
-        file_menu.addAction(self.open_action)
+        local_menu.addAction(self.open_action)
 
         self.open_action = QAction("Scan &Library", self)
         self.open_action.setShortcut(QKeySequence("Ctrl+L"))
         self.open_action.triggered.connect(self.scan_library)
-        file_menu.addAction(self.open_action)
+        local_menu.addAction(self.open_action)
 
         self.save_action = QAction("&Save Playlist", self)
         self.save_action.setShortcut(QKeySequence.Save)
         self.save_action.triggered.connect(self.save_current_playlist)
-        file_menu.addAction(self.save_action)
+        local_menu.addAction(self.save_action)
 
         self.save_action = QAction("&Clear Playlist", self)
         self.save_action.setShortcut(QKeySequence.Delete)
         self.save_action.triggered.connect(self.save_current_playlist)
-        file_menu.addAction(self.save_action)
+        local_menu.addAction(self.save_action)
 
-        file_menu.addSeparator()
+        local_menu.addSeparator()
 
         self.exit_action = QAction("E&xit", self)
         self.exit_action.setShortcut(QKeySequence.Quit)
         self.exit_action.triggered.connect(self.close)
-        file_menu.addAction(self.exit_action)
+        local_menu.addAction(self.exit_action)
+
+        # Remote menu
+        remote_menu = QMenu("&Remote", self)
+        menubar.addMenu(remote_menu)
+
+        self.server_action = QAction("&Enter Remote Server", self)
+        self.server_action.setShortcut(QKeySequence("Ctrl+E"))
+        self.server_action.triggered.connect(self.enter_server)
+        remote_menu.addAction(self.server_action)
+
+        self.load_action = QAction("Load &Playlists from Server", self)
+        self.load_action.setShortcut(QKeySequence.Print)
+        self.load_action.triggered.connect(self.get_playlists)
+        remote_menu.addAction(self.load_action)
+
+        self.scan_action = QAction("Scan Remote &Library", self)
+        self.scan_action .setShortcut(QKeySequence("Ctrl+L"))
+        self.scan_action .triggered.connect(self.scan_remote_library)
+        remote_menu.addAction(self.scan_action )
+
+        self.web_action = QAction("&Launch Web UI", self)
+        self.web_action.triggered.connect(self.launch_web_ui)
+        remote_menu.addAction(self.web_action)
+
+        self.desktop_action = QAction("&Launch Desktop UI", self)
+        self.desktop_action.triggered.connect(self.launch_web_ui)
+        remote_menu.addAction(self.desktop_action)
+
+        self.shutdown_action = QAction("&Shutdown Remote Server", self)
+        self.shutdown_action.setShortcut(QKeySequence.Save)
+        self.shutdown_action.triggered.connect(self.shutdown_server)
+        remote_menu.addAction(self.shutdown_action)
+
+        self.web_action = QAction("&Clear Playlist", self)
+        self.web_action.setShortcut(QKeySequence.Delete)
+        self.web_action.triggered.connect(self.save_current_playlist)
+        remote_menu.addAction(self.web_action)
+
+        remote_menu.addSeparator()
+
+        self.exit_action = QAction("E&xit", self)
+        self.exit_action.setShortcut(QKeySequence.Quit)
+        self.exit_action.triggered.connect(self.close)
+        remote_menu.addAction(self.exit_action)
 
         # Help menu
         help_menu = QMenu("&Help", self)
         menubar.addMenu(help_menu)
-
-        self.web_action = QAction("&Launch Web UI", self)
-        self.web_action.triggered.connect(self.launch_web_ui)
-        help_menu.addAction(self.web_action)
 
         self.about_action = QAction("&About", self)
         self.about_action.triggered.connect(self.show_about_dialog)
@@ -144,11 +185,11 @@ class AudioPlayer(QWidget):
         self.album_art.setPixmap(
             QPixmap("static/images/default_album_art.png") if os.path.exists(
                 "static/images/default_album_art.png") else QPixmap())
-        self.title_label = QLabel("-- Title --")
-        self.artist_label = QLabel("-- Artist --")
-        self.album_label = QLabel("-- Album --")
-        self.year_label = QLabel("-- Year --")
-        self.codec_label = QLabel("-- Codec --")
+        self.title_label = QLabel("Title --")
+        self.artist_label = QLabel("Artist --")
+        self.album_label = QLabel("Album --")
+        self.year_label = QLabel("Year --")
+        self.codec_label = QLabel("Codec --")
 
         self.time_label = QPushButton("--:--"); self.time_label.setFlat(True)
         self.time_label.setCursor(Qt.PointingHandCursor)
@@ -272,7 +313,7 @@ class AudioPlayer(QWidget):
         self.player.playbackStateChanged.connect(self.update_play_button)
         self.slider.sliderPressed.connect(lambda: self.player.pause())
         self.slider.sliderReleased.connect(lambda: self.player.play())
-        self.player.metaDataChanged.connect(self.update_metadata)
+        self.player.metaDataChanged.connect(self.on_metadata_changed)
         self.player.errorOccurred.connect(self.handle_error)
 
         # For mixing (transition to next track)
@@ -299,6 +340,54 @@ class AudioPlayer(QWidget):
                 sub_img = image.copy(rect)
                 sub_images.append(sub_img)
         return sub_images
+
+    def enter_server(self):
+        text, ok_pressed = QInputDialog.getText(self, "Input",
+                                                "Enter Remote Server name or IP:",
+                                                QLineEdit.Normal, "");
+        if ok_pressed and text != '':
+            global API_URL
+            API_URL = f'http://{text}:5000'
+            self.remote_base = API_URL
+            self.status_bar.showMessage(f'Remote Server is now: {API_URL}')
+
+    def scan_remote_library(self):
+        folder_path = ""
+        folder_path, ok = QInputDialog.getText(self, "Input",
+                                        "Enter the Remote Absolute Path of Folder to Scan:",
+                                        QLineEdit.Normal, "")
+        if ok and folder_path:
+            self.status_bar.showMessage(
+            'Scanning your Music Library. Please Wait, it might take some time depending on the library side')
+        progress = QProgressBar()
+        progress.setRange(0, 0)
+        self.status_bar.addWidget(progress)
+        self.status_bar.repaint()
+        try:
+            r = requests.post(f"{API_URL}/scan_library",
+                              json={"folder_path": folder_path})
+            data = r.json()
+            if 'error' in data:
+                QMessageBox.warning(self, "Scan Error", data['error'])
+            else:
+                QMessageBox.information(self, "Success", data['message'])
+            self.status_bar.clearMessage()
+        except Exception as e:
+            self.status_bar.clearMessage()
+            QMessageBox.critical(self, "Error", str(e))
+
+    def shutdown_server(self):
+        try:
+            resp = requests.post(
+                "http://127.0.0.1:5000/shutdown",
+                headers={"X-API-Key": SHUTDOWN_SECRET},
+                json={}
+            )
+            self.status_bar.showMessage(resp.text)
+        except Exception as e:
+            QMessageBox.warning(self, "Error",
+                                f"Failed to shutdown Remote Server @ {API_URL}:\nMake Sure the Server is Up")
+
 
     def save_current_playlist(self):
         if not self.playlist:
@@ -413,8 +502,15 @@ class AudioPlayer(QWidget):
         self.next_player.setAudioOutput(self.next_output)
         self.next_player.setSource(QUrl.fromLocalFile(next_path))
         self.next_output.setVolume(0)
+        self.slider.setValue(0)
+        self.update_metadata(next_idx)
+        if self.is_local_file(next_path):
+            self.set_album_art(next_path)
+        self.load_lyrics(next_path)
         self.next_player.play()
-
+     #   self.update_metadata()
+        self.lyrics_timer.start()
+        self.playlist_widget.setCurrentRow(next_idx)
         self.fade_timer = QTimer(self)
         self.fade_timer.setInterval(100)
         fade_steps = int(self.transition_duration * 1000 / 100)
@@ -464,12 +560,14 @@ class AudioPlayer(QWidget):
                 self.current_index = next_idx
             #    self.load_track(self.current_index, auto_play=False, skip_mix_check=True)
             #    self.player.play()
+                if self.is_local_file(next_path):
+                    self.update_metadata(self.current_index)
                 self.update_play_button()
                 self.player.positionChanged.connect(self.update_slider)
                 self.player.durationChanged.connect(self.update_duration)
                 self.player.mediaStatusChanged.connect(self.media_status_changed)
                 self.player.playbackStateChanged.connect(self.update_play_button)
-                self.player.metaDataChanged.connect(self.update_metadata)
+            #    self.player.metaDataChanged.connect(self.on_metadata_changed)
                 self.player.errorOccurred.connect(self.handle_error)
                 self.player.positionChanged.connect(self.check_for_mix_transition)
                 self.next_player = None
@@ -520,16 +618,21 @@ class AudioPlayer(QWidget):
                 media_url = self.get_media_source(path)
             self.player.setSource(media_url)
             self.slider.setValue(0)
-            self.title_label.setText(os.path.basename(path))
-            self.artist_label.setText("-- Artist --")
-            self.album_label.setText("-- Album --")
-            self.year_label.setText("-- Date --")
-            self.codec_label.setText("-- Audio --")
-            self.set_album_art(path)
+          #  self.title_label.setText(os.path.basename(path))
+          #  self.artist_label.setText("-- Artist --")
+          #  self.album_label.setText("-- Album --")
+          #  self.year_label.setText("-- Date --")
+          #  self.codec_label.setText("-- Audio --")
+          #  if self.is_remote_file(path):
+            self.update_metadata(idx)
+            if self.is_local_file(path):
+                self.set_album_art(path)
             self.load_lyrics(path)
             if auto_play:
                 self.player.play()
             self.lyrics_timer.start()
+            if self.is_local_file(path):
+                self.update_metadata(idx)
             self.playlist_widget.setCurrentRow(idx)
             # Optionally skip silence at start (very basic, see note below)
             if skip_silence:
@@ -695,25 +798,19 @@ class AudioPlayer(QWidget):
         Sets album art using metadata JSON if provided (remote), otherwise falls back to local extraction.
         """
         if self.is_remote_file(path):
-            filename = path.split('5000/')[1]
-            url = f"{self.remote_base}/get_song_metadata/{filename}"
-            r = requests.get(url, timeout=5)
-            if r.status_code == 200:
-                data = r.json()
-            #    picture = data.get('title', os.path.basename(path))
-                if data and 'picture' in data and data[
-                    'picture']:
-                    try:
-                        img_bytes = base64.b64decode(data['picture'])
-                        img = QImage.fromData(img_bytes)
-                        pix = QPixmap.fromImage(img)
-                        self.album_art.setPixmap(
-                            pix.scaled(self.album_art.size(), Qt.KeepAspectRatio,
-                                       Qt.SmoothTransformation)
-                        )
-                        return
-                    except Exception as e:
-                        print("Base64 album art decode error:", e)
+            if self.data and 'picture' in self.data and self.data[
+                'picture']:
+                try:
+                    img_bytes = base64.b64decode(self.data['picture'])
+                    img = QImage.fromData(img_bytes)
+                    pix = QPixmap.fromImage(img)
+                    self.album_art.setPixmap(
+                        pix.scaled(self.album_art.size(), Qt.KeepAspectRatio,
+                                   Qt.SmoothTransformation)
+                    )
+                    return
+                except Exception as e:
+                    print("Base64 album art decode error:", e)
             return
         # fallback below if fetch fails
         img_data = None
@@ -827,8 +924,8 @@ class AudioPlayer(QWidget):
                 next_idx = self._cue_next
                 self._cue_next = None
                 self.load_track(next_idx)
-            else:
-                self.next_track()
+        #    else:
+         #       self.next_track()
 
     def handle_error(self, error, error_string):
         if error != QMediaPlayer.NoError:
@@ -836,27 +933,32 @@ class AudioPlayer(QWidget):
             print("Playback Error:", error_string)
             self.update_play_button()
 
-    def update_metadata(self):
+    def on_metadata_changed(self):
         path = self.playlist[self.current_index]
+        if self.is_local_file(path):
+            md = self.player.metaData()
+            if not md.isEmpty():
+                self.update_metadata(self.current_index)
+
+    def update_metadata(self, index):
+        path = self.playlist[index]
         if self.is_remote_file(path):
             try:
                 filename = path.split('5000/')[1]
                 url = f"{self.remote_base}/get_song_metadata/{filename}"
                 r = requests.get(url, timeout=5)
                 if r.status_code == 200:
-                    data = r.json()
-                    title = data.get('title', os.path.basename(path))
-                    artist = data.get('artist', "--")
-                    album = data.get('album', "--")
-                    year = data.get('year', "--")
-                    codec = data.get('codec', "--")
-                    codec = data.get('codec', "--")
-                    # Set album art using meta_json
+                    self.data = r.json()
+                    title = self.data.get('title', os.path.basename(path))
+                    artist = self.data.get('artist', "--")
+                    album = self.data.get('album', "--")
+                    year = self.data.get('year', "--")
+                    codec = self.data.get('codec', "--").replace('audio/', '')
                     self.set_album_art(path)
                 else:
                     title = os.path.basename(path)
                     artist = album = year = codec = "--"
-                    self.set_album_art(path)
+                #    self.set_album_art(path)
             except Exception as e:
                 print("Remote metadata fetch error:", e)
                 title = os.path.basename(path)
@@ -878,7 +980,7 @@ class AudioPlayer(QWidget):
             self.artist_label.setText('Artist: ' + artist)
             self.album_label.setText('Album: '+ album)
             self.year_label.setText('Year: ' + year)
-            self.codec_label.setText(self.extract_audio_info())
+            self.codec_label.setText(self.extract_audio_info().replace('audio/', ''))
             self.set_album_art(path)
 
     @staticmethod
@@ -918,12 +1020,9 @@ class AudioPlayer(QWidget):
         path = self.playlist[self.current_index]
         if self.is_remote_file(path):
             try:
-                filename = path.split('5000/')[1]
-                url = f"{self.remote_base}/get_song_metadata/{filename}"
-                r = requests.get(url, timeout=5)
-                if r.status_code == 200:
-                    data = r.json()
-                    codec = data.get('codec')
+                if self.data and 'codec' in self.data and self.data[
+                    'codec']:
+                    codec = self.data.get('codec')
                     return codec
             except Exception as e:
                 print("Remote metadata fetch error:", e)
@@ -931,7 +1030,7 @@ class AudioPlayer(QWidget):
             audio = File(self.playlist[self.current_index])
             if not audio:
                 print("Unsupported or corrupted file.")
-                return
+                return None
 
             # Codec
             codec = audio.mime[0] if hasattr(audio,
@@ -979,12 +1078,6 @@ class AudioPlayer(QWidget):
             QMessageBox.critical(self, "Error", str(e))
 
     def get_playlists(self):
-        text, ok_pressed = QInputDialog.getText(self, "Input",
-                    "Enter Server name or IP:\n Cancel for Local Server", QLineEdit.Normal, "");
-        if ok_pressed and text != '':
-            global API_URL
-            API_URL = f'http://{text}:5000'
-            self.remote_base = API_URL
         self.status_bar.showMessage(
             'Loading Playlists from Server. Please Wait, it might take some time...')
         self.status_bar.repaint()
@@ -1044,12 +1137,10 @@ class SynchronizedLyrics:
         self.raw_lyrics = ""
         if w.is_remote_file(audio_path):
             try:
-                filename = audio_path.split('5000/')[1]
-                url = f"{w.remote_base}/get_song_metadata/{filename}"
-                r = requests.get(url, timeout=5)
-                if r.status_code == 200:
-                    data = r.json()
-                    self.raw_lyrics = data['lyrics']
+                if w.data and 'lyrics' in w.data and w.data[
+                    'lyrics']:
+             #       data = r.json()
+                    self.raw_lyrics = w.data['lyrics']
                 else:
                     self.raw_lyrics = "--"
             except Exception as e:

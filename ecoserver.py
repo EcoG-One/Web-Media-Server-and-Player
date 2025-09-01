@@ -4,18 +4,24 @@ import subprocess
 # import threading
 import logging
 import traceback
+import webbrowser
 # from datetime import datetime
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, redirect, url_for, \
-    send_file
+    send_file, abort
 from mutagen import File
 # from mutagen.id3 import ID3, APIC
 import base64
 from fuzzywuzzy import fuzz, process
-# import json
-# import pyperclip
+import webbrowser
+import signal
+from dotenv import load_dotenv
 
 app = Flask(__name__)
+
+load_dotenv()
+secret_key = os.getenv("SECRET_KEY")
+SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
 
 # Configure logging
 def setup_logging():
@@ -752,12 +758,59 @@ def save_settings():
         logger.error(traceback.format_exc())
         return jsonify({'error': 'Error saving settings'}), 500
 
+@app.route('/web_ui', methods=['POST'])
+
+def web_ui():
+    try:
+        if os.environ.get('WERKZEUG_RUN_MAIN') is None:
+            webbrowser.open("http://localhost:5000")
+            return "Web Interface Lunched Successfully"
+    except Exception as e:
+        logger.error(f"Error launching Web Interface: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': 'Error launching Web Interface'}), 500
+
+
+def shutdown_server():
+    from werkzeug import Request
+    func = request.environ.get('werkzeug.server.shutdown')
+    if func is None:
+        raise RuntimeError('Not running with the Werkzeug Server')
+    func()
+
+@app.route('/shutdown', methods=['POST'])
+
+@app.route("/shutdown", methods=["POST"])
+def shutdown():
+    # Restrict to localhost only
+    if request.remote_addr not in ("127.0.0.1", "::1"):
+        abort(403, "Forbidden: only localhost may request shutdown")
+
+    # Check for secret token (in header or JSON body)
+    token = request.headers.get("X-API-Key") or request.json.get("token") if request.is_json else None
+    if token != SHUTDOWN_SECRET:
+        abort(401, "Unauthorized: invalid shutdown token")
+
+    # Try Werkzeug shutdown first
+    func = request.environ.get("werkzeug.server.shutdown")
+    if func is not None:
+        func()
+        return "Server shutting down (Werkzeug)..."
+
+    # Fallback for Windows: kill process
+    pid = os.getpid()
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except Exception:
+        os.system(f"taskkill /PID {pid} /F")
+    return f"Server killed (pid {pid})"
+
 
 if __name__ == '__main__':
     try:
         init_database()
         logger.info(f"Starting Flask server on port 5000")
-        app.run(host='0.0.0.0', port=5000, debug=True)
+        app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
     except Exception as e:
         logger.error(f"Failed to start server: {e}")
         logger.error(traceback.format_exc())
