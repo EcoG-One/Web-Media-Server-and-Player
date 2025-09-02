@@ -1,16 +1,12 @@
 import os
 import sqlite3
 import subprocess
-# import threading
 import logging
 import traceback
-import webbrowser
-# from datetime import datetime
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, redirect, url_for, \
     send_file, abort
 from mutagen import File
-# from mutagen.id3 import ID3, APIC
 import base64
 from fuzzywuzzy import fuzz, process
 import webbrowser
@@ -524,7 +520,7 @@ def scan_library():
             # Run openfile.py (or openfile.exe if app will be converted to
             # windows executable) to select music library folder
             # result = subprocess.run(['python', 'openfile.py'], capture_output=True, text=True)
-            result = subprocess.run(["openfile.exe"], capture_output=True, text=True, timeout=30)
+            result = subprocess.run(["openfile.exe"], capture_output=True, text=True, timeout=50)
             folder_path = result.stdout.strip("\n")
 
             logger.info(f"Selected folder: {folder_path}")
@@ -759,7 +755,6 @@ def save_settings():
         return jsonify({'error': 'Error saving settings'}), 500
 
 @app.route('/web_ui', methods=['POST'])
-
 def web_ui():
     try:
         if os.environ.get('WERKZEUG_RUN_MAIN') is None:
@@ -770,6 +765,16 @@ def web_ui():
         logger.error(traceback.format_exc())
         return jsonify({'error': 'Error launching Web Interface'}), 500
 
+@app.route('/desk_ui', methods=['POST'])
+def desk_ui():
+    try:
+        subprocess.run(["advanced_audio_player.exe"], timeout=3)
+        return "Remote Desktop Interface Lunched Successfully"
+    except Exception as e:
+        logger.error(f"Error launching Desktop Interface: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': 'Error launching Desktop Interface'}), 500
+
 
 def shutdown_server():
     from werkzeug import Request
@@ -778,13 +783,11 @@ def shutdown_server():
         raise RuntimeError('Not running with the Werkzeug Server')
     func()
 
-@app.route('/shutdown', methods=['POST'])
-
 @app.route("/shutdown", methods=["POST"])
 def shutdown():
     # Restrict to localhost only
-    if request.remote_addr not in ("127.0.0.1", "::1"):
-        abort(403, "Forbidden: only localhost may request shutdown")
+   # if request.remote_addr not in ("127.0.0.1", "::1"):
+    #    abort(403, "Forbidden: only localhost may request shutdown")
 
     # Check for secret token (in header or JSON body)
     token = request.headers.get("X-API-Key") or request.json.get("token") if request.is_json else None

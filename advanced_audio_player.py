@@ -15,7 +15,6 @@ from random import shuffle
 import re
 import asyncio
 import aiohttp
-# from PyQt5.QtCore import QThread, pyqtSignal
 import requests
 import base64
 import webbrowser
@@ -32,7 +31,8 @@ class AudioPlayer(QWidget):
     request_search = Signal(str, str)
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Ultimate Media Player")
+        self.scan_worker = None
+        self.setWindowTitle("Ultimate Media Player. Current Server: Local")
         self.resize(1200, 800)
         self.playlist = []
         self.current_index = -1
@@ -79,6 +79,10 @@ class AudioPlayer(QWidget):
         self.save_action.triggered.connect(self.save_current_playlist)
         local_menu.addAction(self.save_action)
 
+        self.local_web_action = QAction("&Launch Web UI", self)
+        self.local_web_action.triggered.connect(self.local_web_ui)
+        local_menu.addAction(self.local_web_action)
+
         local_menu.addSeparator()
 
         self.exit_action = QAction("E&xit", self)
@@ -105,12 +109,12 @@ class AudioPlayer(QWidget):
         self.scan_action .triggered.connect(self.scan_remote_library)
         remote_menu.addAction(self.scan_action )
 
-        self.web_action = QAction("&Launch Web UI", self)
-        self.web_action.triggered.connect(self.launch_web_ui)
+        self.web_action = QAction("&Launch Remote Web UI", self)
+        self.web_action.triggered.connect(self.remote_web_ui)
         remote_menu.addAction(self.web_action)
 
-        self.desktop_action = QAction("&Launch Desktop UI", self)
-        self.desktop_action.triggered.connect(self.launch_web_ui)
+        self.desktop_action = QAction("&Launch Remote Desktop UI", self)
+        self.desktop_action.triggered.connect(self.remote_desk_ui)
         remote_menu.addAction(self.desktop_action)
 
         self.shutdown_action = QAction("&Shutdown Remote Server", self)
@@ -349,43 +353,80 @@ class AudioPlayer(QWidget):
             global API_URL
             API_URL = f'http://{text}:5000'
             self.remote_base = API_URL
+            self.setWindowTitle(f"Ultimate Media Player. Current Server: {text}")
             self.status_bar.showMessage(f'Remote Server is now: {API_URL}')
 
+
+
     def scan_remote_library(self):
-        folder_path = ""
-        folder_path, ok = QInputDialog.getText(self, "Input",
-                                        "Enter the Remote Absolute Path of Folder to Scan:",
-                                        QLineEdit.Normal, "")
-        if ok and folder_path:
-            self.status_bar.showMessage(
-            'Scanning your Music Library. Please Wait, it might take some time depending on the library side')
-        progress = QProgressBar()
-        progress.setRange(0, 0)
-        self.status_bar.addWidget(progress)
+        """async scan_remote_library"""
+
+        # Get folder path from user input
+        folder_path, ok = QInputDialog.getText(
+            self,
+            "Input",
+            "Enter the Remote Absolute Path of Folder to Scan:",
+            QLineEdit.Normal,
+            ""
+        )
+
+        if not (ok and folder_path):
+            return
+
+        # Update status bar and show progress
+        self.status_bar.showMessage(
+            'Scanning your Music Library. Please Wait, it might take some time depending on the library size'
+        )
+
+        # Create and configure progress bar
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)  # Indeterminate progress
+        self.status_bar.addWidget(self.progress)
         self.status_bar.repaint()
-        try:
-            r = requests.post(f"{API_URL}/scan_library",
-                              json={"folder_path": folder_path})
-            data = r.json()
-            if 'error' in data:
-                QMessageBox.warning(self, "Scan Error", data['error'])
-            else:
-                QMessageBox.information(self, "Success", data['message'])
-            self.status_bar.clearMessage()
-        except Exception as e:
-            self.status_bar.clearMessage()
-            QMessageBox.critical(self, "Error", str(e))
+
+        # Create and configure worker thread
+        self.scan_worker = ScanWorker(folder_path, API_URL)
+        self.scan_worker.scan_completed.connect(self.on_scan_completed)
+        self.scan_worker.scan_error.connect(self.on_scan_error)
+        self.scan_worker.finished.connect(self.cleanup_scan)
+
+        # Start the async operation
+        self.scan_worker.start()
+
+    def on_scan_completed(self, data):
+        """Handle successful scan completion"""
+        if 'error' in data:
+            QMessageBox.warning(self, "Scan Error", data['error'])
+        else:
+            QMessageBox.information(self, "Success", data['message'])
+        self.status_bar.repaint()
+
+    def on_scan_error(self, error_message):
+        """Handle scan error"""
+        QMessageBox.critical(self, "Error", error_message)
+        self.status_bar.repaint()
+
+    def cleanup_scan(self):
+        """Clean up after scan completion"""
+        # Remove progress bar and clear status
+        self.status_bar.removeWidget(self.progress)
+        self.status_bar.clearMessage()
+
+        # Clean up worker reference
+        self.scan_worker.deleteLater()
+        self.scan_worker = None
 
     def shutdown_server(self):
         try:
             resp = requests.post(
-                "http://127.0.0.1:5000/shutdown",
+                f"{API_URL}/shutdown",
                 headers={"X-API-Key": SHUTDOWN_SECRET},
                 json={}
             )
             self.status_bar.showMessage(resp.text)
+            self.status_bar.repaint()
         except Exception as e:
-            QMessageBox.warning(self, "Error",
+            print(self, "Error",
                                 f"Failed to shutdown Remote Server @ {API_URL}:\nMake Sure the Server is Up")
 
 
@@ -1059,23 +1100,25 @@ class AudioPlayer(QWidget):
         folder_path = self.selectDirectoryDialog()
         if not folder_path:
             return
-        self.status_bar.showMessage('Scanning your Music Library. Please Wait, it might take some time depending on the library side')
-        progress = QProgressBar()
-        progress.setValue(50)
-        self.status_bar.addWidget(progress)
+        # Update status bar and show progress
+        self.status_bar.showMessage(
+            'Scanning your Music Library. Please Wait, it might take some time depending on the library size'
+        )
+
+        # Create and configure progress bar
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)  # Indeterminate progress
+        self.status_bar.addWidget(self.progress)
         self.status_bar.repaint()
-        try:
-            r = requests.post(f"{API_URL}/scan_library",
-                              json={"folder_path": folder_path})
-            data = r.json()
-            if 'error' in data:
-                QMessageBox.warning(self, "Scan Error", data['error'])
-            else:
-                QMessageBox.information(self, "Success", data['message'])
-            self.status_bar.clearMessage()
-        except Exception as e:
-            self.status_bar.clearMessage()
-            QMessageBox.critical(self, "Error", str(e))
+
+        # Create and configure worker thread
+        self.scan_worker = ScanWorker(folder_path, "http://localhost:5000")
+        self.scan_worker.scan_completed.connect(self.on_scan_completed)
+        self.scan_worker.scan_error.connect(self.on_scan_error)
+        self.scan_worker.finished.connect(self.cleanup_scan)
+
+        # Start the async operation
+        self.scan_worker.start()
 
     def get_playlists(self):
         self.status_bar.showMessage(
@@ -1125,10 +1168,68 @@ class AudioPlayer(QWidget):
                     QMessageBox.critical(self, "Error", str(e))
                 self.status_bar.clearMessage()
 
-    def launch_web_ui(self):
-        if os.environ.get('WERKZEUG_RUN_MAIN') is None:
+    def local_web_ui(self):
+        if os.environ.get(f'WERKZEUG_RUN_MAIN') is None:
             webbrowser.open(API_URL)
 
+    def remote_web_ui(self):
+        try:
+            r = requests.post(f"{API_URL}/web_ui")
+            data = r.text
+            self.status_bar.showMessage(data)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+    def remote_desk_ui(self):
+        try:
+            r = requests.post(f"{API_URL}/desk_ui")
+         #   data = r.text
+         #   self.status_bar.showMessage(data)
+        except Exception as e:
+            print("Error", str(e))
+
+
+
+class ScanWorker(QThread):
+    """Worker thread for handling the asynchronous scan operation"""
+
+    # Define signals for communicating with the main thread
+    scan_completed = Signal(dict)  # Emits scan result data
+    scan_error = Signal(str)  # Emits error message
+
+    def __init__(self, folder_path, api_url):
+        super().__init__()
+        self.folder_path = folder_path
+        self.api_url = api_url
+
+    def run(self):
+        """Run the async scan in a separate thread"""
+        try:
+            # Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            # Run the async scan
+            result = loop.run_until_complete(self.scan_library_async())
+
+            # Emit success signal
+            self.scan_completed.emit(result)
+
+        except Exception as e:
+            # Emit error signal
+            self.scan_error.emit(str(e))
+
+        finally:
+            loop.close()
+
+    async def scan_library_async(self):
+        """Async function to scan the library"""
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                    f"{self.api_url}/scan_library",
+                    json={"folder_path": self.folder_path}
+            ) as response:
+                return await response.json()
 
 class SynchronizedLyrics:
     def __init__(self, audio_path=None):
