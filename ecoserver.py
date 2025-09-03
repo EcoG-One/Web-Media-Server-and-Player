@@ -502,7 +502,8 @@ def handle_exception(e):
 def index():
     try:
         logger.info("Serving index page")
-        return render_template('index.html', settings=SETTINGS, is_localhost=is_localhost(request))
+        return render_template('index.html',
+                               settings=SETTINGS, is_localhost=is_localhost(request))
     except Exception as e:
         logger.error(f"Error serving index page: {e}")
         logger.error(traceback.format_exc())

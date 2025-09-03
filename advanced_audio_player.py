@@ -64,24 +64,30 @@ class AudioPlayer(QWidget):
         self.open_action.triggered.connect(self.show_playlist_menu)
         local_menu.addAction(self.open_action)
 
-        self.open_action = QAction("Scan &Library", self)
-        self.open_action.setShortcut(QKeySequence("Ctrl+L"))
-        self.open_action.triggered.connect(self.scan_library)
-        local_menu.addAction(self.open_action)
+        self.scan_action = QAction("Scan &Library", self)
+        self.scan_action.setShortcut(QKeySequence("Ctrl+L"))
+        self.scan_action.triggered.connect(self.scan_library)
+        local_menu.addAction(self.scan_action)
 
         self.save_action = QAction("&Save Playlist", self)
         self.save_action.setShortcut(QKeySequence.Save)
         self.save_action.triggered.connect(self.save_current_playlist)
         local_menu.addAction(self.save_action)
 
-        self.save_action = QAction("&Clear Playlist", self)
-        self.save_action.setShortcut(QKeySequence.Delete)
-        self.save_action.triggered.connect(self.save_current_playlist)
-        local_menu.addAction(self.save_action)
+        self.clear_action = QAction("&Clear Playlist", self)
+        self.clear_action.setShortcut(QKeySequence.Delete)
+        self.clear_action.triggered.connect(self.clear_playlist)
+        local_menu.addAction(self.clear_action)
 
-        self.local_web_action = QAction("&Launch Web UI", self)
+        self.local_web_action = QAction("Launch &Web UI", self)
+        self.local_web_action.setShortcut(QKeySequence("Ctrl+W"))
         self.local_web_action.triggered.connect(self.local_web_ui)
         local_menu.addAction(self.local_web_action)
+
+        self.local_shutdown_action = QAction("Shutdown Lo&cal Server", self)
+        self.local_shutdown_action.setShortcut(QKeySequence.Close)
+        self.local_shutdown_action.triggered.connect(self.shutdown_local_server)
+        local_menu.addAction(self.local_shutdown_action)
 
         local_menu.addSeparator()
 
@@ -105,27 +111,24 @@ class AudioPlayer(QWidget):
         remote_menu.addAction(self.load_action)
 
         self.scan_action = QAction("Scan Remote &Library", self)
-        self.scan_action .setShortcut(QKeySequence("Ctrl+L"))
+        self.scan_action .setShortcut(QKeySequence("Ctrl+R"))
         self.scan_action .triggered.connect(self.scan_remote_library)
         remote_menu.addAction(self.scan_action )
 
-        self.web_action = QAction("&Launch Remote Web UI", self)
+        self.web_action = QAction("Launch &Remote Web UI", self)
+        self.web_action.setShortcut(QKeySequence("Ctrl+I"))
         self.web_action.triggered.connect(self.remote_web_ui)
         remote_menu.addAction(self.web_action)
 
-        self.desktop_action = QAction("&Launch Remote Desktop UI", self)
+        self.desktop_action = QAction("Launch Remote &Desktop UI", self)
+        self.desktop_action.setShortcut(QKeySequence("Ctrl+D"))
         self.desktop_action.triggered.connect(self.remote_desk_ui)
         remote_menu.addAction(self.desktop_action)
 
-        self.shutdown_action = QAction("&Shutdown Remote Server", self)
-        self.shutdown_action.setShortcut(QKeySequence.Save)
+        self.shutdown_action = QAction("S&hutdown Remote Server", self)
+        self.shutdown_action.setShortcut(QKeySequence("Ctrl+C"))
         self.shutdown_action.triggered.connect(self.shutdown_server)
         remote_menu.addAction(self.shutdown_action)
-
-        self.web_action = QAction("&Clear Playlist", self)
-        self.web_action.setShortcut(QKeySequence.Delete)
-        self.web_action.triggered.connect(self.save_current_playlist)
-        remote_menu.addAction(self.web_action)
 
         remote_menu.addSeparator()
 
@@ -309,6 +312,7 @@ class AudioPlayer(QWidget):
 
         # Connections
         self.btn_go.clicked.connect(self.on_go)
+        self.search.returnPressed.connect(self.on_go)
         self.btn_shuffle.clicked.connect(self.do_shuffle)
         self.request_search.connect(self.search_tracks)
         self.player.positionChanged.connect(self.update_slider)
@@ -330,7 +334,7 @@ class AudioPlayer(QWidget):
     def split_image(self, image_path, tile_width, tile_height):
         image = QImage(image_path)
         if image.isNull():
-            print("Failed to load image:", image_path)
+            self.status_bar.showMessage("Failed to load image: " + image_path)
             return []
 
         img_width = image.width()
@@ -416,6 +420,21 @@ class AudioPlayer(QWidget):
         self.scan_worker.deleteLater()
         self.scan_worker = None
 
+    def shutdown_local_server(self):
+        try:
+            resp = requests.post(
+                "http://localhost:5000/shutdown",
+                headers={"X-API-Key": SHUTDOWN_SECRET},
+                json={}
+            )
+            self.status_bar.showMessage(resp.text)
+            self.status_bar.repaint()
+        except Exception as e:
+            QMessageBox.warning(self, "Error",
+                                "Failed to shutdown Local Server."
+                                "\nMake Sure the Server is Up")
+
+
     def shutdown_server(self):
         try:
             resp = requests.post(
@@ -426,8 +445,9 @@ class AudioPlayer(QWidget):
             self.status_bar.showMessage(resp.text)
             self.status_bar.repaint()
         except Exception as e:
-            print(self, "Error",
-                                f"Failed to shutdown Remote Server @ {API_URL}:\nMake Sure the Server is Up")
+            QMessageBox.warning(self, "Error",
+                                f"Failed to shutdown Remote Server @ "
+                                f"{API_URL}:\nMake Sure the Server is Up")
 
 
     def save_current_playlist(self):
@@ -436,7 +456,8 @@ class AudioPlayer(QWidget):
                                     "No current queue to save.")
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Current Playlist", "", "Playlist Files (*.m3u8);;All Files (*)"
+            self, "Save Current Playlist", "",
+            "Playlist Files (*.m3u8);;All Files (*)"
         )
         if path:
             try:
@@ -447,7 +468,7 @@ class AudioPlayer(QWidget):
                 self.status_bar.showMessage(f"Saved: {path}")
             except Exception as e:
                 QMessageBox.warning(self, "Error",
-                                    f"Could not save file:\n{e}")
+                                    f"Could not save file:\n{str(e)}")
 
 
     def show_about_dialog(self):
@@ -464,7 +485,7 @@ class AudioPlayer(QWidget):
         q = self.search.text().strip()
         if q:
             self.status_bar.showMessage(
-                f'Searching for {q}. Please Wait...')
+                f'Searching for {col} {q}. Please Wait...')
             progress = QProgressBar()
             progress.setValue(50)
             self.status_bar.addWidget(progress)
@@ -475,15 +496,25 @@ class AudioPlayer(QWidget):
         q = query.lower()
         params = {"column":column, "query":q}
         url = f"{API_URL}/search_songs"
-        r = requests.get(url, params=params, timeout=5)
-        if r.status_code == 200:
-            data = r.json()
-            if data:
-                files = []
-                for track in data:
-                    files.append(track["path"])
-                self.clear_playlist()
-                self.add_files(files)
+        try:
+            r = requests.get(url, params=params, timeout=5)
+            if r.status_code == 200:
+                data = r.json()
+                if data:
+                    files = []
+                    for track in data:
+                        files.append(track["path"])
+                    self.clear_playlist()
+                    self.add_files(files)
+                    return
+                else:
+                    QMessageBox.information(self, 'Sorry 😞', f'{column} {q} was not found on Server')
+                    self.status_bar.showMessage(f'{column} {q} was not found on Server')
+            else:
+                self.status_bar.showMessage(r.reason)
+        except Exception as e:
+            self.status_bar.showMessage("Server Search error: Make sure the Server is Up and Connected")
+
 
 
     def do_shuffle(self):
@@ -694,7 +725,8 @@ class AudioPlayer(QWidget):
             self.update_play_button()
 
     def skip_leading_silence(self):
-        """A very basic silence-skip: jump forward if amplitude is zero (needs real audio analysis for best results)."""
+        """A very basic silence-skip: jump forward if amplitude is zero
+        (needs real audio analysis for best results)."""
         # QMediaPlayer does NOT support sample-level analysis.
         # A real solution would use something like pydub or ffmpeg to find silence start/end.
         # Here, we just jump ahead 1s, up to 4 times, if still at start.
@@ -723,7 +755,8 @@ class AudioPlayer(QWidget):
     def show_playlist_menu(self, pos=None):
         menu = QFileDialog(self)
         menu.setFileMode(QFileDialog.ExistingFiles)
-        menu.setNameFilters(["Playlists (*.m3u *.m3u8 *.cue)", "Audio files (*.mp3 *.flac *.ogg *.wav *.m4a)", "All files (*)"])
+        menu.setNameFilters(["Playlists (*.m3u *.m3u8 *.cue)",
+                             "Audio files (*.mp3 *.flac *.ogg *.wav *.m4a)", "All files (*)"])
         if menu.exec():
             self.add_files(menu.selectedFiles())
 
@@ -737,16 +770,21 @@ class AudioPlayer(QWidget):
                     for i in pl:
                         item = QListWidgetItem(os.path.basename(i))
                         self.playlist_widget.addItem(item)
+                    self.playlist_label.setText(f'Playlist: {os.path.basename(f)}')
                 elif ext == '.cue':
                     pl = self.load_cue_playlist(f)
                     self.playlist += pl
                     for i in pl:
                         item = QListWidgetItem(os.path.basename(i))
                         self.playlist_widget.addItem(item)
+                    self.playlist_label.setText(
+                        f'Playlist: {os.path.basename(f)}')
                 else:
-                    self.playlist.append(f)
-                    item = QListWidgetItem(os.path.basename(f))
-                    self.playlist_widget.addItem(item)
+                    audio = File(f)
+                    if audio:
+                            self.playlist.append(f)
+                            item = QListWidgetItem(os.path.basename(f))
+                            self.playlist_widget.addItem(item)
             elif f.startswith("http"):
                 # Support adding remote URLs directly
                 self.playlist.append(f)
@@ -767,10 +805,15 @@ class AudioPlayer(QWidget):
         with open(path, encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith('#'):
+                line = os.path.abspath(os.path.join(os.path.dirname(path), line))
+                if os.path.isfile(line):
+                    audio = File(line)
+                else:
+                    audio = None
+                if not line or not audio:
                     continue
                 tracks.append(
-                    os.path.abspath(os.path.join(os.path.dirname(path), line)))
+                    os.path.abspath(line))
         return tracks
 
     def load_cue_playlist(self, path):
@@ -787,6 +830,7 @@ class AudioPlayer(QWidget):
 
     def play_selected_track(self, item):
         idx = self.playlist_widget.row(item)
+        self.update_metadata(idx)
         self.load_track(idx)
 
     def show_playlist_context_menu(self, pos):
@@ -826,6 +870,7 @@ class AudioPlayer(QWidget):
     def clear_playlist(self):
         self.playlist_widget.clear()
         self.playlist.clear()
+        self.playlist_label.setText('Playlist')
         self.player.stop()
         self.current_index = -1
         self.lyrics_display.clear()
@@ -851,7 +896,7 @@ class AudioPlayer(QWidget):
                     )
                     return
                 except Exception as e:
-                    print("Base64 album art decode error:", e)
+                    self.status_bar.showMessage("Base64 album art decode error:" + str(e))
             return
         # fallback below if fetch fails
         img_data = None
@@ -874,7 +919,7 @@ class AudioPlayer(QWidget):
                 )
                 return
         except Exception as e:
-            print("Artwork extraction error:", e)
+            self.status_bar.showMessage("Artwork extraction error:" + str(e))
         # Fallback image
         self.album_art.setPixmap(
             QPixmap("static/images/default_album_art.png") if os.path.exists(
@@ -971,7 +1016,7 @@ class AudioPlayer(QWidget):
     def handle_error(self, error, error_string):
         if error != QMediaPlayer.NoError:
             self.next_track()
-            print("Playback Error:", error_string)
+            self.status_bar.showMessage("Playback Error: " + error_string)
             self.update_play_button()
 
     def on_metadata_changed(self):
@@ -1001,7 +1046,7 @@ class AudioPlayer(QWidget):
                     artist = album = year = codec = "--"
                 #    self.set_album_art(path)
             except Exception as e:
-                print("Remote metadata fetch error:", e)
+                self.status_bar.showMessage("Remote metadata fetch error:" + str(e))
                 title = os.path.basename(path)
                 artist = album = year = codec = "--"
                 self.set_album_art(path)
@@ -1015,13 +1060,27 @@ class AudioPlayer(QWidget):
             meta = self.player.metaData()
             title = meta.stringValue(QMediaMetaData.Title) or os.path.basename(path)
             artist = meta.stringValue(QMediaMetaData.AlbumArtist) or meta.stringValue(QMediaMetaData.Author) or "--"
+            if artist == "--":
+                try:
+                    audio_file = File(path)
+                    if 'TPE1' in audio_file:  # Artist
+                        artist = str(audio_file['TPE1'])
+                    elif 'ARTIST' in audio_file:
+                        artist = str(audio_file['ARTIST'][0])
+                    elif '©ART' in audio_file:
+                        artist = str(audio_file['©ART'][0])
+                except Exception as e:
+                    self.status_bar.showMessage(
+                        f"Error reading artist metadata from {path}: {str(e)}")
             album = meta.stringValue(QMediaMetaData.AlbumTitle) or "--"
             year = self.extract_year(meta) or "--"
             self.title_label.setText('Title: ' + title)
             self.artist_label.setText('Artist: ' + artist)
             self.album_label.setText('Album: '+ album)
             self.year_label.setText('Year: ' + year)
-            self.codec_label.setText(self.extract_audio_info().replace('audio/', ''))
+            codec = self.extract_audio_info()
+            if codec:
+                self.codec_label.setText(codec.replace('audio/', ''))
             self.set_album_art(path)
 
     @staticmethod
@@ -1066,11 +1125,11 @@ class AudioPlayer(QWidget):
                     codec = self.data.get('codec')
                     return codec
             except Exception as e:
-                print("Remote metadata fetch error:", e)
+                self.status_bar.showMessage("Remote metadata fetch error: " + str(e))
         else:
             audio = File(self.playlist[self.current_index])
             if not audio:
-                print("Unsupported or corrupted file.")
+                self.status_bar.showMessage(f"{audio} is not an audio file, or it is unsupported or corrupted.")
                 return None
 
             # Codec
@@ -1121,6 +1180,7 @@ class AudioPlayer(QWidget):
         self.scan_worker.start()
 
     def get_playlists(self):
+        self.playlist_label.setText('Loading Playlists from Server')
         self.status_bar.showMessage(
             'Loading Playlists from Server. Please Wait, it might take some time...')
         self.status_bar.repaint()
@@ -1135,6 +1195,7 @@ class AudioPlayer(QWidget):
             self.playlists = r.json()
             for item in self.playlists:
                 self.playlist_widget.addItem(item['name'])
+            self.playlist_label.setText('Playlists from Server: ')
             self.status_bar.clearMessage()
         except Exception as e:
             self.status_bar.clearMessage()
@@ -1156,6 +1217,7 @@ class AudioPlayer(QWidget):
                 self.status_bar.repaint()
                 try:
                     playlist_id = self.playlists[idx]['id']
+                    playlist_name = self.playlists[idx]['name']
                     r = requests.get(f"{API_URL}/load_playlist/{playlist_id}")
                     data = r.json()
                     if data:
@@ -1163,10 +1225,12 @@ class AudioPlayer(QWidget):
                             files.append(track)
                         self.clear_playlist()
                         self.add_files(files)
+                        self.playlist_label.setText(f"Playlist: {playlist_name}")
 
                 except Exception as e:
                     QMessageBox.critical(self, "Error", str(e))
-                self.status_bar.clearMessage()
+                self.status_bar.showMessage(
+                    f'Playlist <{playlist_name}> loaded. Enjoy!')
 
     def local_web_ui(self):
         if os.environ.get(f'WERKZEUG_RUN_MAIN') is None:
@@ -1186,7 +1250,7 @@ class AudioPlayer(QWidget):
          #   data = r.text
          #   self.status_bar.showMessage(data)
         except Exception as e:
-            print("Error", str(e))
+            self.status_bar.showMessage("Error: " + str(e))
 
 
 
@@ -1245,7 +1309,7 @@ class SynchronizedLyrics:
                 else:
                     self.raw_lyrics = "--"
             except Exception as e:
-                print("Remote lyrics fetch error:", e)
+                self.status_bar.showMessage("Remote lyrics fetch error:" + str(e))
         else:
             if audio_path:
                 lrc_path = os.path.splitext(audio_path)[0] + ".lrc"
