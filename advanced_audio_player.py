@@ -812,8 +812,7 @@ class AudioPlayer(QWidget):
                     audio = None
                 if not line or not audio:
                     continue
-                tracks.append(
-                    os.path.abspath(line))
+                tracks.append(os.path.abspath(line))
         return tracks
 
     def load_cue_playlist(self, path):
@@ -896,7 +895,17 @@ class AudioPlayer(QWidget):
                     )
                     return
                 except Exception as e:
+                    self.album_art.setPixmap(
+                        QPixmap(
+                            "static/images/default_album_art.png") if os.path.exists(
+                            "static/images/default_album_art.png") else QPixmap())
                     self.status_bar.showMessage("Base64 album art decode error:" + str(e))
+            else:
+                # Fallback image
+                self.album_art.setPixmap(
+                    QPixmap(
+                        "static/images/default_album_art.png") if os.path.exists(
+                        "static/images/default_album_art.png") else QPixmap())
             return
         # fallback below if fetch fails
         img_data = None
@@ -1059,19 +1068,21 @@ class AudioPlayer(QWidget):
             # local fallback
             meta = self.player.metaData()
             title = meta.stringValue(QMediaMetaData.Title) or os.path.basename(path)
-            artist = meta.stringValue(QMediaMetaData.AlbumArtist) or meta.stringValue(QMediaMetaData.Author) or "--"
-            if artist == "--":
-                try:
-                    audio_file = File(path)
-                    if 'TPE1' in audio_file:  # Artist
-                        artist = str(audio_file['TPE1'])
-                    elif 'ARTIST' in audio_file:
-                        artist = str(audio_file['ARTIST'][0])
-                    elif '©ART' in audio_file:
-                        artist = str(audio_file['©ART'][0])
-                except Exception as e:
-                    self.status_bar.showMessage(
-                        f"Error reading artist metadata from {path}: {str(e)}")
+            album_artist = meta.stringValue(QMediaMetaData.AlbumArtist) or meta.stringValue(QMediaMetaData.Author) or "--"
+            try:
+                audio_file = File(path)
+                if 'TPE1' in audio_file:  # Artist
+                    artist = str(audio_file['TPE1'])
+                elif 'ARTIST' in audio_file:
+                    artist = str(audio_file['ARTIST'][0])
+                elif '©ART' in audio_file:
+                    artist = str(audio_file['©ART'][0])
+                else:
+                    artist = "--"
+            except Exception as e:
+                artist = "--"
+                self.status_bar.showMessage(
+                    f"Error reading artist metadata from {path}: {str(e)}")
             album = meta.stringValue(QMediaMetaData.AlbumTitle) or "--"
             year = self.extract_year(meta) or "--"
             self.title_label.setText('Title: ' + title)

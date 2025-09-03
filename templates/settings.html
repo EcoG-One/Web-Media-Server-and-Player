@@ -17,13 +17,12 @@
     
     <form action="/save_settings" method="post">
         <div class="form-group">
-            <label for="server_port">Server Port:</label>
-            <input type="number" id="server_port" name="server_port" value="{{ settings.server_port }}">
-        </div>
-        
-        <div class="form-group">
             <label for="crossfade_time">Crossfade Time (seconds):</label>
             <input type="number" id="crossfade_time" name="crossfade_time" value="{{ settings.crossfade_time }}">
+        </div>
+        <div class="form-group">
+            <label for="fade_in">Next Song Fade in:</label>
+            <input type="checkbox" id="fade_in" name="fade_in" value=1>
         </div>
         
         <button type="submit" class="button primary">Save Settings</button>
