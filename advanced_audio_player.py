@@ -2,7 +2,7 @@ import sys
 import os
 from pickle import GLOBAL
 
-from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread
+from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot
 from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence, QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -35,8 +35,7 @@ class AudioPlayer(QWidget):
     request_search = Signal(str, str)
     def __init__(self):
         super().__init__()
-        self.scan_worker = None
-        self.playlists_worker = None
+        self.worker_data = None
         self.setWindowTitle("Ultimate Media Player. Current Server: Local")
         self.resize(1200, 800)
         self.playlist = []
@@ -422,9 +421,9 @@ class AudioPlayer(QWidget):
         self.status_bar.repaint()
 
         # Create and configure worker thread
-        self.scan_worker = ScanWorker(folder_path, API_URL)
-        self.scan_worker.scan_completed.connect(self.on_scan_completed)
-        self.scan_worker.scan_error.connect(self.on_scan_error)
+        self.scan_worker = Worker(folder_path, API_URL)
+        self.scan_worker.work_completed.connect(self.on_scan_completed)
+        self.scan_worker.work_error.connect(self.on_scan_error)
         self.scan_worker.finished.connect(self.cleanup_scan)
 
         # Start the async operation
@@ -450,9 +449,8 @@ class AudioPlayer(QWidget):
         self.status_bar.clearMessage()
 
         # Clean up worker reference
-        if self.scan_worker:
-            self.scan_worker.deleteLater()
-            self.scan_worker = None
+        self.scan_worker.deleteLater()
+        self.scan_worker = None
 
     def shutdown_local_server(self):
         try:
@@ -1231,9 +1229,9 @@ class AudioPlayer(QWidget):
         self.status_bar.repaint()
 
         # Create and configure worker thread
-        self.scan_worker = ScanWorker(folder_path, "http://localhost:5000")
-        self.scan_worker.scan_completed.connect(self.on_scan_completed)
-        self.scan_worker.scan_error.connect(self.on_scan_error)
+        self.scan_worker = Worker(folder_path, "http://localhost:5000")
+        self.scan_worker.work_completed.connect(self.on_scan_completed)
+        self.scan_worker.work_error.connect(self.on_scan_error)
         self.scan_worker.finished.connect(self.cleanup_scan)
 
         # Start the async operation
@@ -1252,25 +1250,23 @@ class AudioPlayer(QWidget):
         self.playlist_widget.clear()
         self.playlist.clear()
 
-        self.playlists_worker = ScanWorker(None, API_URL)
-        self.playlists_worker.scan_completed.connect(self.receive_playlists)
-        self.playlists_worker.finished.connect(self.cleanup_scan)
+        self.playlists_worker = Worker(None, API_URL)
+        self.playlists_worker.work_completed.connect(self.receive_playlists)
+        self.playlists_worker.finished.connect(self.cleanup_playlists)
 
         # Start the async operation
         self.playlists_worker.start()
 
-
-
-    def receive_playlists(self, data):
-        """Handle successful scan completion"""
+    @Slot(dict)
+    def receive_playlists(self, data: dict):
+        """Handle successful playlist retrieval completion"""
         if 'error' in data:
             QMessageBox.warning(self, "Scan Error", data['error'])
         self.status_bar.repaint()
 
         try:
          #   r = requests.get(f"{API_URL}/get_playlists")
-            r = received_playlists
-            self.playlists = r
+            self.playlists = data['retrieved_playlists']
             for item in self.playlists:
                 self.playlist_widget.addItem(item['name'])
             self.playlist_label.setText('Playlists from Server: ')
@@ -1279,6 +1275,17 @@ class AudioPlayer(QWidget):
             self.status_bar.clearMessage()
             QMessageBox.critical(self, "Error",
                                  "Server Search error: Make sure the Server is Up and Connected")
+
+
+    def cleanup_playlists(self):
+        """Clean up after scan completion"""
+        # Remove progress bar and clear status
+     #   self.status_bar.removeWidget(self.progress)
+        self.status_bar.clearMessage()
+
+        # Clean up worker reference
+        self.playlists_worker.deleteLater()
+        self.playlists_worker = None
 
 
     def play_selected_playlist(self):
@@ -1333,17 +1340,18 @@ class AudioPlayer(QWidget):
 
 
 
-class ScanWorker(QThread):
+class Worker(QThread):
     """Worker thread for handling the asynchronous scan operation"""
 
     # Define signals for communicating with the main thread
-    scan_completed = Signal(dict)  # Emits scan result data
-    scan_error = Signal(str)  # Emits error message
+    work_completed = Signal(dict)  # Emits scan result data
+    work_error = Signal(str)  # Emits error message
 
     def __init__(self, folder_path, api_url):
         super().__init__()
         self.folder_path = folder_path
         self.api_url = api_url
+        self.worker_data = None
 
     def run(self):
         """Run the async scan in a separate thread"""
@@ -1359,11 +1367,11 @@ class ScanWorker(QThread):
                 result = loop.run_until_complete(self.scan_library_async())
 
             # Emit success signal
-            self.scan_completed.emit(result)
+            self.work_completed.emit(result)
 
         except Exception as e:
             # Emit error signal
-            self.scan_error.emit(str(e))
+            self.work_error.emit(str(e))
 
         finally:
             loop.close()
@@ -1384,9 +1392,9 @@ class ScanWorker(QThread):
             async with session.get(
                     f"{self.api_url}/get_playlists"
             ) as response:
-                global received_playlists
-                received_playlists = await response.json()
-                return received_playlists
+                retrieved_playlists =await response.json()
+                result = {'retrieved_playlists': retrieved_playlists}
+                return result
 
 class SynchronizedLyrics:
     def __init__(self, audio_path=None):
