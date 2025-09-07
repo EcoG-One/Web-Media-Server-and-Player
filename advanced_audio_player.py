@@ -1,9 +1,7 @@
 import sys
 import os
-from pickle import GLOBAL
-
 from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot
-from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence, QIcon
+from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
@@ -22,7 +20,6 @@ import requests
 import base64
 import webbrowser
 from dotenv import load_dotenv
-from sympy.printing.dot import slotClasses
 
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
@@ -35,7 +32,7 @@ class AudioPlayer(QWidget):
     request_search = Signal(str, str)
     def __init__(self):
         super().__init__()
-        self.worker_data = None
+      #  self.worker_data = None
         self.setWindowTitle("Ultimate Media Player. Current Server: Local")
         self.resize(1200, 800)
         self.playlist = []
@@ -47,6 +44,7 @@ class AudioPlayer(QWidget):
         self.lyrics_timer.timeout.connect(self.update_lyrics_display)
         self.remote_base = None
         self.data = None
+        self.meta_data =None
 
 
         # Mixing/transition config
@@ -173,6 +171,8 @@ class AudioPlayer(QWidget):
         # Playlist browser with context menu support
         shuffle_box = QHBoxLayout()
         self.playlist_widget = QListWidget()
+        self.playlist_widget.setStyleSheet(
+            "font-size: 12px; background-color: lightyellow; opacity: 0.6; border-color: #D4D378; border-width: 2px; border-style: inset;")
         self.playlist_label = QLabel("Playlist")
         self.btn_shuffle = QPushButton("Shuffle")
         self.btn_shuffle.setFixedSize(QSize(60, 26))
@@ -241,7 +241,9 @@ class AudioPlayer(QWidget):
         self.next_button.clicked.connect(self.next_track)
 
         # Lyrics
-        self.lyrics_display = LyricsDisplay(); self.lyrics_display.setReadOnly(True)
+        self.lyrics_display = LyricsDisplay()
+        self.lyrics_display.setReadOnly(True)
+      #  self.lyrics_display.setStyleSheet("font-weight: bold; background: #E0F0FF; border-width: 4px; border-color: #9FAAB5; border-style: intset;")
 
         # Mixing Controls UI
         self.crossfade_modes = ["Fade", "Smooth", "Full", "Scratch", "Cue"]
@@ -270,6 +272,7 @@ class AudioPlayer(QWidget):
         mix_form.addRow("Transition:", self.transition_spin)
         mix_form.addRow(self.silence_check)
         mix_group = QGroupBox("Mixing Options")
+        mix_group.setFixedSize(QSize(200, 120))
         mix_group.setLayout(mix_form)
 
         # Layout
@@ -366,6 +369,47 @@ class AudioPlayer(QWidget):
                 sub_images.append(sub_img)
         return sub_images
 
+
+
+    @Slot(dict)
+    def on_server_reply(self, data: dict):
+        """Handle successful playlist retrieval completion"""
+        if 'error' in data:
+            QMessageBox.warning(self, "Scan Error", data['error'])
+        self.status_bar.repaint()
+
+     #   status_code = data['status']
+        if data['status'] == 200:
+            global API_URL
+            API_URL = data['API_URL']
+            self.remote_base = API_URL
+            self.setWindowTitle(
+                f"Ultimate Media Player. Current Server: {API_URL}")
+            self.status_bar.showMessage(
+                f'Remote Server is now: {API_URL}', 8000)
+            QMessageBox.information(self, 'Success!',
+                                    f'Remote Server is now: {API_URL}')
+        else:
+            QMessageBox.warning(self, 'Error', data['status'])
+
+
+
+    def on_server_error(self, error_message):
+        """Handle scan error"""
+        QMessageBox.critical(self, "Error", error_message)
+        self.status_bar.repaint()
+
+
+    def cleanup_server(self):
+        """Clean up after scan completion"""
+        # Remove progress bar and clear status
+        #   self.status_bar.removeWidget(self.progress)
+        self.status_bar.clearMessage()
+
+        # Clean up worker reference
+        self.server_worker.deleteLater()
+        self.server_worker = None
+
     def enter_server(self):
         server, ok_pressed = QInputDialog.getText(self, "Input",
                                                 "Enter Remote Server name or IP:",
@@ -377,20 +421,20 @@ class AudioPlayer(QWidget):
             self.progress.setRange(0, 0)  # Indeterminate progress
             self.status_bar.addWidget(self.progress)
             self.status_bar.repaint()
+
+            self.server_worker = Worker('server',  f'http://{server}:5000')
+            self.server_worker.work_completed.connect(
+                self.on_server_reply)
+            self.server_worker.work_error.connect(self.on_server_error)
+            self.server_worker.finished.connect(self.cleanup_server)
+
             try:
-                r = requests.get(f'http://{server}:5000', timeout=5)
-                if r.status_code == 200:
-                    global API_URL
-                    API_URL = f'http://{server}:5000'
-                    self.remote_base = API_URL
-                    self.setWindowTitle(f"Ultimate Media Player. Current Server: {server}")
-                    self.status_bar.showMessage(f'Remote Server is now: {API_URL}', 8000)
-                    QMessageBox.information(self, 'Success!', f'Remote Server is now: {API_URL}')
-                else:
-                    QMessageBox.warning(self,'Error', r.text)
+                # Start the async operation
+                self.server_worker.start()
             except Exception as e:
                 self.status_bar.clearMessage()
-                QMessageBox.warning(self,'Error', f'Server {server} not responding.\nMake sure the Server is Up and Connected')
+                QMessageBox.warning(self, 'Error',
+                                  f'Server {server} not responding.\nMake sure the Server is Up and Connected')
 
 
 
@@ -726,16 +770,10 @@ class AudioPlayer(QWidget):
                 media_url = self.get_media_source(path)
             self.player.setSource(media_url)
             self.slider.setValue(0)
-          #  self.title_label.setText(os.path.basename(path))
-          #  self.artist_label.setText("-- Artist --")
-          #  self.album_label.setText("-- Album --")
-          #  self.year_label.setText("-- Date --")
-          #  self.codec_label.setText("-- Audio --")
-          #  if self.is_remote_file(path):
             self.update_metadata(idx)
+            #    self.load_lyrics(path)
             if self.is_local_file(path):
                 self.set_album_art(path)
-            self.load_lyrics(path)
             if auto_play:
                 self.player.play()
             self.lyrics_timer.start()
@@ -919,10 +957,10 @@ class AudioPlayer(QWidget):
         Sets album art using metadata JSON if provided (remote), otherwise falls back to local extraction.
         """
         if self.is_remote_file(path):
-            if self.data and 'picture' in self.data and self.data[
+            if self.meta_data and 'picture' in self.meta_data and self.meta_data[
                 'picture']:
                 try:
-                    img_bytes = base64.b64decode(self.data['picture'])
+                    img_bytes = base64.b64decode(self.meta_data['picture'])
                     img = QImage.fromData(img_bytes)
                     pix = QPixmap.fromImage(img)
                     self.album_art.setPixmap(
@@ -1076,46 +1114,78 @@ class AudioPlayer(QWidget):
         cursor.movePosition(QTextCursor.Start)
         self.text.setTextCursor(cursor)
 
+    @Slot(dict)
+    def on_receive_metadata(self, data):
+        path = self.playlist[self.current_index]
+        if not data:
+            self.status_bar.showMessage(
+                "Remote metadata fetch error:")
+            title = os.path.basename(path)
+            artist = album = year = codec = "--"
+        else:
+            if 'error' in data:
+                QMessageBox.warning(self, "Error retrieving metadata",
+                                    data['error'])
+                title = os.path.basename(path)
+                artist = album = year = codec = "--"
+            else:
+                self.meta_data = data['retrieved_metadata']
+                title = self.meta_data.get('title', os.path.basename(path))
+                artist = self.meta_data.get('artist', "--")
+                album = self.meta_data.get('album', "--")
+                year = self.meta_data.get('year', "--")
+                codec = self.meta_data.get('codec', "--").replace('audio/', '')
+                self.set_album_art(path)
+                for key in self.meta_data:
+                    if key != 'picture':
+                        self.text.append(f"{key}: {self.meta_data[key]}")
+                self.move_to_top()
+
+        self.title_label.setText('Title: ' + title)
+        self.artist_label.setText('Artist: ' + artist)
+        self.album_label.setText('Album: ' + album)
+        self.year_label.setText('Year: ' + year)
+        self.codec_label.setText(codec)
+        self.load_lyrics(path)
+        self.set_album_art(path)
+
+    def on_metadata_error(self, error_message):
+        """Handle metadata error"""
+        QMessageBox.critical(self, "Error", error_message)
+        self.status_bar.repaint()
+
+    def cleanup_metadata(self):
+        """Clean up after scan completion"""
+        # Remove progress bar and clear status
+     #   self.status_bar.removeWidget(self.progress)
+        self.status_bar.clearMessage()
+
+        # Clean up worker reference
+        self.meta_worker.deleteLater()
+        self.meta_worker = None
+
     def update_metadata(self, index):
         self.text.clear()
         path = self.playlist[index]
         if self.is_remote_file(path):
-            try:
-                filename = path.split('5000/')[1]
-                url = f"{self.remote_base}/get_song_metadata/{filename}"
-                r = requests.get(url, timeout=5)
-                if r.status_code == 200:
-                    self.data = r.json()
-                    title = self.data.get('title', os.path.basename(path))
-                    artist = self.data.get('artist', "--")
-                    album = self.data.get('album', "--")
-                    year = self.data.get('year', "--")
-                    codec = self.data.get('codec', "--").replace('audio/', '')
-                    self.set_album_art(path)
-                    for key in self.data:
-                        self.text.append(f"{key}: {self.data[key]}")
-                    self.move_to_top()
-                else:
-                    title = os.path.basename(path)
-                    artist = album = year = codec = "--"
-                #    self.set_album_art(path)
-            except Exception as e:
-                self.status_bar.showMessage("Remote metadata fetch error:" + str(e))
-                title = os.path.basename(path)
-                artist = album = year = codec = "--"
-                self.set_album_art(path)
-            self.title_label.setText('Title: ' + title)
-            self.artist_label.setText('Artist: ' + artist)
-            self.album_label.setText('Album: '+ album)
-            self.year_label.setText('Year: ' + year)
-            self.codec_label.setText(codec)
+            filename = path.split('5000/')[1]
+            url = f"{self.remote_base}/get_song_metadata/{filename}"
+
+            self.meta_worker = Worker('meta', url)
+            self.meta_worker.work_completed.connect(
+                self.on_receive_metadata)
+            self.meta_worker.work_error.connect(self.on_metadata_error)
+            self.meta_worker.finished.connect(self.cleanup_metadata)
+
+            # Start the async operation
+            self.meta_worker.start()
         else:
             # local fallback
             self.text.append(mutagen.File(path).pprint())
             self.move_to_top()
             meta = self.player.metaData()
             title = meta.stringValue(QMediaMetaData.Title) or os.path.basename(path)
-            album_artist = meta.stringValue(QMediaMetaData.AlbumArtist) or meta.stringValue(QMediaMetaData.Author) or "--"
+       #     album_artist = meta.stringValue(QMediaMetaData.AlbumArtist) or meta.stringValue(QMediaMetaData.Author) or "--"
             try:
                 audio_file = File(path)
                 if 'TPE1' in audio_file:  # Artist
@@ -1139,6 +1209,7 @@ class AudioPlayer(QWidget):
             codec = self.extract_audio_info()
             if codec:
                 self.codec_label.setText(codec.replace('audio/', ''))
+            self.load_lyrics(path)
             self.set_album_art(path)
 
     @staticmethod
@@ -1252,6 +1323,7 @@ class AudioPlayer(QWidget):
 
         self.playlists_worker = Worker(None, API_URL)
         self.playlists_worker.work_completed.connect(self.receive_playlists)
+        self.playlists_worker.work_error.connect(self.on_playlists_error)
         self.playlists_worker.finished.connect(self.cleanup_playlists)
 
         # Start the async operation
@@ -1276,6 +1348,11 @@ class AudioPlayer(QWidget):
             QMessageBox.critical(self, "Error",
                                  "Server Search error: Make sure the Server is Up and Connected")
 
+    def on_playlists_error(self, error_message):
+        """Handle scan error"""
+        QMessageBox.critical(self, "Error", error_message)
+        self.status_bar.repaint()
+
 
     def cleanup_playlists(self):
         """Clean up after scan completion"""
@@ -1288,10 +1365,40 @@ class AudioPlayer(QWidget):
         self.playlists_worker = None
 
 
+    def on_pl_completed(self, pl_data):
+        data = pl_data['pl']
+        if data:
+            files = []
+            idx = self.playlist_widget.currentRow()
+            playlist_name = self.playlists[idx]['name']
+            for track in data["playlist"]:
+                files.append(track)
+            self.clear_playlist()
+            self.add_files(files)
+            self.playlist_label.setText(f"Playlist: {playlist_name}")
+            self.status_bar.showMessage(
+                f'Playlist {playlist_name} loaded. Enjoy!')
+
+    def on_pl_error(self, error_message):
+        """Handle scan error"""
+        QMessageBox.critical(self, "Error", error_message)
+        self.status_bar.repaint()
+
+
+    def cleanup_pl(self):
+        """Clean up after scan completion"""
+        # Remove progress bar and clear status
+     #   self.status_bar.removeWidget(self.progress)
+        self.status_bar.clearMessage()
+
+        # Clean up worker reference
+        self.pl_worker.deleteLater()
+        self.pl_worker = None
+
     def play_selected_playlist(self):
-        files = []
         idx = self.playlist_widget.currentRow()
         item = self.playlist_widget.currentItem()
+        playlist_id = self.playlists[idx]['id']
         if item is not None:
             item_ext = item.text().split('.')[-1]
             if item_ext == 'm3u' or item_ext == 'm3u8':
@@ -1301,22 +1408,17 @@ class AudioPlayer(QWidget):
                 progress.setValue(50)
                 self.status_bar.addWidget(progress)
                 self.status_bar.repaint()
-                try:
-                    playlist_id = self.playlists[idx]['id']
-                    playlist_name = self.playlists[idx]['name']
-                    r = requests.get(f"{API_URL}/load_playlist/{playlist_id}")
-                    data = r.json()
-                    if data:
-                        for track in data["playlist"]:
-                            files.append(track)
-                        self.clear_playlist()
-                        self.add_files(files)
-                        self.playlist_label.setText(f"Playlist: {playlist_name}")
 
+                # Create and configure worker thread
+                self.pl_worker = Worker('pl', f"{API_URL}/load_playlist/{playlist_id}")
+                self.pl_worker.work_completed.connect(self.on_pl_completed)
+                self.pl_worker.work_error.connect(self.on_pl_error)
+                self.pl_worker.finished.connect(self.cleanup_pl)
+
+                try:
+                    self.pl_worker.start()
                 except Exception as e:
                     QMessageBox.critical(self, "Error", str(e))
-                self.status_bar.showMessage(
-                    f'Playlist {playlist_name} loaded. Enjoy!')
 
     def local_web_ui(self):
         if os.environ.get(f'WERKZEUG_RUN_MAIN') is None:
@@ -1351,7 +1453,6 @@ class Worker(QThread):
         super().__init__()
         self.folder_path = folder_path
         self.api_url = api_url
-        self.worker_data = None
 
     def run(self):
         """Run the async scan in a separate thread"""
@@ -1363,6 +1464,12 @@ class Worker(QThread):
             # Run the async scan
             if self.folder_path == None:
                 result = loop.run_until_complete(self.get_playlists_async())
+            elif self.folder_path == 'meta':
+                result = loop.run_until_complete(self.get_metadata_async())
+            elif self.folder_path == 'pl':
+                result = loop.run_until_complete(self.get_pl_async())
+            elif self.folder_path == 'server':
+                result = loop.run_until_complete(self.check_server_async())
             else:
                 result = loop.run_until_complete(self.scan_library_async())
 
@@ -1396,6 +1503,30 @@ class Worker(QThread):
                 result = {'retrieved_playlists': retrieved_playlists}
                 return result
 
+    async def get_pl_async(self):
+        """Async function to get the playlists from server"""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(self.api_url) as response:
+                retrieved_playlist =await response.json()
+                result = {'pl': retrieved_playlist}
+                return result
+
+    async def get_metadata_async(self):
+        """Async function to get metadata from server"""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(self.api_url) as response:
+                retrieved_metadata = await response.json()
+                result = {'retrieved_metadata': retrieved_metadata}
+                return result
+
+    async def check_server_async(self):
+        """Async function to scan the library"""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(self.api_url) as response:
+                status = response.status
+                return {'status': status, 'API_URL': self.api_url}
+
+
 class SynchronizedLyrics:
     def __init__(self, audio_path=None):
         self.times = []
@@ -1403,14 +1534,14 @@ class SynchronizedLyrics:
         self.raw_lyrics = ""
         if w.is_remote_file(audio_path):
             try:
-                if w.data and 'lyrics' in w.data and w.data[
+                if w.meta_data and 'lyrics' in w.meta_data and w.meta_data[
                     'lyrics']:
              #       data = r.json()
-                    self.raw_lyrics = w.data['lyrics']
+                    self.raw_lyrics = w.meta_data['lyrics']
                 else:
                     self.raw_lyrics = "--"
             except Exception as e:
-                self.status_bar.showMessage("Remote lyrics fetch error:" + str(e))
+                w.status_bar.showMessage("Remote lyrics fetch error:" + str(e))
         else:
             if audio_path:
                 lrc_path = os.path.splitext(audio_path)[0] + ".lrc"
@@ -1479,7 +1610,7 @@ class LyricsDisplay(QTextEdit):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setReadOnly(True)
-        self.setStyleSheet("font-size: 18px;")
+        self.setStyleSheet("font-size: 18px; background: #E0F0FF; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
         self.current_line_idx = -1
         self.lines = []
         self.is_synchronized = False
@@ -1494,7 +1625,7 @@ class LyricsDisplay(QTextEdit):
         html = ""
         for idx, line in enumerate(self.lines):
             if self.is_synchronized and idx == highlight_idx:
-                html += f"<div style='color: #3A89FF; font-weight: bold; background: #E0F0FF'>{line}</div>"
+                html += f"<div style='color: #3A89FF; font-weight: bold; background: #F5FBFF'>{line}</div>"
             else:
                 html += f"<div>{line}</div>"
         self.setHtml(html)
