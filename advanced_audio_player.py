@@ -200,7 +200,9 @@ class AudioPlayer(QWidget):
         self.title_label = QLabel("Title --")
         self.title_label.setFixedWidth(256)
         self.artist_label = QLabel("Artist --")
+        self.artist_label.setFixedWidth(256)
         self.album_label = QLabel("Album --")
+        self.album_label.setFixedWidth(256)
         self.year_label = QLabel("Year --")
         self.codec_label = QLabel("Codec --")
 
@@ -903,7 +905,7 @@ class AudioPlayer(QWidget):
 
     def play_selected_track(self, item):
         idx = self.playlist_widget.row(item)
-        self.update_metadata(idx)
+       # self.update_metadata(idx)
         self.load_track(idx)
 
     def show_playlist_context_menu(self, pos):
@@ -1137,7 +1139,7 @@ class AudioPlayer(QWidget):
                 codec = self.meta_data.get('codec', "--").replace('audio/', '')
                 self.set_album_art(path)
                 for key in self.meta_data:
-                    if key != 'picture':
+                    if key != 'picture' and key != 'lyrics':
                         self.text.append(f"{key}: {self.meta_data[key]}")
                 self.move_to_top()
 
@@ -1181,7 +1183,16 @@ class AudioPlayer(QWidget):
             self.meta_worker.start()
         else:
             # local fallback
-            self.text.append(mutagen.File(path).pprint())
+            meta_list = mutagen.File(path).pprint().split('=')
+            new_meta_list = [meta_list[0]]
+            for m in range(len(meta_list)-1):
+                if not 'LYRICS' in meta_list[m]:
+                    new_meta_list.append(meta_list[m+1])
+            new_meta_str= ': '.join([str(s) for s in new_meta_list])
+            new_meta_str = new_meta_str.replace('LYRICS:', 'DATE:')
+            final_meta = new_meta_str.split('\n: ')
+            for item in final_meta:
+                    self.text.append(item)
             self.move_to_top()
             meta = self.player.metaData()
             title = meta.stringValue(QMediaMetaData.Title) or os.path.basename(path)
