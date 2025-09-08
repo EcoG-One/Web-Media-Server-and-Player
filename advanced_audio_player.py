@@ -1143,9 +1143,7 @@ class AudioPlayer(QWidget):
                         self.text.append(f"{key}: {self.meta_data[key]}")
                 self.move_to_top()
 
-        self.title_label.setText('Title: ' + title)
-        self.artist_label.setText('Artist: ' + artist)
-        self.album_label.setText('Album: ' + album)
+        self.set_metadat_label(title, artist, album)
         self.year_label.setText('Year: ' + year)
         self.codec_label.setText(codec)
         self.load_lyrics(path)
@@ -1213,15 +1211,47 @@ class AudioPlayer(QWidget):
                     f"Error reading artist metadata from {path}: {str(e)}")
             album = meta.stringValue(QMediaMetaData.AlbumTitle) or "--"
             year = self.extract_year(meta) or "--"
-            self.title_label.setText('Title: ' + title)
-            self.artist_label.setText('Artist: ' + artist)
-            self.album_label.setText('Album: '+ album)
+            self.set_metadat_label(title, artist, album)
             self.year_label.setText('Year: ' + year)
             codec = self.extract_audio_info()
             if codec:
                 self.codec_label.setText(codec.replace('audio/', ''))
             self.load_lyrics(path)
             self.set_album_art(path)
+
+
+    def set_metadat_label(self, title, artist, album):
+        '''Sets metadata labels, splitting them in multiple lines if necessary'''
+        if len(title) > 41:
+            multiline_title = title[:41] + '\n         '
+            l = (len(title) // 41)
+            for i in range(1, l):
+                multiline_title += title[i * 41:(i + 1) * 41] + '\n         '
+            self.title_label.setText(
+                'Title: {0}{1}'.format(multiline_title, title[(l * 41):]))
+        else:
+            self.title_label.setText('Title: ' + title)
+        if len(artist) > 40:
+            multiline_artist = artist[:40] + '\n          '
+            l = (len(artist) // 40)
+            for i in range(1, l):
+                multiline_artist += artist[
+                                        i * 40:(i + 1) * 40] + '\n          '
+            self.artist_label.setText(
+                'Artist: {0}{1}'.format(multiline_artist, artist[(l * 40):]))
+        else:
+            self.artist_label.setText('Artist: ' + artist)
+        if len(album) > 35:
+            multiline_album = album[:35] + '\n             '
+            l = (len(album) // 35)
+            for i in range(1, l):
+                multiline_album += album[
+                                       i * 35:(i + 1) * 35] + '\n             '
+            self.album_label.setText(
+                'Album: {0}{1}'.format(multiline_album, album[(l * 35):]))
+        else:
+            self.album_label.setText('Album: ' + album)
+
 
     @staticmethod
     def format_time(ms):
