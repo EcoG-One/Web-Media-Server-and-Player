@@ -11,6 +11,7 @@ from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 import mutagen
 from mutagen import File
 from mutagen.flac import FLAC
+import traceback
 from pathlib import Path
 from random import shuffle
 import re
@@ -19,6 +20,7 @@ import aiohttp
 import requests
 import base64
 import webbrowser
+import wikipedia
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -27,6 +29,7 @@ SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
 API_URL = "http://localhost:5000"
 APP_DIR = Path.home() / "Web-Media-Server-and-Player"
 APP_DIR.mkdir(exist_ok=True)
+wikipedia.set_lang("en")
 
 class AudioPlayer(QWidget):
     request_search = Signal(str, str)
@@ -43,12 +46,12 @@ class AudioPlayer(QWidget):
         self.lyrics_timer.setInterval(200)
         self.lyrics_timer.timeout.connect(self.update_lyrics_display)
         self.remote_base = None
-        self.data = None
+     #   self.data = None
         self.meta_data =None
 
 
         # Mixing/transition config
-        self.mix_method = "Fade"  # Default
+        self.mix_method = "Full"  # Default
         self.transition_duration = 4  # seconds
 
         # Layout
@@ -207,7 +210,9 @@ class AudioPlayer(QWidget):
         self.codec_label = QLabel("Codec --")
 
         self.text = QTextEdit(readOnly=True)
-        self.text_label = QLabel("Metadata")
+       # self.text_label = QLabel("Artist and Song Info:")
+        self.btn_info = QPushButton("Push for Artist and Song Info.")
+        self.btn_info.setFixedSize(QSize(256, 26))
 
         self.time_label = QPushButton("--:--"); self.time_label.setFlat(True)
         self.time_label.setCursor(Qt.PointingHandCursor)
@@ -288,7 +293,7 @@ class AudioPlayer(QWidget):
         meta_layout.addWidget(self.codec_label)
 
         metadata_layout = QVBoxLayout(self)
-        metadata_layout.addWidget(self.text_label)
+        metadata_layout.addWidget(self.btn_info)
         metadata_layout.addWidget(self.text)
 
 
@@ -336,6 +341,7 @@ class AudioPlayer(QWidget):
         self.btn_go.clicked.connect(self.on_go)
         self.search.returnPressed.connect(self.on_go)
         self.btn_shuffle.clicked.connect(self.do_shuffle)
+        self.btn_info.clicked.connect(self.get_info)
         self.request_search.connect(self.search_tracks)
         self.player.positionChanged.connect(self.update_slider)
         self.player.durationChanged.connect(self.update_duration)
@@ -343,7 +349,7 @@ class AudioPlayer(QWidget):
         self.player.playbackStateChanged.connect(self.update_play_button)
         self.slider.sliderPressed.connect(lambda: self.player.pause())
         self.slider.sliderReleased.connect(lambda: self.player.play())
-        self.player.metaDataChanged.connect(self.on_metadata_changed)
+     #   self.player.metaDataChanged.connect(self.on_metadata_changed)
         self.player.errorOccurred.connect(self.handle_error)
 
         # For mixing (transition to next track)
@@ -772,15 +778,15 @@ class AudioPlayer(QWidget):
                 media_url = self.get_media_source(path)
             self.player.setSource(media_url)
             self.slider.setValue(0)
-            self.update_metadata(idx)
+          #  self.update_metadata(idx)
             #    self.load_lyrics(path)
-            if self.is_local_file(path):
-                self.set_album_art(path)
+           # if self.is_local_file(path):
+            #    self.set_album_art(path)
             if auto_play:
                 self.player.play()
             self.lyrics_timer.start()
-            if self.is_local_file(path):
-                self.update_metadata(idx)
+         #   if self.is_local_file(path):
+            self.update_metadata(idx)
             self.playlist_widget.setCurrentRow(idx)
             # Optionally skip silence at start (very basic, see note below)
             if skip_silence:
@@ -1137,17 +1143,18 @@ class AudioPlayer(QWidget):
                 album = self.meta_data.get('album', "--")
                 year = self.meta_data.get('year', "--")
                 codec = self.meta_data.get('codec', "--").replace('audio/', '')
-                self.set_album_art(path)
-                for key in self.meta_data:
-                    if key != 'picture' and key != 'lyrics':
-                        self.text.append(f"{key}: {self.meta_data[key]}")
-                self.move_to_top()
+              #  self.set_album_art(path)
 
-        self.set_metadat_label(title, artist, album)
-        self.year_label.setText('Year: ' + year)
+        self.set_metadata_label()
+        self.year_label.setText('Year: ' + self.meta_data['year'])
         self.codec_label.setText(codec)
         self.load_lyrics(path)
         self.set_album_art(path)
+        if self.meta_data:
+            for key in self.meta_data:
+                if key != 'picture' and key != 'lyrics':
+                    self.text.append(f"{key}: {self.meta_data[key]}")
+        self.move_to_top()
 
     def on_metadata_error(self, error_message):
         """Handle metadata error"""
@@ -1164,11 +1171,161 @@ class AudioPlayer(QWidget):
         self.meta_worker.deleteLater()
         self.meta_worker = None
 
+    def get_audio_metadata(self, file_path):
+        """Extract metadata from audio file with comprehensive error handling"""
+        try:
+            print(f"Extracting metadata from: {file_path}")
+
+            if not os.path.exists(file_path):
+                print(f"File does not exist: {file_path}")
+                return None
+
+            audio_file = File(file_path)
+            if audio_file is None:
+                print(f"Could not read audio file: {file_path}")
+                return None
+
+            metadata = {
+                'artist'  : '',
+                'title'   : '',
+                'album'   : '',
+                'year'    : '',
+                'duration': 0,
+                'lyrics'  : '',
+                'codec'   : '',
+                'picture' : None
+            }
+
+            # Get basic metadata
+            try:
+                if 'TPE1' in audio_file:  # Artist
+                    metadata['artist'] = str(audio_file['TPE1'])
+                elif 'ARTIST' in audio_file:
+                    metadata['artist'] = str(audio_file['ARTIST'][0])
+                elif '©ART' in audio_file:
+                    metadata['artist'] = str(audio_file['©ART'][0])
+            except Exception as e:
+                print(
+                    f"Error reading artist metadata from {file_path}: {e}")
+
+            try:
+                if 'TIT2' in audio_file:  # Title
+                    metadata['title'] = str(audio_file['TIT2'])
+                elif 'TITLE' in audio_file:
+                    metadata['title'] = str(audio_file['TITLE'][0])
+                elif '©nam' in audio_file:
+                    metadata['title'] = str(audio_file['©nam'][0])
+            except Exception as e:
+                print(
+                    f"Error reading title metadata from {file_path}: {e}")
+
+            try:
+                if 'TALB' in audio_file:  # Album
+                    metadata['album'] = str(audio_file['TALB'])
+                elif 'ALBUM' in audio_file:
+                    metadata['album'] = str(audio_file['ALBUM'][0])
+                elif '©alb' in audio_file:
+                    metadata['album'] = str(audio_file['©alb'][0])
+            except Exception as e:
+                print(
+                    f"Error reading album metadata from {file_path}: {e}")
+
+            try:
+                if 'TDRC' in audio_file:  # Year
+                    metadata['year'] = str(audio_file['TDRC'])
+                elif 'DATE' in audio_file:
+                    metadata['year'] = str(audio_file['DATE'][0])
+                elif '©day' in audio_file:
+                    metadata['year'] = str(audio_file['©day'][0])
+            except Exception as e:
+                print(
+                    f"Error reading year metadata from {file_path}: {e}")
+
+            # Duration
+            try:
+                if audio_file.info:
+                    metadata['duration'] = int(audio_file.info.length)
+            except Exception as e:
+                print(f"Error reading duration from {file_path}: {e}")
+
+            # Lyrics
+            try:
+                lrc_path = os.path.splitext(file_path)[0] + ".lrc"
+                if os.path.exists(lrc_path):
+                    with open(lrc_path, encoding='utf-8') as f:
+                        metadata['lyrics'] = f.read()
+                else:
+                    # FLAC/Vorbis
+                    if audio_file.__class__.__name__ == 'FLAC':
+                        for key in audio_file:
+                            if key.lower() in ('lyrics', 'unsyncedlyrics',
+                                               'lyric'):
+                                metadata['lyrics'] = audio_file[key][0]
+                        # MP3 (ID3)
+                    elif hasattr(audio_file, 'tags') and audio_file.tags:
+                        # USLT (unsynchronized lyrics) is the standard for ID3
+                        for k in audio_file.tags.keys():
+                            if k.startswith('USLT') or k.startswith('SYLT'):
+                                metadata['lyrics'] = str(audio_file.tags[k])
+                            if k.lower() in ('lyrics', 'unsyncedlyrics',
+                                             'lyric'):
+                                metadata['lyrics'] = str(audio_file.tags[k])
+                        # MP4/AAC
+                    elif hasattr(audio_file, 'tags') and hasattr(
+                            audio_file.tags, 'get'):
+                        if audio_file.tags.get('\xa9lyr'):
+                            metadata['lyrics'] = audio_file.tags['\xa9lyr'][0]
+                    else:
+                        metadata['lyrics'] = "--"
+            except Exception as e:
+                print(f"Error reading lyrics from {file_path}: {e}")
+
+            # Codec
+            try:
+                codec = audio_file.mime[0] if hasattr(audio_file,
+                                                      'mime') and audio_file.mime else audio_file.__class__.__name__
+
+                # Sample rate and bitrate
+                sample_rate = getattr(audio_file.info, 'sample_rate', None)
+                bits = getattr(audio_file.info, 'bits_per_sample', None)
+                bitrate = getattr(audio_file.info, 'bitrate', None)
+                if codec == 'audio/mp3':
+                    metadata['codec'] = codec + ' ' + str(
+                        sample_rate / 1000) + 'kHz ' + str(
+                        round(bitrate / 1000)) + 'kbps'
+                else:
+                    metadata['codec'] = codec + ' ' + str(
+                        sample_rate / 1000) + 'kHz/' + str(
+                        round(bits)) + 'bits  ' + str(
+                        round(bitrate / 1000)) + 'kbps'
+            except Exception as e:
+                print(f"Error reading codec from {file_path}: {e}")
+
+            # Album art
+            try:
+                if 'APIC:' in audio_file:
+                    metadata['picture'] = audio_file['APIC:'].data
+                elif hasattr(audio_file, 'pictures') and audio_file.pictures:
+                    metadata['picture'] = audio_file.pictures[0].data
+                elif 'covr' in audio_file:
+                    metadata['picture'] = audio_file['covr'][0]
+            except Exception as e:
+                print(
+                    f"Error reading album art from {file_path}: {e}")
+
+            print(f"Successfully extracted metadata from: {file_path}")
+            return metadata
+
+        except Exception as e:
+            print(f"Error extracting metadata from {file_path}: {e}")
+            print(traceback.format_exc())
+            return None
+
     def update_metadata(self, index):
         self.text.clear()
-        path = self.playlist[index]
-        if self.is_remote_file(path):
-            filename = path.split('5000/')[1]
+        file_path = self.playlist[index]
+        if self.is_remote_file(file_path):
+            filename = file_path.split('5000/')[1]
             url = f"{self.remote_base}/get_song_metadata/{filename}"
 
             self.meta_worker = Worker('meta', url)
@@ -1181,47 +1338,33 @@ class AudioPlayer(QWidget):
             self.meta_worker.start()
         else:
             # local fallback
-            meta_list = mutagen.File(path).pprint().split('=')
+            self.meta_data = None
+            self.meta_data = self.get_audio_metadata(file_path)
+            self.set_metadata_label()
+            self.year_label.setText('Year: ' + self.meta_data['year'])
+            codec = self.meta_data['codec']
+            self.codec_label.setText(codec.replace('audio/', ''))
+            self.load_lyrics(file_path)
+            self.set_album_art(file_path)
+            meta_list = mutagen.File(file_path).pprint().split('=')
             new_meta_list = [meta_list[0]]
-            for m in range(len(meta_list)-1):
-                if not 'LYRICS' in meta_list[m]:
-                    new_meta_list.append(meta_list[m+1])
-            new_meta_str= ': '.join([str(s) for s in new_meta_list])
+            for m in range(len(meta_list) - 1):
+                if (not 'LYRICS' in meta_list[m]) and (not 'lyrics' in meta_list[m]):
+                    new_meta_list.append(meta_list[m + 1])
+            new_meta_str = ': '.join([str(s) for s in new_meta_list])
             new_meta_str = new_meta_str.replace('LYRICS:', 'DATE:')
             final_meta = new_meta_str.split('\n: ')
             for item in final_meta:
-                    self.text.append(item)
+                self.text.append(item)
             self.move_to_top()
-            meta = self.player.metaData()
-            title = meta.stringValue(QMediaMetaData.Title) or os.path.basename(path)
-       #     album_artist = meta.stringValue(QMediaMetaData.AlbumArtist) or meta.stringValue(QMediaMetaData.Author) or "--"
-            try:
-                audio_file = File(path)
-                if 'TPE1' in audio_file:  # Artist
-                    artist = str(audio_file['TPE1'])
-                elif 'ARTIST' in audio_file:
-                    artist = str(audio_file['ARTIST'][0])
-                elif '©ART' in audio_file:
-                    artist = str(audio_file['©ART'][0])
-                else:
-                    artist = "--"
-            except Exception as e:
-                artist = "--"
-                self.status_bar.showMessage(
-                    f"Error reading artist metadata from {path}: {str(e)}")
-            album = meta.stringValue(QMediaMetaData.AlbumTitle) or "--"
-            year = self.extract_year(meta) or "--"
-            self.set_metadat_label(title, artist, album)
-            self.year_label.setText('Year: ' + year)
-            codec = self.extract_audio_info()
-            if codec:
-                self.codec_label.setText(codec.replace('audio/', ''))
-            self.load_lyrics(path)
-            self.set_album_art(path)
 
 
-    def set_metadat_label(self, title, artist, album):
+
+    def set_metadata_label(self):
         '''Sets metadata labels, splitting them in multiple lines if necessary'''
+        title = self.meta_data['title']
+        artist = self.meta_data['artist']
+        album = self.meta_data['album']
         if len(title) > 41:
             multiline_title = title[:41] + '\n         '
             l = (len(title) // 41)
@@ -1251,6 +1394,47 @@ class AudioPlayer(QWidget):
                 'Album: {0}{1}'.format(multiline_album, album[(l * 35):]))
         else:
             self.album_label.setText('Album: ' + album)
+
+    def get_info(self):
+        meta = self.player.metaData()
+        title = meta.stringValue(QMediaMetaData.Title) or None
+       # index = self.playlist_widget.currentRow()
+       # path = self.playlist[index]
+        artist = self.meta_data.get('artist', None)
+        album_artist = meta.stringValue(QMediaMetaData.AlbumArtist) or meta.stringValue(QMediaMetaData.Author) or None
+        summ = self.get_wiki_summary(artist)
+        self.text.clear()
+        self.text.append(summ)
+        summ = self.get_wiki_summary(f"{title} ({artist} song)")
+        if summ == f"No results for '{title} ({artist} song)'." or summ == f"No suitable article found for '{title} ({artist} song)'":
+            summ = self.get_wiki_summary(title)
+        self.text.append(summ)
+        self.move_to_top()
+       # self.text.append('\nMetadata:')
+
+
+    def get_wiki_summary(self, entry: str, max_results: int = 5) -> str:
+        """
+        Search Wikipedia for an article and return the first valid summary.
+        Skips disambiguation pages (those with 'may refer to:').
+        """
+        try:
+            # Search for candidate pages
+            candidates = wikipedia.search(entry, results=max_results)
+            if not candidates:
+                return f"No results for '{entry}'."
+
+            for title in candidates:
+                try:
+                    page = wikipedia.page(title, auto_suggest=False)
+                    if "refer to:" in page.summary.lower():
+                        continue  # skip disambiguation
+                    return f"✅ {title}\n\n{page.summary}"
+                except wikipedia.DisambiguationError:
+                    continue  # skip disambiguation
+            return f"No suitable article found for '{entry}'"
+        except Exception as e:
+            return f"Error: {e}"
 
 
     @staticmethod
@@ -1290,9 +1474,9 @@ class AudioPlayer(QWidget):
         path = self.playlist[self.current_index]
         if self.is_remote_file(path):
             try:
-                if self.data and 'codec' in self.data and self.data[
+                if self.meta_data and 'codec' in self.meta_data and self.meta_data[
                     'codec']:
-                    codec = self.data.get('codec')
+                    codec = self.meta_data.get('codec')
                     return codec
             except Exception as e:
                 self.status_bar.showMessage("Remote metadata fetch error: " + str(e))
@@ -1439,10 +1623,10 @@ class AudioPlayer(QWidget):
     def play_selected_playlist(self):
         idx = self.playlist_widget.currentRow()
         item = self.playlist_widget.currentItem()
-        playlist_id = self.playlists[idx]['id']
         if item is not None:
             item_ext = item.text().split('.')[-1]
-            if item_ext == 'm3u' or item_ext == 'm3u8':
+            if item_ext == 'm3u' or item_ext == 'm3u8' or item_ext == 'cue':
+                playlist_id = self.playlists[idx]['id']
                 self.status_bar.showMessage(
                     'Loading Playlist from Server. Please Wait, it might take some time...')
                 progress = QProgressBar()
