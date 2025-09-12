@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
 
-API_URL = "http://localhost:5000"
+# API_URL = "http://localhost:5000"
 APP_DIR = Path.home() / "Web-Media-Server-and-Player"
 APP_DIR.mkdir(exist_ok=True)
 SETTINGS_FILE = APP_DIR / "settings.json"
@@ -43,6 +43,15 @@ class AudioPlayer(QWidget):
 
     def __init__(self):
         super().__init__()
+        # data
+        data = self.load_json(PLAYLISTS_FILE, default={"server": "http://localhost:5000", "playlists":[]})
+        global API_URL
+        API_URL = data["server"]
+        self.remote_base = API_URL
+        self.playlists = data["playlists"]
+        self.settings  = self.load_json(SETTINGS_FILE, default={"crossfade":6})
+
+        # variables
         self.gap_enabled = True
         self.silence_threshold_db = -46
         self.silence_min_duration = 0.5
@@ -51,7 +60,7 @@ class AudioPlayer(QWidget):
         self.fade_timer = None
         self.scan_worker = None
         self.progress = None
-        self.setWindowTitle("Ultimate Media Player. Current Server: Local")
+        self.setWindowTitle(f"Ultimate Media Player. Current Server: {API_URL}")
         self.resize(1200, 800)
         self.playlist = []
         self.current_index = -1
@@ -60,7 +69,6 @@ class AudioPlayer(QWidget):
         self.lyrics_timer = QTimer(self)
         self.lyrics_timer.setInterval(200)
         self.lyrics_timer.timeout.connect(self.update_lyrics_display)
-        self.remote_base = None
         self.meta_data =None
 
 
@@ -385,12 +393,6 @@ class AudioPlayer(QWidget):
 
         self.setLayout(layout)
 
-        # data
-        data = self.load_json(PLAYLISTS_FILE, default={"server": "http://localhost:5000", "playlists":[]})
-        API_URL = data["server"]
-        self.remote_base = API_URL
-        self.playlists = data["playlists"]
-        self.settings  = self.load_json(SETTINGS_FILE, default={"crossfade":6})
 
         # Connections
         self.btn_go.clicked.connect(self.on_go)
@@ -421,6 +423,8 @@ class AudioPlayer(QWidget):
         # Init
         self.update_play_button()
         self.show()
+        for item in self.playlists:
+            self.playlist_widget.addItem(item['name'])
 
     def split_image(self, image_path, tile_width, tile_height):
         image = QImage(image_path)
@@ -451,7 +455,7 @@ class AudioPlayer(QWidget):
 
      #   status_code = data['status']
         if data['status'] == 200:
-            global API_URL
+          #  global API_URL
             API_URL = data['API_URL']
             self.remote_base = API_URL
             self.setWindowTitle(
@@ -1695,7 +1699,6 @@ class AudioPlayer(QWidget):
         self.status_bar.repaint()
 
         try:
-         #   r = requests.get(f"{API_URL}/get_playlists")
             self.playlists = data['retrieved_playlists']
             for item in self.playlists:
                 self.playlist_widget.addItem(item['name'])
@@ -1810,6 +1813,7 @@ class AudioPlayer(QWidget):
     def save_json(self, path: Path, obj):
         try:
             path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+            print(path)
         except Exception as e:
             QMessageBox.warning(self,"Error!", str(e))
 
