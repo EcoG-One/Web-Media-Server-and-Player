@@ -1,12 +1,14 @@
 import sys
 import os
+
+# from django.contrib.gis.gdal.prototypes.srs import islocal
 from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot
 from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
     QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar,
-    QMenu, QStatusBar,QProgressBar, QFrame)
+    QMenu, QStatusBar,QProgressBar, QFrame, QCheckBox)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 import mutagen
 from mutagen import File
@@ -15,6 +17,8 @@ import traceback
 from pathlib import Path
 from random import shuffle
 import re
+import math
+import json
 import asyncio
 import aiohttp
 import requests
@@ -29,13 +33,24 @@ SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
 API_URL = "http://localhost:5000"
 APP_DIR = Path.home() / "Web-Media-Server-and-Player"
 APP_DIR.mkdir(exist_ok=True)
+SETTINGS_FILE = APP_DIR / "settings.json"
+PLAYLISTS_FILE = APP_DIR / "playlists.json"
 wikipedia.set_lang("en")
 
 class AudioPlayer(QWidget):
     request_search = Signal(str, str)
+    request_reveal = Signal(str)
+
     def __init__(self):
         super().__init__()
-      #  self.worker_data = None
+        self.gap_enabled = True
+        self.silence_threshold_db = -46
+        self.silence_min_duration = 0.5
+        self._silence_ms = 0
+        self._fade_step = None
+        self.fade_timer = None
+        self.scan_worker = None
+        self.progress = None
         self.setWindowTitle("Ultimate Media Player. Current Server: Local")
         self.resize(1200, 800)
         self.playlist = []
@@ -46,7 +61,6 @@ class AudioPlayer(QWidget):
         self.lyrics_timer.setInterval(200)
         self.lyrics_timer.timeout.connect(self.update_lyrics_display)
         self.remote_base = None
-     #   self.data = None
         self.meta_data =None
 
 
@@ -74,7 +88,7 @@ class AudioPlayer(QWidget):
         self.scan_action.triggered.connect(self.scan_library)
         local_menu.addAction(self.scan_action)
 
-        self.save_action = QAction("&Save Playlist", self)
+        self.save_action = QAction("&Save Current Queue", self)
         self.save_action.setShortcut(QKeySequence.Save)
         self.save_action.triggered.connect(self.save_current_playlist)
         local_menu.addAction(self.save_action)
@@ -98,7 +112,7 @@ class AudioPlayer(QWidget):
 
         self.exit_action = QAction("E&xit", self)
         self.exit_action.setShortcut(QKeySequence.Quit)
-        self.exit_action.triggered.connect(self.close)
+        self.exit_action.triggered.connect(self.quit)
         local_menu.addAction(self.exit_action)
 
         # Remote menu
@@ -139,7 +153,7 @@ class AudioPlayer(QWidget):
 
         self.exit_action = QAction("E&xit", self)
         self.exit_action.setShortcut(QKeySequence.Quit)
-        self.exit_action.triggered.connect(self.close)
+        self.exit_action.triggered.connect(self.quit)
         remote_menu.addAction(self.exit_action)
 
         # Help menu
@@ -159,10 +173,10 @@ class AudioPlayer(QWidget):
         self.next_output = None
 
         # Silence elimination config
-        self.skip_silence = False  # Optionally configurable
+        self.skip_silence = True  # Optionally configurable
 
         top = QHBoxLayout()
-        self.combo = QComboBox();
+        self.combo = QComboBox()
         self.combo.addItems(["artist", "title", "album"])
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search Server for Artist or Song, or Album…")
@@ -194,7 +208,7 @@ class AudioPlayer(QWidget):
         self.playlist_widget.viewport().installEventFilter(self)
 
         # Controls/UI
-        self.album_art = QLabel();
+        self.album_art = QLabel()
         self.album_art.setFixedSize(256, 256)
         self.album_art.setScaledContents(True)
         self.album_art.setPixmap(
@@ -250,7 +264,6 @@ class AudioPlayer(QWidget):
         # Lyrics
         self.lyrics_display = LyricsDisplay()
         self.lyrics_display.setReadOnly(True)
-      #  self.lyrics_display.setStyleSheet("font-weight: bold; background: #E0F0FF; border-width: 4px; border-color: #9FAAB5; border-style: intset;")
 
         # Mixing Controls UI
         self.crossfade_modes = ["Fade", "Smooth", "Full", "Scratch", "Cue"]
@@ -265,10 +278,12 @@ class AudioPlayer(QWidget):
         self.transition_spin.setSuffix(" s")
         self.transition_spin.valueChanged.connect(self.set_transition_duration)
 
-        self.silence_check = QPushButton("Skip Silence")
-        self.silence_check.setCheckable(True)
-        self.silence_check.setChecked(self.skip_silence)
-        self.silence_check.toggled.connect(self.set_skip_silence)
+
+
+       # self.silence_check = QPushButton("Skip Silence")
+       # self.silence_check.setCheckable(True)
+       # self.silence_check.setChecked(self.skip_silence)
+       # self.silence_check.toggled.connect(self.set_skip_silence)
 
         # StatusBar
         self.status_bar = QStatusBar()
@@ -277,10 +292,37 @@ class AudioPlayer(QWidget):
         mix_form = QFormLayout()
         mix_form.addRow("Mix Method:", self.mix_method_combo)
         mix_form.addRow("Transition:", self.transition_spin)
-        mix_form.addRow(self.silence_check)
+     #   mix_form.addRow(self.silence_check)
         mix_group = QGroupBox("Mixing Options")
-        mix_group.setFixedSize(QSize(200, 120))
+        mix_group.setFixedSize(QSize(180, 80))
         mix_group.setLayout(mix_form)
+
+        gap_killer_group = QGroupBox("Gap Killer")
+     #   gap_killer_group.setFixedSize(QSize(180, 80))
+        gap_box = QHBoxLayout()
+        self.chk_gap = QCheckBox("ON")
+        self.chk_gap.setChecked(True)
+        self.silence_db = QSlider(Qt.Horizontal)
+        self.silence_db.setRange(-60, -20)
+        self.silence_db.setValue(-46)
+        self.silence_dur = QSlider(Qt.Horizontal)
+        self.silence_dur.setRange(1, 50)
+        self.silence_dur.setValue(5)
+        self.gap_status = QLabel("Monitoring")
+        gap_box.addWidget(self.chk_gap)
+        gap_box.addWidget(QLabel("Threshold (dB):"))
+        gap_box.addWidget(self.silence_db, 1)
+        gap_box.addWidget(QLabel("Min Silence (x100ms):"))
+        gap_box.addWidget(self.silence_dur, 1)
+        gap_box.addWidget(self.gap_status)
+        gap_killer_group.setLayout(gap_box)
+
+        reveal = QVBoxLayout()
+        self.reveal_label = QLabel("Reveal Song\n   in Folder")
+        self.reveal_btn = QPushButton("Reveal")
+        self.reveal_btn.setFixedSize(QSize(50, 30))
+        reveal.addWidget(self.reveal_label)
+        reveal.addWidget(self.reveal_btn)
 
         # Layout
         info_layout = QHBoxLayout()
@@ -316,7 +358,13 @@ class AudioPlayer(QWidget):
         left_layout.addLayout(progress_layout)
         left_layout.addLayout(controls_layout)
         left_layout.addWidget(self.lyrics_display)
-        left_layout.addWidget(mix_group)
+
+        mixer_layout = QHBoxLayout()
+        mixer_layout.addWidget(mix_group)
+        mixer_layout.addWidget(gap_killer_group)
+        mixer_layout.addLayout(reveal)
+        left_layout.addLayout(mixer_layout)
+
 
         playlist_layout = QVBoxLayout()
         shuffle_box.addWidget(self.playlist_label, )
@@ -337,12 +385,20 @@ class AudioPlayer(QWidget):
 
         self.setLayout(layout)
 
+        # data
+        data = self.load_json(PLAYLISTS_FILE, default={"server": "http://localhost:5000", "playlists":[]})
+        API_URL = data["server"]
+        self.remote_base = API_URL
+        self.playlists = data["playlists"]
+        self.settings  = self.load_json(SETTINGS_FILE, default={"crossfade":6})
+
         # Connections
         self.btn_go.clicked.connect(self.on_go)
         self.search.returnPressed.connect(self.on_go)
         self.btn_shuffle.clicked.connect(self.do_shuffle)
         self.btn_info.clicked.connect(self.get_info)
         self.request_search.connect(self.search_tracks)
+        self.request_reveal.connect(self.reveal_path)
         self.player.positionChanged.connect(self.update_slider)
         self.player.durationChanged.connect(self.update_duration)
         self.player.mediaStatusChanged.connect(self.media_status_changed)
@@ -350,7 +406,14 @@ class AudioPlayer(QWidget):
         self.slider.sliderPressed.connect(lambda: self.player.pause())
         self.slider.sliderReleased.connect(lambda: self.player.play())
      #   self.player.metaDataChanged.connect(self.on_metadata_changed)
+        self.chk_gap.toggled.connect(lambda v: setattr(self, "gap_enabled", v))
+        self.silence_db.valueChanged.connect(
+            lambda v: setattr(self, "silence_threshold_db", v))
+        self.silence_dur.valueChanged.connect(
+            lambda v: setattr(self, "silence_min_duration", v / 10.0))
+        self.reveal_btn.clicked.connect(self.reveal_current)
         self.player.errorOccurred.connect(self.handle_error)
+
 
         # For mixing (transition to next track)
         self.player.positionChanged.connect(self.check_for_mix_transition)
@@ -421,7 +484,7 @@ class AudioPlayer(QWidget):
     def enter_server(self):
         server, ok_pressed = QInputDialog.getText(self, "Input",
                                                 "Enter Remote Server name or IP:",
-                                                QLineEdit.Normal, "");
+                                                QLineEdit.Normal, "")
         if ok_pressed and server != '':
             self.status_bar.showMessage(f'Please Wait, testing connection with server: {server}')
             self.status_bar.repaint()
@@ -526,7 +589,7 @@ class AudioPlayer(QWidget):
                 headers={"X-API-Key": SHUTDOWN_SECRET},
                 json={}
             )
-            self.status_bar.showMessage(resp.text)
+            self.status_bar.showMessage(resp.text.replace("\n", ""))
             self.status_bar.repaint()
         except Exception as e:
             QMessageBox.warning(self, "Error",
@@ -601,7 +664,7 @@ class AudioPlayer(QWidget):
                 self.status_bar.showMessage(r.reason)
         except Exception as e:
             self.status_bar.showMessage("Server Search error: Make sure the Server is Up and Connected")
-            QMessageBox.information(self, "Server Search error: Make sure the Server is Up and Connected")
+            QMessageBox.information(self, "Server Search error!", "Make sure the Server is Up and Connected")
 
 
 
@@ -663,12 +726,12 @@ class AudioPlayer(QWidget):
         self.next_player.setSource(QUrl.fromLocalFile(next_path))
         self.next_output.setVolume(0)
         self.slider.setValue(0)
-        self.update_metadata(next_idx)
-        if self.is_local_file(next_path):
-            self.set_album_art(next_path)
-        self.load_lyrics(next_path)
+     #   self.update_metadata(next_idx)
+       # if self.is_local_file(next_path):
+        #    self.set_album_art(next_path)
         self.next_player.play()
-     #   self.update_metadata()
+        self.update_metadata(next_idx)
+       # self.load_lyrics(next_path)
         self.lyrics_timer.start()
         self.playlist_widget.setCurrentRow(next_idx)
         self.fade_timer = QTimer(self)
@@ -720,8 +783,8 @@ class AudioPlayer(QWidget):
                 self.current_index = next_idx
             #    self.load_track(self.current_index, auto_play=False, skip_mix_check=True)
             #    self.player.play()
-                if self.is_local_file(next_path):
-                    self.update_metadata(self.current_index)
+            #    if self.is_local_file(next_path):
+             #       self.update_metadata(self.current_index)
                 self.update_play_button()
                 self.player.positionChanged.connect(self.update_slider)
                 self.player.durationChanged.connect(self.update_duration)
@@ -838,7 +901,7 @@ class AudioPlayer(QWidget):
         menu = QFileDialog(self)
         menu.setFileMode(QFileDialog.ExistingFiles)
         menu.setNameFilters(["Playlists (*.m3u *.m3u8 *.cue)",
-                             "Audio files (*.mp3 *.flac *.ogg *.wav *.m4a)", "All files (*)"])
+                             "Audio files (*.mp3 *.flac *.ogg *.wav *.m4a *.aac *.wma *.opus)", "All files (*)"])
         if menu.exec():
             self.add_files(menu.selectedFiles())
 
@@ -1394,6 +1457,7 @@ class AudioPlayer(QWidget):
                 'Album: {0}{1}'.format(multiline_album, album[(l * 35):]))
         else:
             self.album_label.setText('Album: ' + album)
+      #  self.reveal_label.setText(self.meta_data["title"])
 
     def get_info(self):
         meta = self.player.metaData()
@@ -1401,19 +1465,24 @@ class AudioPlayer(QWidget):
        # index = self.playlist_widget.currentRow()
        # path = self.playlist[index]
         artist = self.meta_data.get('artist', None)
-        album_artist = meta.stringValue(QMediaMetaData.AlbumArtist) or meta.stringValue(QMediaMetaData.Author) or None
+        album = self.meta_data.get('album', None)
+      #  album_artist = meta.stringValue(QMediaMetaData.AlbumArtist) or meta.stringValue(QMediaMetaData.Author) or None
         summ = self.get_wiki_summary(artist)
         self.text.clear()
         self.text.append(summ)
         summ = self.get_wiki_summary(f"{title} ({artist} song)")
         if summ == f"No results for '{title} ({artist} song)'." or summ == f"No suitable article found for '{title} ({artist} song)'":
+            summ = self.get_wiki_summary(f'{title} (record)')
+        if summ == f"No results for '{title} (record)'." or summ == f"No suitable article found for '{title} (record)'":
             summ = self.get_wiki_summary(title)
+        if summ == f"No results for '{title}'." or summ == f"No suitable article found for '{title}'":
+            summ = self.get_wiki_summary(f'{album} ({artist} album)')
         self.text.append(summ)
         self.move_to_top()
        # self.text.append('\nMetadata:')
 
 
-    def get_wiki_summary(self, entry: str, max_results: int = 5) -> str:
+    def get_wiki_summary(self, entry: str, max_results: int = 3) -> str:
         """
         Search Wikipedia for an article and return the first valid summary.
         Skips disambiguation pages (those with 'may refer to:').
@@ -1498,6 +1567,70 @@ class AudioPlayer(QWidget):
                 return codec + ' ' + str(sample_rate/1000) + 'kHz ' + str(round(bitrate/1000)) + 'kbps'
             else:
                 return codec + ' ' + str(sample_rate/1000) + 'kHz/' + str(round(bits)) + 'bits  ' + str(round(bitrate/1000)) + 'kbps'
+
+        # --- Gap Killer (experimental)
+
+    def on_buffer(self, buf):
+        self._probe_buffer(buf)
+
+    def _probe_buffer(self, buffer):
+        if not self.skip_silence:
+            self._silence_ms = 0
+            return
+        try:
+            fmt = buffer.format()
+            if fmt.sampleFormat() not in (fmt.Int16, fmt.Int8, fmt.Int32,
+                                          fmt.Float):
+                return
+            frames = buffer.frameCount()
+            if frames <= 0:
+                return
+            data = buffer.data()
+            import array, struct
+            if fmt.sampleFormat() == fmt.Float:
+                floats = [abs(struct.unpack_from('f', data, i)[0]) for i in
+                          range(0, len(data), 4)]
+                if not floats: return
+                rms = math.sqrt(sum(x * x for x in floats) / len(floats))
+            elif fmt.sampleFormat() == fmt.Int16:
+                arr = array.array('h')
+                arr.frombytes(data[:len(data) // 2 * 2])
+                if not arr: return
+                norm = [abs(x) / 32768.0 for x in arr]
+                rms = math.sqrt(sum(x * x for x in norm) / len(norm))
+            elif fmt.sampleFormat() == fmt.Int8:
+                arr = array.array('b')
+                arr.frombytes(data)
+                if not arr: return
+                norm = [abs(x) / 128.0 for x in arr]
+                rms = math.sqrt(sum(x * x for x in norm) / len(norm))
+            else:
+                arr = array.array('i')
+                arr.frombytes(data[:len(data) // 4 * 4])
+                if not arr: return
+                norm = [abs(x) / 2147483648.0 for x in arr]
+                rms = math.sqrt(sum(x * x for x in norm) / len(norm))
+
+            db = 20 * math.log10(rms) if rms > 0 else -120
+            if db < self.silence_threshold_db:
+                self._silence_ms += buffer.duration() / 1000.0
+                self.gap_status.setText(
+                    f"Silent {self._silence_ms:.1f}ms @ {db:.1f}dB")
+                if self._silence_ms >= self.silence_min_duration * 1000.0:
+                    self._silence_ms = 0
+                    p = self.current_player()
+                    if p.duration() - p.position() < 12_000:
+                        self.next_track()
+                    else:
+                        p.setPosition(
+                            min(p.position() + 10_000, p.duration() - 1000))
+                        self.gap_status.setText("Skipped silence")
+            else:
+                self._silence_ms = 0
+                self.gap_status.setText("Monitoring")
+        except Exception:
+            pass
+
 
     def selectDirectoryDialog(self):
         file_dialog = QFileDialog(self)
@@ -1666,6 +1799,95 @@ class AudioPlayer(QWidget):
             self.status_bar.showMessage("Error: " + str(e))
 
 
+    def load_json(self, path: Path, default):
+        try:
+            if path.exists():
+                return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return default
+
+    def save_json(self, path: Path, obj):
+        try:
+            path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+        except Exception as e:
+            QMessageBox.warning(self,"Error!", str(e))
+
+
+    @Slot()
+    def on_start_completed(self, result):
+        """Handle successful completion"""
+        if not result:
+            QMessageBox.warning(self, "Error", "Song was not revealed")
+            self.status_bar.repaint()
+            return
+        else:
+            self.status_bar.showMessage(result["answer"])
+            self.status_bar.repaint()
+            QMessageBox.information(self, 'Info:',
+                                    result["answer"])
+
+
+
+    def on_start_error(self, error_message):
+        """Handle error"""
+        QMessageBox.critical(self, "Error", error_message)
+        self.status_bar.repaint()
+
+
+    def cleanup_start(self):
+        """Clean up after scan completion"""
+        # Remove progress bar and clear status
+        #   self.status_bar.removeWidget(self.progress)
+        self.status_bar.clearMessage()
+
+        # Clean up worker reference
+        self.start_worker.deleteLater()
+        self.start_worker = None
+
+    def reveal_current(self):
+        if 0 <= self.current_index < len(self.playlist):
+            self.request_reveal.emit(self.playlist[self.current_index])
+
+    def reveal_path(self, path: str):
+        if self.is_local_file(path):
+            if sys.platform.startswith("win"):
+                os.startfile(os.path.dirname(path))
+            elif sys.platform == "darwin":
+                os.system(f'open -R "{path}"')
+            else:
+                os.system(f'xdg-open "{os.path.dirname(path)}"')
+        else:
+            folder_path = path.split("5000/")[1]
+            self.status_bar.showMessage(
+                'Trying to reveal Song in remote server. Please Wait, it might take some time...'
+            )
+
+            # Create and configure progress bar
+            self.progress = QProgressBar()
+            self.progress.setRange(0, 0)  # Indeterminate progress
+            self.status_bar.addWidget(self.progress)
+            self.status_bar.repaint()
+
+            # Create and configure worker thread
+            self.start_worker = Worker(folder_path, f"{API_URL}/start")
+            self.start_worker.work_completed.connect(self.on_start_completed)
+            self.start_worker.work_error.connect(self.on_start_error)
+            self.start_worker.finished.connect(self.cleanup_start)
+
+            # Start the async operation
+            try:
+                self.start_worker.start()
+            except Exception as e:
+                self.status_bar.showMessage("Error: " + str(e))
+
+
+    def quit(self):
+        self.save_json(PLAYLISTS_FILE,{"server"   : API_URL,
+                                       "playlists": self.playlists})
+        self.save_json(SETTINGS_FILE, {"crossfade": 6})
+        self.close()
+
 
 class Worker(QThread):
     """Worker thread for handling the asynchronous scan operation"""
@@ -1680,14 +1902,15 @@ class Worker(QThread):
         self.api_url = api_url
 
     def run(self):
-        """Run the async scan in a separate thread"""
+        """Run the async work in a separate thread"""
+        result = None
         try:
             # Create new event loop for this thread
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
             # Run the async scan
-            if self.folder_path == None:
+            if self.folder_path is None:
                 result = loop.run_until_complete(self.get_playlists_async())
             elif self.folder_path == 'meta':
                 result = loop.run_until_complete(self.get_metadata_async())
@@ -1696,7 +1919,11 @@ class Worker(QThread):
             elif self.folder_path == 'server':
                 result = loop.run_until_complete(self.check_server_async())
             else:
-                result = loop.run_until_complete(self.scan_library_async())
+                if Path(self.folder_path).is_dir():
+                    result = loop.run_until_complete(self.scan_library_async())
+                else:
+                    result = loop.run_until_complete(self.reveal_remote_song_async())
+
 
             # Emit success signal
             self.work_completed.emit(result)
@@ -1713,7 +1940,7 @@ class Worker(QThread):
         async with aiohttp.ClientSession() as session:
             async with session.post(
                     f"{self.api_url}/scan_library",
-                    json={"folder_path": self.folder_path}
+                    json=self.folder_path
             ) as response:
                 return await response.json()
 
@@ -1729,7 +1956,7 @@ class Worker(QThread):
                 return result
 
     async def get_pl_async(self):
-        """Async function to get the playlists from server"""
+        """Async function to get a playlist from server"""
         async with aiohttp.ClientSession() as session:
             async with session.get(self.api_url) as response:
                 retrieved_playlist =await response.json()
@@ -1745,11 +1972,22 @@ class Worker(QThread):
                 return result
 
     async def check_server_async(self):
-        """Async function to scan the library"""
+        """Async function to check if server is valid"""
         async with aiohttp.ClientSession() as session:
-            async with session.get(self.api_url) as response:
+            async with session.get(self.api_url, timeout=3) as response:
                 status = response.status
                 return {'status': status, 'API_URL': self.api_url}
+
+
+    async def reveal_remote_song_async(self):
+        """Async function to reveal playing song in remote server"""
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                    self.api_url,
+                    json=self.folder_path) as response:
+                answer = await response.json()
+                result = {'answer': answer}
+                return result
 
 
 class SynchronizedLyrics:

@@ -809,6 +809,18 @@ def shutdown():
         os.system(f"taskkill /PID {pid} /F")
     return f"Server killed (pid {pid})"
 
+@app.route('/start', methods=['POST'])
+def start():
+    try:
+        data = request.json
+        path = data.replace('/', '\\')
+        subprocess.Popen(r'explorer /select,"' + path + '"', shell=True)
+        return jsonify("Song Revealed on Server")
+    except Exception as e:
+        logger.error(f"Error launching Desktop Interface: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': 'Error Revealing Song'}), 500
+
 
 if __name__ == '__main__':
     try:
