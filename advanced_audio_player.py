@@ -29,7 +29,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
-
 # API_URL = "http://localhost:5000"
 APP_DIR = Path.home() / "Web-Media-Server-and-Player"
 APP_DIR.mkdir(exist_ok=True)
@@ -37,30 +36,61 @@ SETTINGS_FILE = APP_DIR / "settings.json"
 PLAYLISTS_FILE = APP_DIR / "playlists.json"
 wikipedia.set_lang("en")
 
+
+def load_json(path: Path, default):
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return default
+
+
+def save_json(path: Path, obj):
+    try:
+        path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+        print(path)
+    except Exception as e:
+        QMessageBox.warning(w, "Error!", str(e))
+
+def get_settings():
+    # json_data = load_json(PLAYLISTS_FILE, default={"server": "http://localhost:5000", "playlists": []})
+    default = {"server": "http://localhost:5000",
+               "mix_method": "Fade",
+               "transition_duration": 4,
+               "gap_enabled": True,
+               "silence_threshold_db": -46,
+               "silence_min_duration": 0.5
+               }
+    json_settings = load_json(SETTINGS_FILE, default=default)
+    return json_settings
+
+
 class AudioPlayer(QWidget):
     request_search = Signal(str, str)
     request_reveal = Signal(str)
 
-    def __init__(self):
+    def __init__(self, settings):
         super().__init__()
-        # data
-        data = self.load_json(PLAYLISTS_FILE, default={"server": "http://localhost:5000", "playlists":[]})
-        global API_URL
-        API_URL = data["server"]
-        self.remote_base = API_URL
-        self.playlists = data["playlists"]
-        self.settings  = self.load_json(SETTINGS_FILE, default={"crossfade":6})
 
-        # variables
-        self.gap_enabled = True
-        self.silence_threshold_db = -46
-        self.silence_min_duration = 0.5
+        # data
+        self.api_url = settings["server"]
+        self.remote_base = self.api_url
+        self.playlists = []
+
+        # Mixing/transition config
+        self.mix_method = settings["mix_method"]
+        self.transition_duration = settings["transition_duration"]
+
+        self.gap_enabled = settings["gap_enabled"]
+        self.silence_threshold_db = settings["silence_threshold_db"]
+        self.silence_min_duration = settings["silence_min_duration"]
         self._silence_ms = 0
         self._fade_step = None
         self.fade_timer = None
         self.scan_worker = None
         self.progress = None
-        self.setWindowTitle(f"Ultimate Media Player. Current Server: {API_URL}")
+        self.setWindowTitle(f"Ultimate Media Player. Current Server: {self.api_url}")
         self.resize(1200, 800)
         self.playlist = []
         self.current_index = -1
@@ -70,11 +100,6 @@ class AudioPlayer(QWidget):
         self.lyrics_timer.setInterval(200)
         self.lyrics_timer.timeout.connect(self.update_lyrics_display)
         self.meta_data =None
-
-
-        # Mixing/transition config
-        self.mix_method = "Full"  # Default
-        self.transition_duration = 4  # seconds
 
         # Layout
         layout = QVBoxLayout(self)
@@ -455,15 +480,14 @@ class AudioPlayer(QWidget):
 
      #   status_code = data['status']
         if data['status'] == 200:
-          #  global API_URL
-            API_URL = data['API_URL']
-            self.remote_base = API_URL
+            self.api_url = data['API_URL']
+            self.remote_base = self.api_url
             self.setWindowTitle(
-                f"Ultimate Media Player. Current Server: {API_URL}")
+                f"Ultimate Media Player. Current Server: {self.api_url}")
             self.status_bar.showMessage(
-                f'Remote Server is now: {API_URL}', 8000)
+                f'Remote Server is now: {self.api_url}', 8000)
             QMessageBox.information(self, 'Success!',
-                                    f'Remote Server is now: {API_URL}')
+                                    f'Remote Server is now: {self.api_url}')
         else:
             QMessageBox.warning(self, 'Error', data['status'])
 
@@ -540,7 +564,7 @@ class AudioPlayer(QWidget):
         self.status_bar.repaint()
 
         # Create and configure worker thread
-        self.scan_worker = Worker(folder_path, API_URL)
+        self.scan_worker = Worker(folder_path, self.api_url)
         self.scan_worker.work_completed.connect(self.on_scan_completed)
         self.scan_worker.work_error.connect(self.on_scan_error)
         self.scan_worker.finished.connect(self.cleanup_scan)
@@ -589,7 +613,7 @@ class AudioPlayer(QWidget):
     def shutdown_server(self):
         try:
             resp = requests.post(
-                f"{API_URL}/shutdown",
+                f"{self.api_url}/shutdown",
                 headers={"X-API-Key": SHUTDOWN_SECRET},
                 json={}
             )
@@ -598,7 +622,7 @@ class AudioPlayer(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Error",
                                 f"Failed to shutdown Remote Server @ "
-                                f"{API_URL}:\nMake Sure the Server is Up")
+                                f"{self.api_url}:\nMake Sure the Server is Up")
 
 
     def save_current_playlist(self):
@@ -646,7 +670,7 @@ class AudioPlayer(QWidget):
     def search_tracks(self, column: str, query: str):
         q = query.lower()
         params = {"column":column, "query":q}
-        url = f"{API_URL}/search_songs"
+        url = f"{self.api_url}/search_songs"
         try:
             r = requests.get(url, params=params, timeout=5)
             if r.status_code == 200:
@@ -951,8 +975,26 @@ class AudioPlayer(QWidget):
 
     def load_m3u_playlist(self, path):
         tracks = []
-        with open(path, encoding='utf-8') as f:
-            for line in f:
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            # Try with ANSI encoding if UTF-8 fails
+            try:
+                with open(path, 'r', encoding='ANSI') as f:
+                    lines = f.readlines()
+            except UnicodeDecodeError:
+                try:
+                    # Try to guess the encoding if UTF-8 and ANSI fail
+                    from charset_normalizer import from_path
+                    result = from_path(path).best()
+                    with open(path, 'r', encoding=result.encoding) as f:
+                        lines = f.readlines()
+                except Exception as e:
+                    QMessageBox.critical(self, "Error!", str(e))
+                    return tracks
+        if lines:
+            for line in lines:
                 line = line.strip()
                 line = os.path.abspath(os.path.join(os.path.dirname(path), line))
                 if os.path.isfile(line):
@@ -1683,7 +1725,7 @@ class AudioPlayer(QWidget):
         self.playlist_widget.clear()
         self.playlist.clear()
 
-        self.playlists_worker = Worker(None, API_URL)
+        self.playlists_worker = Worker(None, self.api_url)
         self.playlists_worker.work_completed.connect(self.receive_playlists)
         self.playlists_worker.work_error.connect(self.on_playlists_error)
         self.playlists_worker.finished.connect(self.cleanup_playlists)
@@ -1771,7 +1813,7 @@ class AudioPlayer(QWidget):
                 self.status_bar.repaint()
 
                 # Create and configure worker thread
-                self.pl_worker = Worker('pl', f"{API_URL}/load_playlist/{playlist_id}")
+                self.pl_worker = Worker('pl', f"{self.api_url}/load_playlist/{playlist_id}")
                 self.pl_worker.work_completed.connect(self.on_pl_completed)
                 self.pl_worker.work_error.connect(self.on_pl_error)
                 self.pl_worker.finished.connect(self.cleanup_pl)
@@ -1783,11 +1825,11 @@ class AudioPlayer(QWidget):
 
     def local_web_ui(self):
         if os.environ.get(f'WERKZEUG_RUN_MAIN') is None:
-            webbrowser.open(API_URL)
+            webbrowser.open(self.api_url)
 
     def remote_web_ui(self):
         try:
-            r = requests.post(f"{API_URL}/web_ui")
+            r = requests.post(f"{self.api_url}/web_ui")
             data = r.text
             self.status_bar.showMessage(data)
         except Exception as e:
@@ -1795,27 +1837,12 @@ class AudioPlayer(QWidget):
 
     def remote_desk_ui(self):
         try:
-            r = requests.post(f"{API_URL}/desk_ui")
+            r = requests.post(f"{self.api_url}/desk_ui")
          #   data = r.text
          #   self.status_bar.showMessage(data)
         except Exception as e:
             self.status_bar.showMessage("Error: " + str(e))
 
-
-    def load_json(self, path: Path, default):
-        try:
-            if path.exists():
-                return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-        return default
-
-    def save_json(self, path: Path, obj):
-        try:
-            path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
-            print(path)
-        except Exception as e:
-            QMessageBox.warning(self,"Error!", str(e))
 
 
     @Slot()
@@ -1874,7 +1901,7 @@ class AudioPlayer(QWidget):
             self.status_bar.repaint()
 
             # Create and configure worker thread
-            self.start_worker = Worker(folder_path, f"{API_URL}/start")
+            self.start_worker = Worker(folder_path, f"{self.api_url}/start")
             self.start_worker.work_completed.connect(self.on_start_completed)
             self.start_worker.work_error.connect(self.on_start_error)
             self.start_worker.finished.connect(self.cleanup_start)
@@ -1887,9 +1914,15 @@ class AudioPlayer(QWidget):
 
 
     def quit(self):
-        self.save_json(PLAYLISTS_FILE,{"server"   : API_URL,
-                                       "playlists": self.playlists})
-        self.save_json(SETTINGS_FILE, {"crossfade": 6})
+      #  save_json(PLAYLISTS_FILE,{"server"   : self.api_url,
+      #                                 "playlists": self.playlists})
+        save_json(SETTINGS_FILE, {"server"   : self.api_url,
+                                  "mix_method": self.mix_method,
+                                  "transition_duration": self.transition_duration,
+                                  "gap_enabled"         : self.gap_enabled,
+                                  "silence_threshold_db": self.silence_threshold_db,
+                                  "silence_min_duration": self.silence_min_duration
+                                  })
         self.close()
 
 
@@ -2120,5 +2153,6 @@ class LyricsDisplay(QTextEdit):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon('static/images/favicon.ico'))
-    w = AudioPlayer()
+    settings = get_settings()
+    w = AudioPlayer(settings)
     sys.exit(app.exec())

@@ -447,27 +447,44 @@ def parse_playlist_file(playlist_path):
         playlist = []
         playlist_dir = os.path.dirname(playlist_path)
         line_count = 0
-
-        with open(playlist_path, 'r', encoding='utf-8-sig') as f:
-            for line in f:
-                line_count += 1
+        try:
+            with open(playlist_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            # Try with ANSI encoding if UTF-8 fails
+            try:
+                with open(playlist_path, 'r', encoding='ANSI') as f:
+                    lines = f.readlines()
+            except UnicodeDecodeError:
                 try:
-                   # line = line.strip('ufeff01')
-                    line = line.strip()
-                    line = line.strip('.\\')
-                    if line and not line.startswith(('#', '﻿#')):
-                        # Convert relative path to absolute path
-                        if not os.path.isabs(line):
-                            line = os.path.join(playlist_dir, line)
-                        
-                        if os.path.exists(line):
-                            playlist.append(line)
-                            logger.debug(f"Added to playlist: {line}")
-                        else:
-                            logger.warning(f"File not found in playlist (line {line_count}): {line}")
-                            
+                    # Try to guess the encoding if UTF-8 and ANSI fail
+                    from charset_normalizer import from_path
+                    result = from_path(playlist_path).best()
+                    with open(playlist_path, 'r', encoding=result.encoding) as f:
+                        lines = f.readlines()
                 except Exception as e:
-                    logger.warning(f"Error processing playlist line {line_count}: {e}")
+                    logger.error(str(e))
+                    return playlist
+
+        for line in lines:
+            line_count += 1
+            try:
+               # line = line.strip('ufeff01')
+                line = line.strip()
+                line = line.strip('.\\')
+                if line and not line.startswith(('#', '﻿#')):
+                    # Convert relative path to absolute path
+                    if not os.path.isabs(line):
+                        line = os.path.join(playlist_dir, line)
+
+                    if os.path.exists(line):
+                        playlist.append(line)
+                        logger.debug(f"Added to playlist: {line}")
+                    else:
+                        logger.warning(f"File not found in playlist (line {line_count}): {line}")
+
+            except Exception as e:
+                logger.warning(f"Error processing playlist line {line_count}: {e}")
                     
         logger.info(f"Parsed playlist with {len(playlist)} valid files")
         return playlist
