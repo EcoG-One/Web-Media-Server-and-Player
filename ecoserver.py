@@ -1,4 +1,5 @@
 import os
+import sys
 import sqlite3
 import subprocess
 import logging
@@ -472,6 +473,8 @@ def parse_playlist_file(playlist_path):
                # line = line.strip('ufeff01')
                 line = line.strip()
                 line = line.strip('.\\')
+                if not sys.platform.startswith("win"):
+                    line = line.replace("\\","/" )
                 if line and not line.startswith(('#', '﻿#')):
                     # Convert relative path to absolute path
                     if not os.path.isabs(line):
@@ -532,12 +535,12 @@ def scan_library():
     try:
         data = request.get_json()
         if data:
-            folder_path = data.get('folder_path')
+            folder_path = data
             logger.info(f"Received folder: {folder_path}")
         if folder_path == None:
             # Run openfile.py (or openfile.exe if app will be converted to
             # windows executable) to select music library folder
-            # result = subprocess.run(['python', 'openfile.py'], capture_output=True, text=True)
+           # result = subprocess.run(['python', 'openfile.py'], capture_output=True, text=True)
             result = subprocess.run(["openfile.exe"], capture_output=True, text=True, timeout=50)
             folder_path = result.stdout.strip("\n")
 

@@ -2,7 +2,7 @@ import sys
 import os
 
 # from django.contrib.gis.gdal.prototypes.srs import islocal
-from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot
+from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot, QMutex
 from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -494,7 +494,9 @@ class AudioPlayer(QWidget):
 
 
     def on_server_error(self, error_message):
-        """Handle scan error"""
+        """Handle server check error"""
+        if error_message == '':
+            error_message = f'Remote Server not responding.\nMake sure the Server is Up and Connected'
         QMessageBox.critical(self, "Error", error_message)
         self.status_bar.repaint()
 
@@ -571,9 +573,11 @@ class AudioPlayer(QWidget):
 
         # Start the async operation
         self.scan_worker.start()
+        self.scan_worker.mutex.lock()
 
     def on_scan_completed(self, data):
         """Handle successful scan completion"""
+        self.scan_worker.mutex.unlock()
         if 'error' in data:
             QMessageBox.warning(self, "Scan Error", data['error'])
         else:
@@ -620,7 +624,10 @@ class AudioPlayer(QWidget):
             self.status_bar.showMessage(resp.text.replace("\n", ""))
             self.status_bar.repaint()
         except Exception as e:
-            QMessageBox.warning(self, "Error",
+            if 'An existing connection was forcibly closed by the remote host' in str(e):
+                self.status_bar.showMessage("Remote server successfully Shut Down!")
+            else:
+                QMessageBox.warning(self, "Error",
                                 f"Failed to shutdown Remote Server @ "
                                 f"{self.api_url}:\nMake Sure the Server is Up")
 
@@ -1233,18 +1240,16 @@ class AudioPlayer(QWidget):
 
     @Slot(dict)
     def on_receive_metadata(self, data):
+        if self.meta_worker:
+            self.meta_worker.mutex.unlock()
         path = self.playlist[self.current_index]
         if not data:
             self.status_bar.showMessage(
                 "Remote metadata fetch error:")
-            title = os.path.basename(path)
-            artist = album = year = codec = "--"
         else:
-            if 'error' in data:
+            if 'error' in data['retrieved_metadata']:
                 QMessageBox.warning(self, "Error retrieving metadata",
-                                    data['error'])
-                title = os.path.basename(path)
-                artist = album = year = codec = "--"
+                                    data['retrieved_metadata']["error"])
             else:
                 self.meta_data = data['retrieved_metadata']
                 title = self.meta_data.get('title', os.path.basename(path))
@@ -1254,19 +1259,20 @@ class AudioPlayer(QWidget):
                 codec = self.meta_data.get('codec', "--").replace('audio/', '')
               #  self.set_album_art(path)
 
-        self.set_metadata_label()
-        self.year_label.setText('Year: ' + self.meta_data['year'])
-        self.codec_label.setText(codec)
-        self.load_lyrics(path)
-        self.set_album_art(path)
-        if self.meta_data:
-            for key in self.meta_data:
-                if key != 'picture' and key != 'lyrics':
-                    self.text.append(f"{key}: {self.meta_data[key]}")
-        self.move_to_top()
+                self.set_metadata_label()
+                self.year_label.setText('Year: ' + self.meta_data['year'])
+                self.codec_label.setText(codec)
+                self.load_lyrics(path)
+                self.set_album_art(path)
+                if self.meta_data:
+                    for key in self.meta_data:
+                        if key != 'picture' and key != 'lyrics':
+                            self.text.append(f"{key}: {self.meta_data[key]}")
+                self.move_to_top()
 
     def on_metadata_error(self, error_message):
         """Handle metadata error"""
+        self.meta_worker.mutex.unlock()
         QMessageBox.critical(self, "Error", error_message)
         self.status_bar.repaint()
 
@@ -1277,8 +1283,9 @@ class AudioPlayer(QWidget):
         self.status_bar.clearMessage()
 
         # Clean up worker reference
-        self.meta_worker.deleteLater()
-        self.meta_worker = None
+        if self.meta_worker:
+            self.meta_worker.deleteLater()
+            self.meta_worker = None
 
     def get_audio_metadata(self, file_path):
         """Extract metadata from audio file with comprehensive error handling"""
@@ -1445,6 +1452,7 @@ class AudioPlayer(QWidget):
 
             # Start the async operation
             self.meta_worker.start()
+            self.meta_worker.mutex.lock()
         else:
             # local fallback
             self.meta_data = None
@@ -1471,6 +1479,17 @@ class AudioPlayer(QWidget):
 
     def set_metadata_label(self):
         '''Sets metadata labels, splitting them in multiple lines if necessary'''
+        if not self.meta_data or "error" in self.meta_data:
+            path = self.playlist[self.current_index]
+            title = os.path.basename(path)
+            artist = album = year = codec = "--"
+            self.title_label.setText('Title: ' + title)
+            self.artist_label.setText('Artist: ' + artist)
+            self.album_label.setText('Album: ' + album)
+            self.year_label.setText('Year: ' + year)
+            self.codec_label.setText('Codec: ' + codec)
+            return
+
         title = self.meta_data['title']
         artist = self.meta_data['artist']
         album = self.meta_data['album']
@@ -1752,7 +1771,9 @@ class AudioPlayer(QWidget):
                                  "Server Search error: Make sure the Server is Up and Connected")
 
     def on_playlists_error(self, error_message):
-        """Handle scan error"""
+        """Handle error"""
+        if error_message == '':
+            error_message = f'Remote Server not responding.\nMake sure the Server is Up and Connected'
         QMessageBox.critical(self, "Error", error_message)
         self.status_bar.repaint()
 
@@ -1783,7 +1804,7 @@ class AudioPlayer(QWidget):
                 f'Playlist {playlist_name} loaded. Enjoy!')
 
     def on_pl_error(self, error_message):
-        """Handle scan error"""
+        """Handle playlist error"""
         QMessageBox.critical(self, "Error", error_message)
         self.status_bar.repaint()
 
@@ -1935,6 +1956,7 @@ class Worker(QThread):
 
     def __init__(self, folder_path, api_url):
         super().__init__()
+        self.mutex = QMutex()
         self.folder_path = folder_path
         self.api_url = api_url
 
@@ -1986,7 +2008,7 @@ class Worker(QThread):
         """Async function to get the playlists from server"""
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                    f"{self.api_url}/get_playlists"
+                    f"{self.api_url}/get_playlists", timeout=5
             ) as response:
                 retrieved_playlists =await response.json()
                 result = {'retrieved_playlists': retrieved_playlists}
