@@ -29,11 +29,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
-# API_URL = "http://localhost:5000"
 APP_DIR = Path.home() / "Web-Media-Server-and-Player"
 APP_DIR.mkdir(exist_ok=True)
 SETTINGS_FILE = APP_DIR / "settings.json"
-PLAYLISTS_FILE = APP_DIR / "playlists.json"
+# SETTINGS_FILE  = os.path.join(os.path.expanduser('~'), 'Advanced Media Player', 'settings.json')
+# PLAYLISTS_FILE = APP_DIR / "playlists.json"
 wikipedia.set_lang("en")
 
 
@@ -74,6 +74,11 @@ class AudioPlayer(QWidget):
         super().__init__()
 
         # data
+        self.album_meta_data = None
+        self.meta_worker = None
+        self.playlists_worker = None
+        self.pl_worker = None
+        self.search_worker = None
         self.api_url = settings["server"]
         self.remote_base = self.api_url
         self.playlists = []
@@ -95,6 +100,7 @@ class AudioPlayer(QWidget):
         self.playlist = []
         self.current_index = -1
         self.show_remaining = False
+        self.short_albums = True
         self.lyrics = None
         self.lyrics_timer = QTimer(self)
         self.lyrics_timer.setInterval(200)
@@ -113,8 +119,14 @@ class AudioPlayer(QWidget):
 
         self.open_action = QAction("&Open Playlist | Add Songs", self)
         self.open_action.setShortcut(QKeySequence.Open)
+        self.open_action.setToolTip("Add Songs and/or Playlists to playing cue")
         self.open_action.triggered.connect(self.show_playlist_menu)
         local_menu.addAction(self.open_action)
+
+        self.load_action = QAction("Load &Playlists", self)
+        self.load_action.setShortcut(QKeySequence.Print)
+        self.load_action.triggered.connect(self.get_local_playlists)
+        local_menu.addAction(self.load_action)
 
         self.scan_action = QAction("Scan &Library", self)
         self.scan_action.setShortcut(QKeySequence("Ctrl+L"))
@@ -152,32 +164,32 @@ class AudioPlayer(QWidget):
         remote_menu = QMenu("&Remote", self)
         menubar.addMenu(remote_menu)
 
-        self.server_action = QAction("&Enter Remote Server", self)
+        self.server_action = QAction("&Connect to Remote", self)
         self.server_action.setShortcut(QKeySequence("Ctrl+E"))
         self.server_action.triggered.connect(self.enter_server)
         remote_menu.addAction(self.server_action)
 
-        self.load_action = QAction("Load &Playlists from Server", self)
+        self.load_action = QAction("Load &Playlists", self)
         self.load_action.setShortcut(QKeySequence.Print)
         self.load_action.triggered.connect(self.get_playlists)
         remote_menu.addAction(self.load_action)
 
-        self.scan_action = QAction("Scan Remote &Library", self)
+        self.scan_action = QAction("Scan &Library", self)
         self.scan_action .setShortcut(QKeySequence("Ctrl+R"))
         self.scan_action .triggered.connect(self.scan_remote_library)
         remote_menu.addAction(self.scan_action )
 
-        self.web_action = QAction("Launch &Remote Web UI", self)
+        self.web_action = QAction("Launch &Web UI", self)
         self.web_action.setShortcut(QKeySequence("Ctrl+I"))
         self.web_action.triggered.connect(self.remote_web_ui)
         remote_menu.addAction(self.web_action)
 
-        self.desktop_action = QAction("Launch Remote &Desktop UI", self)
+        self.desktop_action = QAction("Launch &Desktop UI", self)
         self.desktop_action.setShortcut(QKeySequence("Ctrl+D"))
         self.desktop_action.triggered.connect(self.remote_desk_ui)
         remote_menu.addAction(self.desktop_action)
 
-        self.shutdown_action = QAction("S&hutdown Remote Server", self)
+        self.shutdown_action = QAction("S&hutdown Server", self)
         self.shutdown_action.setShortcut(QKeySequence("Ctrl+C"))
         self.shutdown_action.triggered.connect(self.shutdown_server)
         remote_menu.addAction(self.shutdown_action)
@@ -577,7 +589,8 @@ class AudioPlayer(QWidget):
 
     def on_scan_completed(self, data):
         """Handle successful scan completion"""
-        self.scan_worker.mutex.unlock()
+        if self.scan_worker:
+            self.scan_worker.mutex.unlock()
         if 'error' in data:
             QMessageBox.warning(self, "Scan Error", data['error'])
         else:
@@ -596,8 +609,9 @@ class AudioPlayer(QWidget):
         self.status_bar.clearMessage()
 
         # Clean up worker reference
-        self.scan_worker.deleteLater()
-        self.scan_worker = None
+        if self.scan_worker:
+            self.scan_worker.deleteLater()
+            self.scan_worker = None
 
     def shutdown_local_server(self):
         try:
@@ -678,29 +692,72 @@ class AudioPlayer(QWidget):
         q = query.lower()
         params = {"column":column, "query":q}
         url = f"{self.api_url}/search_songs"
-        try:
-            r = requests.get(url, params=params, timeout=5)
-            if r.status_code == 200:
-                data = r.json()
-                if data:
-                    files = []
-                    for track in data:
-                        files.append(track["path"])
-                    self.clear_playlist()
-                    self.add_files(files)
-                    return
-                else:
-                    self.status_bar.showMessage(
-                        f'{column} {q} was not found on Server')
-                    QMessageBox.information(self, 'Sorry 😞',
-                                            f'{column} {q} was not found on Server')
 
+        # Create and configure progress bar
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)  # Indeterminate progress
+        self.status_bar.addWidget(self.progress)
+        self.status_bar.repaint()
+
+        # Create and configure worker thread
+        self.search_worker = Worker(params, url)
+        self.search_worker.work_completed.connect(self.on_search_completed)
+        self.search_worker.work_error.connect(self.on_search_error)
+        self.search_worker.finished.connect(self.cleanup_search)
+
+        # Start the async operation
+        self.search_worker.start()
+        self.search_worker.mutex.lock()
+
+
+    def on_search_completed(self, result):
+        if self.search_worker:
+            self.search_worker.mutex.unlock()
+        data = result["search_result"]
+        if data:
+            files = []
+            albums = {}
+            for track in data:
+                files.append(track["path"])
+                if self.short_albums:
+                    album = track["album"]
+                    if album == "":
+                        album = "single"
+                    if album in albums.keys():
+                        albums[album].append(track)
+                    else:
+                        albums[album] = []
+                        albums[album].append(track)
+            self.clear_playlist()
+            if self.short_albums:
+                self.add_albums(albums)
             else:
-                self.status_bar.showMessage(r.reason)
-        except Exception as e:
-            self.status_bar.showMessage("Server Search error: Make sure the Server is Up and Connected")
-            QMessageBox.information(self, "Server Search error!", "Make sure the Server is Up and Connected")
+                self.add_files(files)
+        else:
+            col = self.combo.currentText()
+            q = self.search.text().strip()
+            self.status_bar.showMessage(
+                f'{col} {q} was not found on Server')
+            QMessageBox.information(self, 'Sorry 😞',
+                                    f'{col} {q} was not found on Server')
 
+
+    def on_search_error(self, error_message):
+        """Handle search error"""
+        QMessageBox.critical(self, "Error", error_message)
+        self.status_bar.repaint()
+
+
+    def cleanup_search(self):
+        """Clean up after search completion"""
+        # Remove progress bar and clear status
+        #   self.status_bar.removeWidget(self.progress)
+        self.status_bar.clearMessage()
+
+        # Clean up worker reference
+        if self.search_worker:
+            self.search_worker.deleteLater()
+            self.search_worker = None
 
 
     def do_shuffle(self):
@@ -865,6 +922,8 @@ class AudioPlayer(QWidget):
     def load_track(self, idx, auto_play=True, skip_mix_check=False, skip_silence=False):
         if 0 <= idx < len(self.playlist):
             path = self.playlist[idx]
+            if path == "None":
+                return
             self.current_index = idx
             # Use the new get_media_source logic
             if self.is_remote_file(path):
@@ -983,7 +1042,7 @@ class AudioPlayer(QWidget):
     def load_m3u_playlist(self, path):
         tracks = []
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, 'r', encoding='utf-8-sig') as f:
                 lines = f.readlines()
         except UnicodeDecodeError:
             # Try with ANSI encoding if UTF-8 fails
@@ -1015,7 +1074,7 @@ class AudioPlayer(QWidget):
 
     def load_cue_playlist(self, path):
         tracks = []
-        with open(path, encoding='utf-8') as f:
+        with open(path, encoding='utf-8-sig') as f:
             for line in f:
                 if re.match('^FILE .(.*). (.*)$', line):
                     file_path = line[6:-7]
@@ -1024,6 +1083,62 @@ class AudioPlayer(QWidget):
                             os.path.join(os.path.dirname(path), file_path))
                     tracks.append(file_path)
         return tracks
+
+
+    def add_albums(self, albums):
+        for album in albums:
+            self.add_album(albums[album])
+            for song in albums[album]:
+                path = song["path"]
+                remote_url = f"{self.remote_base}/{path}"
+                self.playlist.append(remote_url)
+                item = QListWidgetItem(f'{song["artist"]} - {song["title"]} ({song["album"]})')
+                self.playlist_widget.addItem(item)
+
+            if self.current_index == -1 and self.playlist:
+                self.load_track(0)
+        self.status_bar.clearMessage()
+
+
+    def add_album(self, data):
+      #  if 0 > self.current_index >= len(self.playlist) - 1:
+         #   return
+        if not data:
+            self.status_bar.showMessage(
+                "Remote metadata fetch error:")
+            return
+        self.album_meta_data = data[0]
+        item = QListWidgetItem()
+        item.setSizeHint(QSize(256, 256))
+        self.playlist_widget.addItem(item)
+        self.album_only_art = QLabel()
+        self.album_only_art.setFixedSize(256, 256)
+        self.album_only_art.setScaledContents(True)
+        self.playlist_widget.setItemWidget(item, self.album_only_art)
+        self.playlist.append("None")
+        try:
+            if self.album_meta_data['album_art']:
+                img_bytes = base64.b64decode(self.album_meta_data['album_art'])
+                img = QImage.fromData(img_bytes)
+                pix = QPixmap.fromImage(img)
+                self.album_only_art.setPixmap(
+                    pix.scaled(self.album_art.size(), Qt.KeepAspectRatio,
+                               Qt.SmoothTransformation)
+                )
+            else:
+                self.album_art.setPixmap(
+                    QPixmap(
+                        "static/images/default_album_art.png") if os.path.exists(
+                        "static/images/default_album_art.png") else QPixmap())
+            return
+        except Exception as e:
+            self.album_art.setPixmap(
+                QPixmap(
+                    "static/images/default_album_art.png") if os.path.exists(
+                    "static/images/default_album_art.png") else QPixmap())
+            self.status_bar.showMessage(
+                "Base64 album art decode error:" + str(e))
+
 
     def play_selected_track(self, item):
         idx = self.playlist_widget.row(item)
@@ -1368,7 +1483,7 @@ class AudioPlayer(QWidget):
             try:
                 lrc_path = os.path.splitext(file_path)[0] + ".lrc"
                 if os.path.exists(lrc_path):
-                    with open(lrc_path, encoding='utf-8') as f:
+                    with open(lrc_path, encoding='utf-8-sig') as f:
                         metadata['lyrics'] = f.read()
                 else:
                     # FLAC/Vorbis
@@ -1440,6 +1555,8 @@ class AudioPlayer(QWidget):
     def update_metadata(self, index):
         self.text.clear()
         file_path = self.playlist[index]
+        if file_path == "None":
+            return
         if self.is_remote_file(file_path):
             filename = file_path.split('5000/')[1]
             url = f"{self.remote_base}/get_song_metadata/{filename}"
@@ -1730,6 +1847,16 @@ class AudioPlayer(QWidget):
 
         # Start the async operation
         self.scan_worker.start()
+        self.scan_worker.mutex.lock()
+
+    def get_local_playlists(self):
+        self.api_url = "http://localhost:5000"
+        self.remote_base = self.api_url
+        self.setWindowTitle(
+            f"Ultimate Media Player. Current Server is Local")
+        self.status_bar.showMessage(
+            f'Server is now Local', 8000)
+        self.get_playlists()
 
 
     def get_playlists(self):
@@ -1751,10 +1878,13 @@ class AudioPlayer(QWidget):
 
         # Start the async operation
         self.playlists_worker.start()
+        self.playlists_worker.mutex.lock()
 
     @Slot(dict)
     def receive_playlists(self, data: dict):
         """Handle successful playlist retrieval completion"""
+        if self.playlists_worker:
+            self.playlists_worker.mutex.unlock()
         if 'error' in data:
             QMessageBox.warning(self, "Scan Error", data['error'])
         self.status_bar.repaint()
@@ -1785,11 +1915,14 @@ class AudioPlayer(QWidget):
         self.status_bar.clearMessage()
 
         # Clean up worker reference
-        self.playlists_worker.deleteLater()
-        self.playlists_worker = None
+        if self.playlists_worker:
+            self.playlists_worker.deleteLater()
+            self.playlists_worker = None
 
 
     def on_pl_completed(self, pl_data):
+        if self.pl_worker:
+            self.pl_worker.mutex.unlock()
         data = pl_data['pl']
         if data:
             files = []
@@ -1816,8 +1949,9 @@ class AudioPlayer(QWidget):
         self.status_bar.clearMessage()
 
         # Clean up worker reference
-        self.pl_worker.deleteLater()
-        self.pl_worker = None
+        if self.pl_worker:
+            self.pl_worker.deleteLater()
+            self.pl_worker = None
 
     def play_selected_playlist(self):
         idx = self.playlist_widget.currentRow()
@@ -1841,6 +1975,7 @@ class AudioPlayer(QWidget):
 
                 try:
                     self.pl_worker.start()
+                    self.pl_worker.mutex.lock()
                 except Exception as e:
                     QMessageBox.critical(self, "Error", str(e))
 
@@ -1894,8 +2029,9 @@ class AudioPlayer(QWidget):
         self.status_bar.clearMessage()
 
         # Clean up worker reference
-        self.start_worker.deleteLater()
-        self.start_worker = None
+        if self.start_worker:
+            self.start_worker.deleteLater()
+            self.start_worker = None
 
     def reveal_current(self):
         if 0 <= self.current_index < len(self.playlist):
@@ -1971,6 +2107,8 @@ class Worker(QThread):
             # Run the async scan
             if self.folder_path is None:
                 result = loop.run_until_complete(self.get_playlists_async())
+            elif isinstance(self.folder_path, dict):
+                result = loop.run_until_complete(self.search_async())
             elif self.folder_path == 'meta':
                 result = loop.run_until_complete(self.get_metadata_async())
             elif self.folder_path == 'pl':
@@ -1990,6 +2128,8 @@ class Worker(QThread):
         except Exception as e:
             # Emit error signal
             self.work_error.emit(str(e))
+            loop.close()
+            self.mutex.unlock()
 
         finally:
             loop.close()
@@ -2002,6 +2142,16 @@ class Worker(QThread):
                     json=self.folder_path
             ) as response:
                 return await response.json()
+
+
+    async def search_async(self):
+        """Async function to scan the library"""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(self.api_url,
+                                   params=self.folder_path) as response:
+                search_result = await response.json()
+                result = {"search_result": search_result}
+                return result
 
 
     async def get_playlists_async(self):
@@ -2029,6 +2179,7 @@ class Worker(QThread):
                 retrieved_metadata = await response.json()
                 result = {'retrieved_metadata': retrieved_metadata}
                 return result
+
 
     async def check_server_async(self):
         """Async function to check if server is valid"""
@@ -2068,7 +2219,7 @@ class SynchronizedLyrics:
             if audio_path:
                 lrc_path = os.path.splitext(audio_path)[0] + ".lrc"
                 if os.path.exists(lrc_path):
-                    with open(lrc_path, encoding='utf-8') as f:
+                    with open(lrc_path, encoding='utf-8-sig') as f:
                         self.raw_lyrics = f.read()
                 else:
                     self.raw_lyrics = self.get_embedded_lyrics(audio_path)

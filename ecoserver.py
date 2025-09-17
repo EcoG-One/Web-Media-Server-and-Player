@@ -9,9 +9,14 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, \
     send_file, abort
 from mutagen import File
 import base64
+from threading import Thread
+from pystray import Icon, MenuItem, Menu
+from PIL import Image, ImageDraw
 from fuzzywuzzy import fuzz, process
 import webbrowser
 import signal
+import shutil
+from plyer import notification
 from dotenv import load_dotenv
 
 app = Flask(__name__)
@@ -19,6 +24,27 @@ app = Flask(__name__)
 load_dotenv()
 secret_key = os.getenv("SECRET_KEY")
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
+
+
+def run_flask():
+    try:
+        init_database()
+        logger.info(f"Starting Flask server on port 5000")
+        app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+    except Exception as e:
+        logger.error(f"Failed to start server: {e}")
+        logger.error(traceback.format_exc())
+        raise
+
+
+def show_notification(title, message):
+    notification.notify(
+        title=title,
+        message=message,
+        app_name='FlaskApp',
+        timeout=5  # seconds
+    )
+
 
 # Configure logging
 def setup_logging():
@@ -201,7 +227,7 @@ def get_audio_metadata(file_path):
         try:
             lrc_path = os.path.splitext(file_path)[0] + ".lrc"
             if os.path.exists(lrc_path):
-                with open(lrc_path, encoding='utf-8') as f:
+                with open(lrc_path, encoding='utf-8-sig') as f:
                     metadata['lyrics'] = f.read()
             else:
                 # FLAC/Vorbis
@@ -265,6 +291,33 @@ def get_audio_metadata(file_path):
         logger.error(traceback.format_exc())
         return None
 
+def get_album_art(file_path):
+    logger.debug(f"Extracting metadata from: {file_path}")
+
+    if not os.path.exists(file_path):
+        logger.warning(f"File does not exist: {file_path}")
+        return None
+    album_art = None
+    audio_file = File(file_path)
+    if audio_file is None:
+        logger.warning(f"Could not read audio file: {file_path}")
+        return None
+    try:
+        if 'APIC:' in audio_file:
+            album_art = audio_file['APIC:'].data
+        elif hasattr(audio_file, 'pictures') and audio_file.pictures:
+            album_art = audio_file.pictures[0].data
+        elif 'covr' in audio_file:
+            album_art = audio_file['covr'][0]
+    except Exception as e:
+        logger.warning(f"Error reading album art from {file_path}: {e}")
+    logger.debug(f"Successfully extracted album art from: {file_path}")
+    try:
+        album_art = base64.b64encode(album_art).decode('utf-8')
+    except Exception as e:
+        logger.warning(f"Error encoding album art: {e}")
+        album_art = None
+    return album_art
 
 
 def scan_for_audio_files(directory):
@@ -449,7 +502,7 @@ def parse_playlist_file(playlist_path):
         playlist_dir = os.path.dirname(playlist_path)
         line_count = 0
         try:
-            with open(playlist_path, 'r', encoding='utf-8') as f:
+            with open(playlist_path, 'r', encoding='utf-8-sig') as f:
                 lines = f.readlines()
         except UnicodeDecodeError:
             # Try with ANSI encoding if UTF-8 fails
@@ -681,14 +734,28 @@ def search_songs():
         
         logger.info(f"Search returned {len(results)} results")
 
+        albums = []
+        new_results = []
+        for result in results:
+            if not result[3] in albums:
+                albums.append(result[3])
+                album_art = get_album_art(result[4])
+            else:
+                album_art = None
+            result_list = list(result)
+            result_list.append(album_art)
+            new_result = tuple(result_list)
+            new_results.append(new_result)
+
         return jsonify([{
-            'id'      : r[0],
-            'artist'  : r[1],
-            'title'   : r[2],
-            'album'   : r[3],
-            'path'    : r[4],
-            'filename': r[5]
-        } for r in results])
+            'id'       : r[0],
+            'artist'   : r[1],
+            'title'    : r[2],
+            'album'    : r[3],
+            'path'     : r[4],
+            'filename' : r[5],
+            'album_art': r[6]
+        } for r in new_results])
         
     except sqlite3.Error as e:
         logger.error(f"Database error searching songs: {e}")
@@ -805,7 +872,7 @@ def shutdown_server():
     func()
 
 @app.route("/shutdown", methods=["POST"])
-def shutdown():
+def shutdown(icon):
     # Restrict to localhost only
    # if request.remote_addr not in ("127.0.0.1", "::1"):
     #    abort(403, "Forbidden: only localhost may request shutdown")
@@ -814,7 +881,7 @@ def shutdown():
     token = request.headers.get("X-API-Key") or request.json.get("token") if request.is_json else None
     if token != SHUTDOWN_SECRET:
         abort(401, "Unauthorized: invalid shutdown token")
-
+    icon.stop()
     # Try Werkzeug shutdown first
     func = request.environ.get("werkzeug.server.shutdown")
     if func is not None:
@@ -842,12 +909,63 @@ def start():
         return jsonify({'error': 'Error Revealing Song'}), 500
 
 
-if __name__ == '__main__':
+def open_browser(icon, item):
+    webbrowser.open("http://localhost:5000")
+
+def open_player():
     try:
-        init_database()
-        logger.info(f"Starting Flask server on port 5000")
-        app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+        subprocess.run(["advanced_audio_player.exe"], timeout=3)
+        show_notification("Success", "Desktop Player/Client Lunched Successfully")
     except Exception as e:
-        logger.error(f"Failed to start server: {e}")
+        show_notification("Error!", f"Error launching Desktop Interface: {str(e)}")
+        logger.error(f"Error launching Desktop Interface: {e}")
         logger.error(traceback.format_exc())
-        raise
+
+def add_to_startup():
+    startup_path = os.path.join(os.getenv('APPDATA'), 'Microsoft\\Windows\\Start Menu\\Programs\\Startup')
+    script_path = os.path.abspath(__file__)
+    shortcut_path = os.path.join(startup_path, 'FlaskApp.lnk')
+
+    if not os.path.exists(shortcut_path):
+        import win32com.client
+        shell = win32com.client.Dispatch("WScript.Shell")
+        shortcut = shell.CreateShortCut(shortcut_path)
+        shortcut.Targetpath = sys.executable
+        shortcut.Arguments = f'"{script_path}"'
+        shortcut.WorkingDirectory = os.path.dirname(script_path)
+        shortcut.IconLocation = sys.executable
+        shortcut.save()
+        show_notification("Success", "Ecoserver successfully added to Auto-Start on System Boot")
+    else:
+        show_notification("Information",
+                          "Ecoserver is already set to Auto-Start on System Boot")
+
+def create_image():
+    # Create a simple icon for the tray
+    image = Image.new('RGB', (64, 64), color=(0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((16, 16, 48, 48), fill=(255, 255, 255))
+    return image
+
+def on_quit(icon, item):
+    icon.stop()
+    sys.exit()
+
+def setup_tray():
+    icon = Icon("Ecoserver", title="Ecoserver is running")
+    icon.icon = create_image()
+    icon.menu = Menu(MenuItem("Open in browser", open_browser),
+                     MenuItem("Open Desktop Player", open_player),
+                     MenuItem("Auto-Start on System Boot", add_to_startup),
+                     MenuItem("Quit", on_quit))
+    icon.run()
+
+
+if __name__ == '__main__':
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    show_notification("Ecoserver", "Ecoserver is now running in the background.")
+
+    setup_tray()
+
