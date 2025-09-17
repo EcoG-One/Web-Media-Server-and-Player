@@ -737,7 +737,7 @@ def search_songs():
         albums = []
         new_results = []
         for result in results:
-            if not result[3] in albums:
+            if not f'{result[1]} - {result[3]}' in albums:
                 albums.append(result[3])
                 album_art = get_album_art(result[4])
             else:

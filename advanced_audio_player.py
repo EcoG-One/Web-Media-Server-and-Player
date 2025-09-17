@@ -222,7 +222,7 @@ class AudioPlayer(QWidget):
 
         top = QHBoxLayout()
         self.combo = QComboBox()
-        self.combo.addItems(["artist", "title", "album"])
+        self.combo.addItems(["artist", "song_title", "album"])
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search Server for Artist or Song, or Album…")
         self.btn_go = QPushButton("Search Server")
@@ -714,6 +714,9 @@ class AudioPlayer(QWidget):
         if self.search_worker:
             self.search_worker.mutex.unlock()
         data = result["search_result"]
+        if "error" in data:
+            QMessageBox.critical(self, "Error", data["error"])
+            return
         if data:
             files = []
             albums = {}
