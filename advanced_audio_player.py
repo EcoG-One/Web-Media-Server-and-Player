@@ -1,6 +1,7 @@
 import sys
 import os
-
+import sqlite3
+from fuzzywuzzy import fuzz
 # from django.contrib.gis.gdal.prototypes.srs import islocal
 from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot, QMutex
 from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence
@@ -26,6 +27,8 @@ import base64
 import webbrowser
 import wikipedia
 from dotenv import load_dotenv
+
+from ecoserver import is_localhost
 
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
@@ -74,12 +77,19 @@ class AudioPlayer(QWidget):
         super().__init__()
 
         # data
+        self.server_worker = None
+        self.songs = None
+        self.songs_worker = None
         self.album_meta_data = None
         self.meta_worker = None
         self.playlists_worker = None
         self.pl_worker = None
         self.search_worker = None
         self.api_url = settings["server"]
+        if self.api_url in ['127.0.0.1', '::1', 'localhost']:
+            self.is_local = True
+        else:
+            self.is_local = False
         self.remote_base = self.api_url
         self.playlists = []
 
@@ -164,7 +174,7 @@ class AudioPlayer(QWidget):
         remote_menu = QMenu("&Remote", self)
         menubar.addMenu(remote_menu)
 
-        self.server_action = QAction("&Connect to Remote", self)
+        self.server_action = QAction("Connect to R&emote", self)
         self.server_action.setShortcut(QKeySequence("Ctrl+E"))
         self.server_action.triggered.connect(self.enter_server)
         remote_menu.addAction(self.server_action)
@@ -172,6 +182,21 @@ class AudioPlayer(QWidget):
         self.load_action = QAction("Load &Playlists", self)
         self.load_action.setShortcut(QKeySequence.Print)
         self.load_action.triggered.connect(self.get_playlists)
+        remote_menu.addAction(self.load_action)
+
+        self.load_action = QAction("List all &Songs", self)
+        self.load_action.setShortcut(QKeySequence("Ctrl+S"))
+        self.load_action.triggered.connect(self.get_songs)
+        remote_menu.addAction(self.load_action)
+
+        self.load_action = QAction("List all &Artists", self)
+        self.load_action.setShortcut(QKeySequence("Ctrl+A"))
+        self.load_action.triggered.connect(self.get_artists)
+        remote_menu.addAction(self.load_action)
+
+        self.load_action = QAction("List all Al&bums", self)
+        self.load_action.setShortcut(QKeySequence("Ctrl+B"))
+        self.load_action.triggered.connect(self.get_albums)
         remote_menu.addAction(self.load_action)
 
         self.scan_action = QAction("Scan &Library", self)
@@ -225,9 +250,11 @@ class AudioPlayer(QWidget):
         self.combo.addItems(["artist", "song_title", "album"])
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search Server for Artist or Song, or Album…")
+        self.btn_local = QPushButton("Search Local")
         self.btn_go = QPushButton("Search Server")
         top.addWidget(self.combo)
         top.addWidget(self.search, 2)
+        top.addWidget(self.btn_local)
         top.addWidget(self.btn_go)
 
         # Playlist browser with context menu support
@@ -432,8 +459,9 @@ class AudioPlayer(QWidget):
 
 
         # Connections
+        self.btn_local.clicked.connect(self.on_local)
         self.btn_go.clicked.connect(self.on_go)
-        self.search.returnPressed.connect(self.on_go)
+        self.search.returnPressed.connect(self.on_local)
         self.btn_shuffle.clicked.connect(self.do_shuffle)
         self.btn_info.clicked.connect(self.get_info)
         self.request_search.connect(self.search_tracks)
@@ -680,6 +708,7 @@ class AudioPlayer(QWidget):
         col = self.combo.currentText()
         q = self.search.text().strip()
         if q:
+            self.is_local = False
             self.status_bar.showMessage(
                 f'Searching for {col} {q}. Please Wait...')
             progress = QProgressBar()
@@ -688,26 +717,134 @@ class AudioPlayer(QWidget):
             self.status_bar.repaint()
             self.search_tracks(col, q)
 
+
+    def on_local(self):
+        col = self.combo.currentText()
+        q = self.search.text().strip()
+        if q:
+            self.is_local = True
+            self.status_bar.showMessage(
+                f'Searching for {col} {q}. Please Wait...')
+            progress = QProgressBar()
+            progress.setValue(50)
+            self.status_bar.addWidget(progress)
+            self.status_bar.repaint()
+            self.search_tracks(col, q)
+
+
+    def get_album_art(self, path):
+        img_data = None
+        try:
+            audio = File(path)
+            if audio is not None and hasattr(audio, 'tags'):
+                tags = audio.tags
+                if 'APIC:' in tags:
+                    img_data = tags['APIC:'].data
+                elif hasattr(tags, 'get') and tags.get('covr'):
+                    img_data = tags['covr'][0]
+                elif hasattr(audio, 'pictures') and audio.pictures:
+                    img_data = audio.pictures[0].data
+            if img_data:
+                try:
+                    album_art = base64.b64encode(img_data).decode('utf-8')
+                except Exception as e:
+                    QMessageBox.warning(self, "Error", f"Error encoding album art: {str(e)}")
+                    album_art = None
+                return album_art
+        except Exception as e:
+            self.status_bar.showMessage("Artwork extraction error:" + str(e))
+
+
+
     def search_tracks(self, column: str, query: str):
+        if not column or not query:
+            QMessageBox.warning(self, "Error", "Missing search parameters")
+            return
         q = query.lower()
-        params = {"column":column, "query":q}
-        url = f"{self.api_url}/search_songs"
+        if self.is_local:
+            try:
+                conn = sqlite3.connect('Music.db')
+                cursor = conn.cursor()
 
-        # Create and configure progress bar
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)  # Indeterminate progress
-        self.status_bar.addWidget(self.progress)
-        self.status_bar.repaint()
+                # First try exact match
+                cursor.execute(
+                    f"SELECT id, artist, song_title, album, path, file_name FROM Songs WHERE {column} LIKE ?",
+                    (f'%{query}%',))
+                results = cursor.fetchall()
 
-        # Create and configure worker thread
-        self.search_worker = Worker(params, url)
-        self.search_worker.work_completed.connect(self.on_search_completed)
-        self.search_worker.work_error.connect(self.on_search_error)
-        self.search_worker.finished.connect(self.cleanup_search)
+                # If no results, try fuzzy matching
+                if not results:
+                    self.status_bar.showMessage("No exact matches, trying fuzzy search")
+                    cursor.execute(
+                        f"SELECT id, artist, song_title, album, path, file_name, {column} FROM Songs")
+                    all_songs = cursor.fetchall()
 
-        # Start the async operation
-        self.search_worker.start()
-        self.search_worker.mutex.lock()
+                    fuzzy_matches = []
+                    for song in all_songs:
+                        try:
+                            ratio = fuzz.ratio(query.lower(), song[6].lower())
+                            if ratio > 60:  # Threshold for fuzzy matching
+                                fuzzy_matches.append((song[:6], ratio))
+                        except Exception as e:
+                            self.status_bar.showMessage(
+                                f"Error in fuzzy matching for song {song[0]}: {e}")
+
+                    # Sort by similarity
+                    fuzzy_matches.sort(key=lambda x: x[1], reverse=True)
+                    results = [match[0] for match in
+                               fuzzy_matches[:10]]  # Top 10 matches
+
+                conn.close()
+                self.status_bar.showMessage(f"Search returned {len(results)} results")
+
+                albums = []
+                new_results = []
+                for result in results:
+                    if not f'{result[1]} - {result[3]}' in albums:
+                        albums.append(result[3])
+                        album_art = self.get_album_art(result[4])
+                    else:
+                        album_art = None
+                    result_list = list(result)
+                    result_list.append(album_art)
+                    new_result = tuple(result_list)
+                    new_results.append(new_result)
+
+                search_result = [{
+                    'id'       : r[0],
+                    'artist'   : r[1],
+                    'title'    : r[2],
+                    'album'    : r[3],
+                    'path'     : r[4],
+                    'filename' : r[5],
+                    'album_art': r[6]
+                } for r in new_results]
+                self.on_search_completed({"search_result": search_result})
+
+
+            except sqlite3.Error as e:
+                QMessageBox.critical(self, "Error",f"Database error searching songs: {str(e)}")
+            except Exception as e:
+                QMessageBox.critical(self, "Error",f"Error searching songs: {str(e)}")
+        else:
+            params = {"column":column, "query":q}
+            url = f"{self.api_url}/search_songs"
+
+            # Create and configure progress bar
+            self.progress = QProgressBar()
+            self.progress.setRange(0, 0)  # Indeterminate progress
+            self.status_bar.addWidget(self.progress)
+            self.status_bar.repaint()
+
+            # Create and configure worker thread
+            self.search_worker = Worker(params, url)
+            self.search_worker.work_completed.connect(self.on_search_completed)
+            self.search_worker.work_error.connect(self.on_search_error)
+            self.search_worker.finished.connect(self.cleanup_search)
+
+            # Start the async operation
+            self.search_worker.start()
+            self.search_worker.mutex.lock()
 
 
     def on_search_completed(self, result):
@@ -812,7 +949,12 @@ class AudioPlayer(QWidget):
         if not (0 <= next_idx < len(self.playlist)):
             return
         next_path = self.playlist[next_idx]
-        if self.is_remote_file(next_path):
+        while next_path == "None":
+            next_idx += 1
+            if not (0 <= next_idx < len(self.playlist)):
+                return
+            next_path = self.playlist[next_idx]
+        if self.is_remote_file(next_path) and not self.is_local:
             abs_path = next_path.split('5000/')[1]
             next_path = f"{self.remote_base}/serve_audio/{abs_path}"
         self.next_player = QMediaPlayer(self)
@@ -901,6 +1043,12 @@ class AudioPlayer(QWidget):
         without interrupting current playback.
         """
         next_idx = self.current_index + 1
+        next_path = self.playlist[next_idx]
+        while next_path == "None":
+            next_idx += 1
+            if not (0 <= next_idx < len(self.playlist)):
+                return
+            next_path = self.playlist[next_idx]
         if not (0 <= next_idx < len(self.playlist)):
             return
         # Set a flag to cue the next track at end of media
@@ -929,7 +1077,7 @@ class AudioPlayer(QWidget):
                 return
             self.current_index = idx
             # Use the new get_media_source logic
-            if self.is_remote_file(path):
+            if self.is_remote_file(path) and not self.is_local:
                 abs_path = path.split('5000/')[1]
                 if self.remote_base == None:
                     self.remote_base = path.split('5000/')[0] + '5000/'
@@ -1036,8 +1184,9 @@ class AudioPlayer(QWidget):
                 # If remote base is set, treat as filename on remote
                 remote_url = f"{self.remote_base}/{f}"
                 self.playlist.append(remote_url)
-                item = QListWidgetItem(os.path.basename(f))
-                self.playlist_widget.addItem(item)
+                if not self.is_local:
+                    item = QListWidgetItem(os.path.basename(f))
+                    self.playlist_widget.addItem(item)
             if self.current_index == -1 and self.playlist:
                 self.load_track(0)
         self.status_bar.clearMessage()
@@ -1094,7 +1243,10 @@ class AudioPlayer(QWidget):
             for song in albums[album]:
                 path = song["path"]
                 remote_url = f"{self.remote_base}/{path}"
-                self.playlist.append(remote_url)
+                if self.is_local:
+                    self.playlist.append(path)
+                else:
+                    self.playlist.append(remote_url)
                 item = QListWidgetItem(f'{song["artist"]} - {song["title"]} ({song["album"]})')
                 self.playlist_widget.addItem(item)
 
@@ -1108,7 +1260,7 @@ class AudioPlayer(QWidget):
          #   return
         if not data:
             self.status_bar.showMessage(
-                "Remote metadata fetch error:")
+                "Metadata fetch error:")
             return
         self.album_meta_data = data[0]
         item = QListWidgetItem()
@@ -1129,13 +1281,13 @@ class AudioPlayer(QWidget):
                                Qt.SmoothTransformation)
                 )
             else:
-                self.album_art.setPixmap(
+                self.album_only_art.setPixmap(
                     QPixmap(
                         "static/images/default_album_art.png") if os.path.exists(
                         "static/images/default_album_art.png") else QPixmap())
             return
         except Exception as e:
-            self.album_art.setPixmap(
+            self.album_only_art.setPixmap(
                 QPixmap(
                     "static/images/default_album_art.png") if os.path.exists(
                     "static/images/default_album_art.png") else QPixmap())
@@ -1198,7 +1350,7 @@ class AudioPlayer(QWidget):
         """
         Sets album art using metadata JSON if provided (remote), otherwise falls back to local extraction.
         """
-        if self.is_remote_file(path):
+        if self.is_remote_file(path) and not self.is_local:
             if self.meta_data and 'picture' in self.meta_data and self.meta_data[
                 'picture']:
                 try:
@@ -1267,11 +1419,29 @@ class AudioPlayer(QWidget):
 
     def prev_track(self):
         if self.current_index > 0:
-            self.load_track(self.current_index - 1)
+            prev_idx = self.current_index - 1
+            prev_path = self.playlist[prev_idx]
+            while prev_path == "None":
+                prev_idx -= 1
+                if not (0 <= prev_idx < len(self.playlist)):
+                    return
+                prev_path = self.playlist[prev_idx]
+            if not (0 <= prev_idx < len(self.playlist)):
+                return
+            self.load_track(prev_idx)
 
     def next_track(self):
         if self.current_index < len(self.playlist) - 1:
-            self.load_track(self.current_index + 1)
+            next_idx = self.current_index + 1
+            next_path = self.playlist[next_idx]
+            while next_path == "None":
+                next_idx += 1
+                if not (0 <= next_idx < len(self.playlist) - 1):
+                    return
+                next_path = self.playlist[next_idx]
+            if not (0 <= next_idx < len(self.playlist) - 1):
+                return
+            self.load_track(next_idx)
 
     def toggle_play_pause(self):
         if self.player.playbackState() == QMediaPlayer.PlayingState:
@@ -1560,7 +1730,7 @@ class AudioPlayer(QWidget):
         file_path = self.playlist[index]
         if file_path == "None":
             return
-        if self.is_remote_file(file_path):
+        if self.is_remote_file(file_path) and not self.is_local:
             filename = file_path.split('5000/')[1]
             url = f"{self.remote_base}/get_song_metadata/{filename}"
 
@@ -1726,7 +1896,7 @@ class AudioPlayer(QWidget):
 
     def extract_audio_info(self):
         path = self.playlist[self.current_index]
-        if self.is_remote_file(path):
+        if self.is_remote_file(path) and not self.is_local:
             try:
                 if self.meta_data and 'codec' in self.meta_data and self.meta_data[
                     'codec']:
@@ -1853,16 +2023,31 @@ class AudioPlayer(QWidget):
         self.scan_worker.mutex.lock()
 
     def get_local_playlists(self):
-        self.api_url = "http://localhost:5000"
-        self.remote_base = self.api_url
-        self.setWindowTitle(
-            f"Ultimate Media Player. Current Server is Local")
-        self.status_bar.showMessage(
-            f'Server is now Local', 8000)
-        self.get_playlists()
+        self.is_local = True
+        self.playlist_widget.clear()
+        self.playlist.clear()
+        conn = sqlite3.connect('Music.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, PL_name FROM Playlists")
+        playlists = cursor.fetchall()
+        conn.close()
+
+       # return jsonify([{'id': p[0], 'name': p[1]} for p in playlists])
+
+        try:
+            for item in playlists:
+                self.playlists.append({'id': item[0], 'name': item[1]})
+                self.playlist_widget.addItem(item[1])
+            self.playlist_label.setText('Local Playlists: ')
+            self.status_bar.clearMessage()
+        except Exception as e:
+            self.status_bar.clearMessage()
+            QMessageBox.critical(self, "Error", str(e))
+
 
 
     def get_playlists(self):
+        self.is_local = False
         self.playlist_label.setText('Loading Playlists from Server')
         self.status_bar.showMessage(
             'Loading Playlists from Server. Please Wait, it might take some time...')
@@ -1883,13 +2068,15 @@ class AudioPlayer(QWidget):
         self.playlists_worker.start()
         self.playlists_worker.mutex.lock()
 
+
+
     @Slot(dict)
     def receive_playlists(self, data: dict):
         """Handle successful playlist retrieval completion"""
         if self.playlists_worker:
             self.playlists_worker.mutex.unlock()
         if 'error' in data:
-            QMessageBox.warning(self, "Scan Error", data['error'])
+            QMessageBox.warning(self, "Error", data['error'])
         self.status_bar.repaint()
 
         try:
@@ -1910,11 +2097,10 @@ class AudioPlayer(QWidget):
         QMessageBox.critical(self, "Error", error_message)
         self.status_bar.repaint()
 
-
     def cleanup_playlists(self):
         """Clean up after scan completion"""
         # Remove progress bar and clear status
-     #   self.status_bar.removeWidget(self.progress)
+        #   self.status_bar.removeWidget(self.progress)
         self.status_bar.clearMessage()
 
         # Clean up worker reference
@@ -1923,14 +2109,95 @@ class AudioPlayer(QWidget):
             self.playlists_worker = None
 
 
+    def get_songs(self):
+        self.playlist_label.setText('Getting song list from Server')
+        self.status_bar.showMessage(
+            'Getting song list  from Server. Please Wait, it might take some time...')
+        self.status_bar.repaint()
+        progress = QProgressBar()
+        progress.setValue(50)
+        self.status_bar.addWidget(progress)
+        self.status_bar.repaint()
+        self.playlist_widget.clear()
+        self.playlist.clear()
+        self.is_local = False
+        self.songs_worker = Worker("song_title", f'{self.api_url}/get_all')
+        self.songs_worker.work_completed.connect(self.receive_songs)
+        self.songs_worker.work_error.connect(self.on_songs_error)
+        self.songs_worker.finished.connect(self.cleanup_songs)
+
+        # Start the async operation
+        self.songs_worker.start()
+        self.songs_worker.mutex.lock()
+
+
+
+    @Slot(dict)
+    def receive_songs(self, data: dict):
+        """Handle successful playlist retrieval completion"""
+        if self.songs_worker:
+            self.songs_worker.mutex.unlock()
+        if 'error' in data:
+            QMessageBox.warning(self, "Error", data['error'])
+        self.status_bar.repaint()
+
+        try:
+            self.clear_playlist()
+            files = []
+            self.songs = data['retrieved_songs']
+            for song in self.songs:
+                files.append(song["path"])
+                item = f"{song['artist']} - {song['title']} ({song['album']})"
+                self.playlist_widget.addItem(item)
+
+            self.playlist_label.setText('Songs List: ')
+            self.status_bar.clearMessage()
+
+            self.add_files(files)
+            self.status_bar.showMessage(
+                'Songs list loaded. Enjoy!')
+
+
+        except Exception as e:
+            self.status_bar.clearMessage()
+            QMessageBox.critical(self, "Error",
+                                 "Server error: Make sure the Server is Up and Connected")
+
+    def on_songs_error(self, error_message):
+        """Handle error"""
+        if error_message == '':
+            error_message = f'Remote Server not responding.\nMake sure the Server is Up and Connected'
+        QMessageBox.critical(self, "Error", error_message)
+        self.status_bar.repaint()
+
+
+    def cleanup_songs(self):
+        """Clean up after scan completion"""
+        # Remove progress bar and clear status
+     #   self.status_bar.removeWidget(self.progress)
+        self.status_bar.clearMessage()
+
+        # Clean up worker reference
+        if self.songs_worker:
+            self.songs_worker.deleteLater()
+            self.songs_worker = None
+
+
+
+    def get_artists(self):
+        pass
+
+    def get_albums(self):
+        pass
+
     def on_pl_completed(self, pl_data):
         if self.pl_worker:
             self.pl_worker.mutex.unlock()
         data = pl_data['pl']
-        if data:
+        if data and data['success']:
             files = []
             idx = self.playlist_widget.currentRow()
-            playlist_name = self.playlists[idx]['name']
+            playlist_name = data['name']
             for track in data["playlist"]:
                 files.append(track)
             self.clear_playlist()
@@ -1956,6 +2223,71 @@ class AudioPlayer(QWidget):
             self.pl_worker.deleteLater()
             self.pl_worker = None
 
+    def parse_playlist_file(self, playlist_path):
+        """Parse playlist file and return list of media files with error handling"""
+        try:
+            self.status_bar.showMessage(f"Parsing playlist: {playlist_path}")
+
+            if not os.path.exists(playlist_path):
+                QMessageBox.critical(self,'error', f"Playlist file does not exist: {playlist_path}")
+                return []
+
+            playlist = []
+            playlist_dir = os.path.dirname(playlist_path)
+            line_count = 0
+            try:
+                with open(playlist_path, 'r', encoding='utf-8-sig') as f:
+                    lines = f.readlines()
+            except UnicodeDecodeError:
+                # Try with ANSI encoding if UTF-8 fails
+                try:
+                    with open(playlist_path, 'r', encoding='ANSI') as f:
+                        lines = f.readlines()
+                except UnicodeDecodeError:
+                    try:
+                        # Try to guess the encoding if UTF-8 and ANSI fail
+                        from charset_normalizer import from_path
+                        result = from_path(playlist_path).best()
+                        with open(playlist_path, 'r',
+                                  encoding=result.encoding) as f:
+                            lines = f.readlines()
+                    except Exception as e:
+                        QMessageBox.critical(self,"error", str(e))
+                        return playlist
+
+            for line in lines:
+                line_count += 1
+                try:
+                    line = line.strip()
+                    line = line.strip('.\\')
+                    if not sys.platform.startswith("win"):
+                        line = line.replace("\\", "/")
+                    if line and not line.startswith(('#', '﻿#')):
+                        # Convert relative path to absolute path
+                        if not os.path.isabs(line):
+                            line = os.path.join(playlist_dir, line)
+
+                        if os.path.exists(line):
+                            playlist.append(line)
+                            self.status_bar.showMessage(f"Added to playlist: {line}")
+                        else:
+                            QMessageBox.critical(self,"warning",
+                                f"File not found in playlist (line {line_count}): {line}")
+
+                except Exception as e:
+                    QMessageBox.critical(self,"warning",
+                        f"Error processing playlist line {line_count}: {e}")
+
+            self.status_bar.showMessage(
+                f"Parsed playlist with {len(playlist)} valid files")
+            return playlist
+
+        except Exception as e:
+            QMessageBox.critical(self,"error",
+                                 f"Error parsing playlist {playlist_path}: {e}")
+            return []
+
+
     def play_selected_playlist(self):
         idx = self.playlist_widget.currentRow()
         item = self.playlist_widget.currentItem()
@@ -1963,24 +2295,72 @@ class AudioPlayer(QWidget):
             item_ext = item.text().split('.')[-1]
             if item_ext == 'm3u' or item_ext == 'm3u8' or item_ext == 'cue':
                 playlist_id = self.playlists[idx]['id']
-                self.status_bar.showMessage(
-                    'Loading Playlist from Server. Please Wait, it might take some time...')
-                progress = QProgressBar()
-                progress.setValue(50)
-                self.status_bar.addWidget(progress)
-                self.status_bar.repaint()
+                if self.is_local:
+                    try:
+                        conn = sqlite3.connect('Music.db')
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "SELECT path, PL_name FROM Playlists WHERE id = ?",
+                            (playlist_id,))
+                        playlist_data = cursor.fetchone()
+                        conn.close()
 
-                # Create and configure worker thread
-                self.pl_worker = Worker('pl', f"{self.api_url}/load_playlist/{playlist_id}")
-                self.pl_worker.work_completed.connect(self.on_pl_completed)
-                self.pl_worker.work_error.connect(self.on_pl_error)
-                self.pl_worker.finished.connect(self.cleanup_pl)
+                        if not playlist_data:
+                            QMessageBox.critical(self,'error',
+                                f"Playlist not found: {playlist_id}")
+                            return
 
-                try:
-                    self.pl_worker.start()
-                    self.pl_worker.mutex.lock()
-                except Exception as e:
-                    QMessageBox.critical(self, "Error", str(e))
+                        playlist_path, playlist_name = playlist_data
+                        playlist_files = self.parse_playlist_file(playlist_path)
+
+                        self.status_bar.showMessage(
+                            f"Loaded playlist '{playlist_name}' with {len(playlist_files)} files")
+                        data = {
+                            'success' : True,
+                            'playlist': playlist_files,
+                            'name'    : playlist_name
+                        }
+
+                    except sqlite3.Error as e:
+                        QMessageBox.critical(self,'error',
+                            f"Database error loading playlist {playlist_id}: {e}")
+                        return
+                    except Exception as e:
+                        QMessageBox.critical(self, 'error',
+                            f"Error loading playlist {playlist_id}: {e}")
+                        return
+
+                    if data:
+                        files = []
+                        idx = self.playlist_widget.currentRow()
+                        playlist_name = self.playlists[idx]['name']
+                        for track in data["playlist"]:
+                            files.append(track)
+                        self.clear_playlist()
+                        self.add_files(files)
+                        self.playlist_label.setText(
+                            f"Playlist: {playlist_name}")
+                        self.status_bar.showMessage(
+                            f'Playlist {playlist_name} loaded. Enjoy!')
+                else:
+                    self.status_bar.showMessage(
+                        'Loading Playlist from Server. Please Wait, it might take some time...')
+                    progress = QProgressBar()
+                    progress.setValue(50)
+                    self.status_bar.addWidget(progress)
+                    self.status_bar.repaint()
+
+                    # Create and configure worker thread
+                    self.pl_worker = Worker('pl', f"{self.api_url}/load_playlist/{playlist_id}")
+                    self.pl_worker.work_completed.connect(self.on_pl_completed)
+                    self.pl_worker.work_error.connect(self.on_pl_error)
+                    self.pl_worker.finished.connect(self.cleanup_pl)
+
+                    try:
+                        self.pl_worker.start()
+                        self.pl_worker.mutex.lock()
+                    except Exception as e:
+                        QMessageBox.critical(self, "Error", str(e))
 
     def local_web_ui(self):
         if os.environ.get(f'WERKZEUG_RUN_MAIN') is None:
@@ -2114,6 +2494,8 @@ class Worker(QThread):
                 result = loop.run_until_complete(self.search_async())
             elif self.folder_path == 'meta':
                 result = loop.run_until_complete(self.get_metadata_async())
+            elif self.folder_path == 'song_title':
+                result = loop.run_until_complete(self.get_songs_async())
             elif self.folder_path == 'pl':
                 result = loop.run_until_complete(self.get_pl_async())
             elif self.folder_path == 'server':
@@ -2165,6 +2547,14 @@ class Worker(QThread):
             ) as response:
                 retrieved_playlists =await response.json()
                 result = {'retrieved_playlists': retrieved_playlists}
+                return result
+
+    async def get_songs_async(self):
+        """Async function to get the playlists from server"""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(self.api_url, params={"query": self.folder_path}) as response:
+                retrieved_songs =await response.json()
+                result = {'retrieved_songs': retrieved_songs}
                 return result
 
     async def get_pl_async(self):

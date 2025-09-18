@@ -655,6 +655,49 @@ def get_playlists():
         return jsonify({'error': 'Error retrieving playlists'}), 500
 
 
+@app.route('/get_all')
+def get_all():
+    try:
+        query = request.args.get('query')
+
+        logger.info(f"Getting all {query}s from db")
+
+        if not query:
+            logger.warning("Missing search parameters")
+            return jsonify({'error': 'Missing parameters'}), 400
+
+        conn = sqlite3.connect('Music.db')
+        cursor = conn.cursor()
+        if query == "song_title":
+            selection = "SELECT id, artist, song_title, album, path, file_name FROM Songs ORDER BY artist ASC"
+        else:
+            selection = f"SELECT DISTINCT {query} FROM Songs ORDER BY {query} ASC"
+        cursor.execute(selection)
+        results = cursor.fetchall()
+        conn.close()
+
+        logger.info(f"Retrieved {len(results)} {query}s")
+        if query == "song_title":
+            return jsonify([{
+                'id'      : r[0],
+                'artist'  : r[1],
+                'title'   : r[2],
+                'album'   : r[3],
+                'path'    : r[4],
+                'filename': r[5]
+            } for r in results])
+        else:
+            return jsonify([{query: r[0]} for r in results])
+
+    except sqlite3.Error as e:
+        logger.error(f"Database error getting query: {e}")
+        return jsonify({'error': 'Database error'}), 500
+    except Exception as e:
+        logger.error(f"Error getting query: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': 'Error retrieving query'}), 500
+
+
 @app.route('/load_playlist/<int:playlist_id>')
 def load_playlist(playlist_id):
     try:
