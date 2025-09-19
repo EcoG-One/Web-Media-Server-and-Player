@@ -334,7 +334,7 @@ def scan_for_audio_files(directory):
             return [], []
             
         audio_extensions = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.wma'}
-        playlist_extensions = {'.m3u', '.m3u8', '.pls'}
+        playlist_extensions = {'.m3u', '.m3u8', '.cue'}
 
         audio_files = []
         playlist_files = []

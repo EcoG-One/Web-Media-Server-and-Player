@@ -16,6 +16,7 @@ from mutagen import File
 from mutagen.flac import FLAC
 import traceback
 from pathlib import Path
+from urllib.parse import urlparse
 from random import shuffle
 import re
 import math
@@ -38,6 +39,8 @@ SETTINGS_FILE = APP_DIR / "settings.json"
 # SETTINGS_FILE  = os.path.join(os.path.expanduser('~'), 'Advanced Media Player', 'settings.json')
 # PLAYLISTS_FILE = APP_DIR / "playlists.json"
 wikipedia.set_lang("en")
+audio_extensions = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.wma'}
+playlist_extensions = {'.m3u', '.m3u8', '.cue'}
 
 
 def load_json(path: Path, default):
@@ -136,6 +139,21 @@ class AudioPlayer(QWidget):
         self.load_action = QAction("Load &Playlists", self)
         self.load_action.setShortcut(QKeySequence.Print)
         self.load_action.triggered.connect(self.get_local_playlists)
+        local_menu.addAction(self.load_action)
+
+        self.load_action = QAction("List all &Songs", self)
+        self.load_action.setShortcut(QKeySequence("Ctrl+S"))
+        self.load_action.triggered.connect(self.get_local_songs)
+        local_menu.addAction(self.load_action)
+
+        self.load_action = QAction("List all &Artists", self)
+        self.load_action.setShortcut(QKeySequence("Ctrl+A"))
+        self.load_action.triggered.connect(self.get_local_artists)
+        local_menu.addAction(self.load_action)
+
+        self.load_action = QAction("List all Al&bums", self)
+        self.load_action.setShortcut(QKeySequence("Ctrl+B"))
+        self.load_action.triggered.connect(self.get_local_albums)
         local_menu.addAction(self.load_action)
 
         self.scan_action = QAction("Scan &Library", self)
@@ -1074,16 +1092,20 @@ class AudioPlayer(QWidget):
         if 0 <= idx < len(self.playlist):
             path = self.playlist[idx]
             if path == "None":
-                return
+                idx += 1
+                if 0 <= idx < len(self.playlist):
+                    path = self.playlist[idx]
+                else:
+                    return
             self.current_index = idx
-            # Use the new get_media_source logic
             if self.is_remote_file(path) and not self.is_local:
-                abs_path = path.split('5000/')[1]
-                if self.remote_base == None:
-                    self.remote_base = path.split('5000/')[0] + '5000/'
-                media_url = f"{self.remote_base}/serve_audio/{abs_path}"
+                parsed = urlparse(path)
+                if self.remote_base is None:
+                    self.remote_base = f"{parsed.scheme}://{parsed.netloc}"
+                media_url = f"{self.remote_base}/serve_audio/{parsed.path}"
             else:
                 media_url = self.get_media_source(path)
+
             self.player.setSource(media_url)
             self.slider.setValue(0)
           #  self.update_metadata(idx)
@@ -1153,7 +1175,7 @@ class AudioPlayer(QWidget):
     def add_files(self, files):
         for f in files:
             if os.path.isfile(f):
-                ext = os.path.splitext(f)[1].lower()
+                ext = Path(f).suffix.lower()
                 if ext in ['.m3u', '.m3u8']:
                     pl = self.load_m3u_playlist(f)
                     self.playlist += pl
@@ -1170,23 +1192,16 @@ class AudioPlayer(QWidget):
                     self.playlist_label.setText(
                         f'Playlist: {os.path.basename(f)}')
                 else:
-                    audio = File(f)
-                    if audio:
-                            self.playlist.append(f)
-                            item = QListWidgetItem(os.path.basename(f))
-                            self.playlist_widget.addItem(item)
-            elif f.startswith("http"):
-                # Support adding remote URLs directly
-                self.playlist.append(f)
-                item = QListWidgetItem(os.path.basename(f))
-                self.playlist_widget.addItem(item)
-            elif self.remote_base:
+                    if ext in audio_extensions:
+                        self.playlist.append(f)
+                        item = QListWidgetItem(os.path.basename(f))
+                        self.playlist_widget.addItem(item)
+            elif self.remote_base and not self.is_local:
                 # If remote base is set, treat as filename on remote
                 remote_url = f"{self.remote_base}/{f}"
                 self.playlist.append(remote_url)
-                if not self.is_local:
-                    item = QListWidgetItem(os.path.basename(f))
-                    self.playlist_widget.addItem(item)
+                item = QListWidgetItem(os.path.basename(f))
+                self.playlist_widget.addItem(item)
             if self.current_index == -1 and self.playlist:
                 self.load_track(0)
         self.status_bar.clearMessage()
@@ -1344,7 +1359,7 @@ class AudioPlayer(QWidget):
         self.update_play_button()
 
     def is_remote_file(self, path):
-        return self.remote_base and (not os.path.isfile(path) or path.startswith("http"))
+        return self.remote_base and (not os.path.isfile(path))
 
     def set_album_art(self, path):
         """
@@ -2108,11 +2123,63 @@ class AudioPlayer(QWidget):
             self.playlists_worker.deleteLater()
             self.playlists_worker = None
 
+    def get_local_songs(self):
+        self.get_local("song_title")
+
+    def get_local_artists(self):
+        self.get_local("artist")
+
+    def get_local_albums(self):
+        self.get_local("album")
+
+    def get_local(self, query):
+        self.playlist_label.setText('Getting local song list')
+        self.status_bar.showMessage(
+            'Getting local song list. Please Wait, it might take some time...')
+        self.status_bar.repaint()
+        progress = QProgressBar()
+        progress.setValue(50)
+        self.status_bar.addWidget(progress)
+        self.status_bar.repaint()
+        self.playlist_widget.clear()
+        self.playlist.clear()
+        self.is_local = True
+        try:
+            conn = sqlite3.connect('Music.db')
+            cursor = conn.cursor()
+            if query == "song_title":
+                selection = "SELECT id, artist, song_title, album, path, file_name FROM Songs ORDER BY artist ASC"
+            else:
+                selection = f"SELECT DISTINCT {query} FROM Songs ORDER BY {query} ASC"
+            cursor.execute(selection)
+            results = cursor.fetchall()
+            conn.close()
+
+            self.status_bar.showMessage(f"Retrieved {len(results)} {query}s")
+            if query == "song_title":
+                retrieved_songs = ([{
+                    'id'      : r[0],
+                    'artist'  : r[1],
+                    'title'   : r[2],
+                    'album'   : r[3],
+                    'path'    : r[4],
+                    'filename': r[5]
+                } for r in results])
+                self.receive_songs({'retrieved_songs': retrieved_songs})
+            else:
+                retrieved = [{query: r[0]} for r in results]
+                return {'retrieved': retrieved}
+
+        except sqlite3.Error as e:
+            QMessageBox.critical(self, "Error",f"Database error getting query: {str(e)}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error",f"Error getting query: {str(e)}")
+
 
     def get_songs(self):
         self.playlist_label.setText('Getting song list from Server')
         self.status_bar.showMessage(
-            'Getting song list  from Server. Please Wait, it might take some time...')
+            'Getting song list from Server. Please Wait, it might take some time...')
         self.status_bar.repaint()
         progress = QProgressBar()
         progress.setValue(50)
@@ -2156,8 +2223,6 @@ class AudioPlayer(QWidget):
             self.add_files(files)
             self.status_bar.showMessage(
                 'Songs list loaded. Enjoy!')
-
-
         except Exception as e:
             self.status_bar.clearMessage()
             QMessageBox.critical(self, "Error",
@@ -2182,7 +2247,21 @@ class AudioPlayer(QWidget):
             self.songs_worker.deleteLater()
             self.songs_worker = None
 
-
+    def list_files(self, files):
+        for f in files:
+            if self.is_local:
+                self.playlist.append(f)
+                item = QListWidgetItem(os.path.basename(f))
+                self.playlist_widget.addItem(item)
+            elif self.remote_base:
+                # If remote base is set, treat as filename on remote
+                remote_url = f"{self.remote_base}/{f}"
+                self.playlist.append(remote_url)
+                item = QListWidgetItem(os.path.basename(f))
+                self.playlist_widget.addItem(item)
+            if self.current_index == -1 and self.playlist:
+                self.load_track(0)
+        self.status_bar.clearMessage()
 
     def get_artists(self):
         pass
