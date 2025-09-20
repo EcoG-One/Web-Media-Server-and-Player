@@ -670,8 +670,10 @@ def get_all():
         cursor = conn.cursor()
         if query == "song_title":
             selection = "SELECT id, artist, song_title, album, path, file_name FROM Songs ORDER BY artist ASC"
+        elif query == "artist":
+            selection = f"SELECT DISTINCT artist FROM Songs ORDER BY artist ASC"
         else:
-            selection = f"SELECT DISTINCT {query} FROM Songs ORDER BY {query} ASC"
+            selection = f"SELECT DISTINCT album, artist FROM Songs ORDER BY artist ASC"
         cursor.execute(selection)
         results = cursor.fetchall()
         conn.close()
@@ -686,8 +688,14 @@ def get_all():
                 'path'    : r[4],
                 'filename': r[5]
             } for r in results])
-        else:
+        elif query == "artist":
             return jsonify([{query: r[0]} for r in results])
+        else:
+            albums = {}
+            for album in results:
+                if not album[0] in albums.keys():
+                    albums[album[0]] = album[1]
+            return jsonify([{query: r} for r in albums.items()])
 
     except sqlite3.Error as e:
         logger.error(f"Database error getting query: {e}")

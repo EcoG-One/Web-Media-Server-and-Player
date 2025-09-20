@@ -276,7 +276,8 @@ class AudioPlayer(QWidget):
         shuffle_box = QHBoxLayout()
         self.playlist_widget = QListWidget()
         self.playlist_widget.setStyleSheet(
-            "font-size: 12px; background-color: lightyellow; opacity: 0.6; border-color: #D4D378; border-width: 2px; border-style: inset;")
+            "font-size: 12px; background-color: lightyellow; opacity: 0.6; "
+            "border-color: #D4D378; border-width: 2px; border-style: inset;")
         self.playlist_label = QLabel("Playlist")
         self.btn_shuffle = QPushButton("Shuffle")
         self.btn_shuffle.setFixedSize(QSize(60, 26))
@@ -1192,7 +1193,7 @@ class AudioPlayer(QWidget):
                     self.playlist_label.setText(
                         f'Playlist: {os.path.basename(f)}')
                 else:
-                    if ext in audio_extensions:
+                    if ext in audio_extensions or f == 'artist' or f == 'album':
                         self.playlist.append(f)
                         item = QListWidgetItem(os.path.basename(f))
                         self.playlist_widget.addItem(item)
@@ -1202,7 +1203,7 @@ class AudioPlayer(QWidget):
                 self.playlist.append(remote_url)
                 item = QListWidgetItem(os.path.basename(f))
                 self.playlist_widget.addItem(item)
-            if self.current_index == -1 and self.playlist:
+            if self.current_index == -1 and self.playlist and not f in ('artist', 'album'):
                 self.load_track(0)
         self.status_bar.clearMessage()
 
@@ -1318,6 +1319,9 @@ class AudioPlayer(QWidget):
     def show_playlist_context_menu(self, pos):
         from PySide6.QtWidgets import QMenu
         menu = QMenu(self.playlist_widget)
+        menu.setStyleSheet(
+            "background-color: lightGrey; border-color: darkGray; "
+            "border-width: 2px; border-style: outset;")
         scan_action = menu.addAction("Scan Library")
         get_action = menu.addAction("Load Playlists")
         add_action = menu.addAction("Add Files")
@@ -2049,6 +2053,7 @@ class AudioPlayer(QWidget):
        # return jsonify([{'id': p[0], 'name': p[1]} for p in playlists])
 
         try:
+            self.is_local = True
             for item in playlists:
                 self.playlists.append({'id': item[0], 'name': item[1]})
                 self.playlist_widget.addItem(item[1])
@@ -2093,6 +2098,7 @@ class AudioPlayer(QWidget):
         self.status_bar.repaint()
 
         try:
+            self.is_local = False
             self.playlists = data['retrieved_playlists']
             for item in self.playlists:
                 self.playlist_widget.addItem(item['name'])
@@ -2131,10 +2137,11 @@ class AudioPlayer(QWidget):
         self.get_local("album")
 
     def get_local(self, query):
+        self.is_local = True
         self.playlist_label.setText('Getting local song list')
         self.status_bar.showMessage(
             'Getting local song list. Please Wait, it might take some time...')
-        self.status_bar.repaint()
+    #    self.status_bar.repaint()
         progress = QProgressBar()
         progress.setValue(50)
         self.status_bar.addWidget(progress)
@@ -2146,15 +2153,17 @@ class AudioPlayer(QWidget):
             cursor = conn.cursor()
             if query == "song_title":
                 selection = "SELECT id, artist, song_title, album, path, file_name FROM Songs ORDER BY artist ASC"
+            elif query == "artist":
+                selection = f"SELECT DISTINCT artist FROM Songs ORDER BY artist ASC"
             else:
-                selection = f"SELECT DISTINCT {query} FROM Songs ORDER BY {query} ASC"
+                selection = f"SELECT DISTINCT album, artist FROM Songs ORDER BY artist ASC"
             cursor.execute(selection)
             results = cursor.fetchall()
             conn.close()
 
-            self.status_bar.showMessage(f"Retrieved {len(results)} {query}s")
+            self.status_bar.showMessage(f"Retrieved {len(results)} {query}s. Creating {query} list.")
             if query == "song_title":
-                retrieved_songs = ([{
+                retrieved = ([{
                     'id'      : r[0],
                     'artist'  : r[1],
                     'title'   : r[2],
@@ -2162,10 +2171,15 @@ class AudioPlayer(QWidget):
                     'path'    : r[4],
                     'filename': r[5]
                 } for r in results])
-                self.receive_songs({'retrieved_songs': retrieved_songs})
-            else:
+            elif query == "artist":
                 retrieved = [{query: r[0]} for r in results]
-                return {'retrieved': retrieved}
+            else:
+                albums = {}
+                for album in results:
+                    if not album[0] in albums.keys():
+                        albums[album[0]] = album[1]
+                retrieved = [{query: r} for r in albums.items()]
+            self.receive_list({'retrieved': retrieved})
 
         except sqlite3.Error as e:
             QMessageBox.critical(self, "Error",f"Database error getting query: {str(e)}")
@@ -2173,10 +2187,12 @@ class AudioPlayer(QWidget):
             QMessageBox.critical(self, "Error",f"Error getting query: {str(e)}")
 
 
-    def get_songs(self):
-        self.playlist_label.setText('Getting song list from Server')
+    def get_list(self, query):
+        self.is_local = False
+        self.playlist_label.setText(f'Getting {query} list from Server')
         self.status_bar.showMessage(
-            'Getting song list from Server. Please Wait, it might take some time...')
+            f'Getting {query} list from Server. Please Wait, it might take '
+            'some time...')
         self.status_bar.repaint()
         progress = QProgressBar()
         progress.setValue(50)
@@ -2184,8 +2200,8 @@ class AudioPlayer(QWidget):
         self.status_bar.repaint()
         self.playlist_widget.clear()
         self.playlist.clear()
-        self.songs_worker = Worker("song_title", f'{self.api_url}/get_all')
-        self.songs_worker.work_completed.connect(self.receive_songs)
+        self.songs_worker = Worker(query, f'{self.api_url}/get_all')
+        self.songs_worker.work_completed.connect(self.receive_list)
         self.songs_worker.work_error.connect(self.on_songs_error)
         self.songs_worker.finished.connect(self.cleanup_songs)
 
@@ -2196,7 +2212,7 @@ class AudioPlayer(QWidget):
 
 
     @Slot(dict)
-    def receive_songs(self, data: dict):
+    def receive_list(self, data: dict):
         """Handle successful playlist retrieval completion"""
         if self.songs_worker:
             self.songs_worker.mutex.unlock()
@@ -2207,10 +2223,18 @@ class AudioPlayer(QWidget):
         try:
             self.clear_playlist()
             files = []
-            self.songs = data['retrieved_songs']
+            item = None
+            self.songs = data['retrieved']
             for song in self.songs:
-                files.append(song["path"])
-                item = f"{song['artist']} - {song['title']} ({song['album']})"
+                if "path" in song.keys():
+                    files.append(song["path"])
+                    item = f"{song['artist']} - {song['title']} ({song['album']})"
+                elif "artist" in song.keys():
+                    files.append("artist")
+                    item = song['artist']
+                elif "album" in song.keys():
+                    files.append("album")
+                    item = f"{song['album'][1]} - {song['album'][0]}"
                 self.playlist_widget.addItem(item)
 
             self.playlist_label.setText('Songs List: ')
@@ -2218,7 +2242,7 @@ class AudioPlayer(QWidget):
 
             self.add_files(files)
             self.status_bar.showMessage(
-                'Songs list loaded. Enjoy!')
+                'List loaded. Enjoy!')
         except Exception as e:
             self.status_bar.clearMessage()
             QMessageBox.critical(self, "Error",
@@ -2243,12 +2267,14 @@ class AudioPlayer(QWidget):
             self.songs_worker.deleteLater()
             self.songs_worker = None
 
+    def get_songs(self):
+        self.get_list("song_title")
 
     def get_artists(self):
-        pass
+        self.get_list("artist")
 
     def get_albums(self):
-        pass
+        self.get_list("album")
 
     def on_pl_completed(self, pl_data):
         if self.pl_worker:
@@ -2352,13 +2378,20 @@ class AudioPlayer(QWidget):
         idx = self.playlist_widget.currentRow()
         item = self.playlist_widget.currentItem()
         if item is not None:
-            path = item.text()
-            item_ext = Path(path).suffix
-            if item_ext in audio_extensions:
+            item_ext = Path(item.text()).suffix
+            if item_ext == '':
+                if self.playlist[idx].endswith('artist'):
+                    self.search_tracks('artist', item.text())
+                    return
+                if self.playlist[idx].endswith('album'):
+                    dash = item.text().find(' - ')
+                    self.search_tracks('album', item.text()[dash+3:])
+                    return
+            elif item_ext in audio_extensions:
                 self.play_selected_track(item)
-            if item_ext in playlist_extensions:
+            elif item_ext in playlist_extensions:
                 playlist_id = self.playlists[idx]['id']
-                if self.is_local_file(path):
+                if self.is_local:
                     try:
                         conn = sqlite3.connect('Music.db')
                         cursor = conn.cursor()
@@ -2424,6 +2457,9 @@ class AudioPlayer(QWidget):
                         self.pl_worker.mutex.lock()
                     except Exception as e:
                         QMessageBox.critical(self, "Error", str(e))
+
+            else:
+                return
 
     def local_web_ui(self):
         if os.environ.get(f'WERKZEUG_RUN_MAIN') is None:
@@ -2557,7 +2593,7 @@ class Worker(QThread):
                 result = loop.run_until_complete(self.search_async())
             elif self.folder_path == 'meta':
                 result = loop.run_until_complete(self.get_metadata_async())
-            elif self.folder_path == 'song_title':
+            elif self.folder_path in {'song_title', 'artist', 'album'}:
                 result = loop.run_until_complete(self.get_songs_async())
             elif self.folder_path == 'pl':
                 result = loop.run_until_complete(self.get_pl_async())
@@ -2616,8 +2652,8 @@ class Worker(QThread):
         """Async function to get the playlists from server"""
         async with aiohttp.ClientSession() as session:
             async with session.get(self.api_url, params={"query": self.folder_path}) as response:
-                retrieved_songs =await response.json()
-                result = {'retrieved_songs': retrieved_songs}
+                retrieved =await response.json()
+                result = {'retrieved': retrieved}
                 return result
 
     async def get_pl_async(self):
