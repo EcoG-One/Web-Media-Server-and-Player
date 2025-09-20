@@ -129,7 +129,7 @@ class AudioPlayer(QWidget):
 
         self.open_action = QAction("&Open Playlist | Add Songs", self)
         self.open_action.setShortcut(QKeySequence.Open)
-        self.open_action.setToolTip("Add Songs and/or Playlists to playing cue")
+        self.open_action.setToolTip("Add Songs/folders and/or Playlists to playing cue")
         self.open_action.triggered.connect(self.show_playlist_menu)
         local_menu.addAction(self.open_action)
 
@@ -278,7 +278,7 @@ class AudioPlayer(QWidget):
         self.playlist_widget.setStyleSheet(
             "font-size: 12px; background-color: lightyellow; opacity: 0.6; "
             "border-color: #D4D378; border-width: 2px; border-style: inset;")
-        self.playlist_label = QLabel("Playlist")
+        self.playlist_label = QLabel("Cue:")
         self.btn_shuffle = QPushButton("Shuffle")
         self.btn_shuffle.setFixedSize(QSize(60, 26))
         self.playlist_widget.setDragDropMode(QListWidget.InternalMove)
@@ -866,6 +866,7 @@ class AudioPlayer(QWidget):
     def on_search_completed(self, result):
         if self.search_worker:
             self.search_worker.mutex.unlock()
+        self.status_bar.clearMessage()
         data = result["search_result"]
         if "error" in data:
             QMessageBox.critical(self, "Error", data["error"])
@@ -1098,7 +1099,7 @@ class AudioPlayer(QWidget):
             self.current_index = idx
        #     if self.is_remote_file(path):
             parsed = urlparse(path)
-            if parsed.netloc:
+            if parsed.netloc and parsed.port:
                # if self.remote_base is None:
                 self.remote_base = f"{parsed.scheme}://{parsed.netloc}"
                 media_url = f"{self.remote_base}/serve_audio/{parsed.path}"
@@ -1197,6 +1198,8 @@ class AudioPlayer(QWidget):
                         self.playlist.append(f)
                         item = QListWidgetItem(os.path.basename(f))
                         self.playlist_widget.addItem(item)
+            elif os.path.isdir(f):
+                self.load_dir(f)
             elif self.remote_base:
                 # If remote base is set, treat as filename on remote
                 remote_url = f"{self.remote_base}/{f}"
@@ -1251,6 +1254,31 @@ class AudioPlayer(QWidget):
                             os.path.join(os.path.dirname(path), file_path))
                     tracks.append(file_path)
         return tracks
+
+
+    def load_dir(self, directory):
+        audio_files = []
+        scan_errors = 0
+
+        for root, dirs, files in os.walk(directory):
+            for file in files:
+                try:
+                    file_path = os.path.join(root, file)
+                    file_ext = Path(file).suffix.lower()
+
+                    if file_ext in audio_extensions or file_ext in playlist_extensions:
+                        audio_files.append(file_path)
+
+                except Exception as e:
+                    QMessageBox.critical(self, "Error!", f"Error processing file {file}: {e}")
+                    scan_errors += 1
+
+        self.status_bar.showMessage(
+            f"Scan complete. Found {len(audio_files)} files ")
+        if scan_errors > 0:
+            QMessageBox.critical(self, "Error!", f"Encountered {scan_errors} errors during directory scanning")
+
+        self.add_files(audio_files)
 
 
     def add_albums(self, albums):
@@ -2235,7 +2263,7 @@ class AudioPlayer(QWidget):
                 elif "album" in song.keys():
                     files.append("album")
                     item = f"{song['album'][1]} - {song['album'][0]}"
-                self.playlist_widget.addItem(item)
+             #   self.playlist_widget.addItem(item)
 
             self.playlist_label.setText('Songs List: ')
             self.status_bar.clearMessage()
