@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw
 from fuzzywuzzy import fuzz, process
 import webbrowser
 import signal
-import shutil
+# import shutil
 from plyer import notification
 from dotenv import load_dotenv
 
@@ -24,6 +24,8 @@ app = Flask(__name__)
 load_dotenv()
 secret_key = os.getenv("SECRET_KEY")
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
+DB_PATH = 'music.db'
+MUSIC_DIR = ''
 
 
 def run_flask():
@@ -103,7 +105,8 @@ SETTINGS = {
     'crossfade_time': 4,
     'fade_in'       : 0
 }
-
+audio_extensions = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.wma'}
+playlist_extensions = {'.m3u', '.m3u8', '.cue'}
 
 # Database initialization
 def init_database():
@@ -332,9 +335,6 @@ def scan_for_audio_files(directory):
         if not os.path.isdir(directory):
             logger.error(f"Path is not a directory: {directory}")
             return [], []
-            
-        audio_extensions = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.wma'}
-        playlist_extensions = {'.m3u', '.m3u8', '.cue'}
 
         audio_files = []
         playlist_files = []
@@ -430,6 +430,58 @@ def add_songs_to_database(audio_files):
         return 0
 
 
+def delete_missing_songs():
+    """Delete missing audio files to database with error handling"""
+    try:
+        logger.info(f"Deleting missing audio files from database")
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        deleted_songs = 0
+        errors = 0
+
+        # 1. Get all paths and IDs from the database
+        cursor.execute("SELECT id, path FROM Songs")
+        db_songs = cursor.fetchall()
+
+        # 2. Check existence for each song
+        songs_to_delete = []
+        for song_id, path in db_songs:
+            if not os.path.exists(path):
+                songs_to_delete.append(song_id)
+                logger.debug(f"File deleted externally, removing from DB: {path}")
+                deleted_songs += 1
+
+            # 3. Perform the deletion (if any)
+        if songs_to_delete:
+            try:
+                # The '?' allows safe parameter passing for multiple values
+                placeholders = ', '.join(['?'] * len(songs_to_delete))
+                sql = f"DELETE FROM Songs WHERE id IN ({placeholders})"
+                cursor.execute(sql, songs_to_delete)
+            except sqlite3.Error as e:
+                logger.error(f"Database error deleting songs from db: {e}")
+                errors += 1
+            except Exception as e:
+                logger.error(f"Unexpected error deleting songs from db: {e}")
+                errors += 1
+
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Successfully deleted {deleted_songs} songs from database")
+        if errors > 0:
+            logger.warning(f"Encountered {errors} errors while deleting songs")
+
+        return deleted_songs
+
+    except Exception as e:
+        logger.error(f"Error deleting songs from database: {e}")
+        logger.error(traceback.format_exc())
+        return 0
+
+# delete_missing_songs()
+
+
 def add_playlists_to_database(playlist_files):
     """Add playlist files to database with error handling"""
     try:
@@ -476,6 +528,58 @@ def add_playlists_to_database(playlist_files):
         logger.error(f"Error adding playlists to database: {e}")
         logger.error(traceback.format_exc())
         return 0
+
+
+def delete_missing_playlists():
+    """Delete missing audio files to database with error handling"""
+    try:
+        logger.info(f"Deleting missing playlists from database")
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        deleted_playlists = 0
+        errors = 0
+
+        # 1. Get all paths and IDs from the database
+        cursor.execute("SELECT id, path FROM Playlists")
+        db_playlists = cursor.fetchall()
+
+        # 2. Check existence for each song
+        playlists_to_delete = []
+        for playlist_id, path in db_playlists:
+            if not os.path.exists(path):
+                playlists_to_delete.append(playlist_id)
+                logger.debug(f"Playlist deleted externally, removing from DB: {path}")
+                deleted_playlists += 1
+
+        # 3. Perform the deletion (if any)
+        if playlists_to_delete:
+            try:
+                # The '?' allows safe parameter passing for multiple values
+                placeholders = ', '.join(['?'] * len(playlists_to_delete))
+                sql = f"DELETE FROM Playlists WHERE id IN ({placeholders})"
+                cursor.execute(sql, playlists_to_delete)
+            except sqlite3.Error as e:
+                logger.error(f"Database error deleting playlists from db: {e}")
+                errors += 1
+            except Exception as e:
+                logger.error(f"Unexpected error deleting playlists from db: {e}")
+                errors += 1
+
+        conn.commit()
+        conn.close()
+
+        logger.info(
+            f"Successfully deleted {deleted_playlists} playlists from database")
+        if errors > 0:
+            logger.warning(f"Encountered {errors} errors while deleting playlists")
+
+        return deleted_playlists
+
+    except Exception as e:
+        logger.error(f"Error deleting playlists from database: {e}")
+        logger.error(traceback.format_exc())
+        return 0
+
 
 
 def is_localhost(request):
@@ -586,15 +690,21 @@ def index():
 @app.route('/scan_library', methods=['POST'])
 def scan_library():
     try:
+        folder_path = None
         data = request.get_json()
         if data:
-            folder_path = data
+            folder_path = data['folder_path']
             logger.info(f"Received folder: {folder_path}")
         if folder_path == None:
             # Run openfile.py (or openfile.exe if app will be converted to
             # windows executable) to select music library folder
-           # result = subprocess.run(['python', 'openfile.py'], capture_output=True, text=True)
-            result = subprocess.run(["openfile.exe"], capture_output=True, text=True, timeout=50)
+            if sys.platform.startswith("win"):
+                result = subprocess.run(["openfile.exe"], capture_output=True, text=True, timeout=50)
+            elif sys.platform == "darwin":
+                result = subprocess.run(['python', 'openfile.py'], capture_output=True, text=True)
+            else:
+                result = subprocess.run(['python', 'openfile.py'], capture_output=True, text=True)
+
             folder_path = result.stdout.strip("\n")
 
             logger.info(f"Selected folder: {folder_path}")
@@ -630,6 +740,61 @@ def scan_library():
         logger.error(f"Error during library scan: {e}")
         logger.error(traceback.format_exc())
         return jsonify({'error': str(e)})
+
+
+@app.route('/purge_library', methods=['POST'])
+def purge_library():
+    try:
+        folder_path = None
+        data = request.get_json()
+        if data:
+            folder_path = data['folder_path']
+            logger.info(f"Received folder: {folder_path}")
+        if folder_path == None:
+            # Run openfile.py (or openfile.exe if app will be converted to
+            # windows executable) to select music library folder
+            if sys.platform.startswith("win"):
+                result = subprocess.run(["openfile.exe"], capture_output=True, text=True, timeout=50)
+            elif sys.platform == "darwin":
+                result = subprocess.run(['python', 'openfile.py'], capture_output=True, text=True)
+            else:
+                result = subprocess.run(['python', 'openfile.py'], capture_output=True, text=True)
+
+            folder_path = result.stdout.strip("\n")
+
+            logger.info(f"Selected folder: {folder_path}")
+
+            if not folder_path or folder_path == "No file selected.":
+                logger.warning("No folder selected for scanning")
+                return jsonify({'error': 'No folder selected'})
+
+            if not os.path.isdir(folder_path):
+                logger.error(f"Invalid folder path: {folder_path}")
+                return jsonify({'error': 'Invalid folder path'})
+    except subprocess.TimeoutExpired:
+            logger.error("Timeout waiting for folder selection")
+            return jsonify({'error': 'Timeout waiting for folder selection'})
+    try:
+        # Check audio files and playlists
+        logger.info("Starting library Purge")
+
+        # Delete from database
+        deleted_songs = delete_missing_songs()
+        deleted_playlists = delete_missing_playlists()
+
+        success_msg = f'Successfully deleted {deleted_songs} songs and {deleted_playlists} playlists from the database.'
+        logger.info(success_msg)
+
+        return jsonify({
+            'success': True,
+            'message': success_msg
+        })
+
+    except Exception as e:
+        logger.error(f"Error during library purge: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)})
+
 
 
 @app.route('/get_playlists')
@@ -912,7 +1077,7 @@ def desk_ui():
     except Exception as e:
         logger.error(f"Error launching Desktop Interface: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': 'Error launching Desktop Interface'}), 500
+        return f"Error launching Desktop Interface: {str(e)}"
 
 
 def shutdown_server():
@@ -965,7 +1130,7 @@ def open_browser(icon, item):
 
 def open_player():
     try:
-        subprocess.run(["advanced_audio_player.exe"], timeout=3)
+        subprocess.run(["advanced_audio_player.exe"], timeout=5)
         show_notification("Success", "Desktop Player/Client Lunched Successfully")
     except Exception as e:
         show_notification("Error!", f"Error launching Desktop Interface: {str(e)}")

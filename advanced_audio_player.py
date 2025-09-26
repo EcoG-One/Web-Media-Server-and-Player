@@ -14,10 +14,9 @@ from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 import mutagen
 from mutagen import File
 from mutagen.flac import FLAC
-import traceback
 from pathlib import Path
 from random import shuffle
-import itertools
+# import itertools
 import re
 import math
 from enum import Enum
@@ -29,10 +28,10 @@ import base64
 import webbrowser
 import wikipedia
 from dotenv import load_dotenv
-from sqlalchemy.orm import remote
-from transformers.utils import is_remote_url
+#  from sqlalchemy.orm import remote
+# from transformers.utils import is_remote_url
 
-from ecoserver import is_localhost
+# from ecoserver import is_localhost
 
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
@@ -41,6 +40,8 @@ APP_DIR.mkdir(exist_ok=True)
 SETTINGS_FILE = APP_DIR / "settings.json"
 # SETTINGS_FILE  = os.path.join(os.path.expanduser('~'), 'Advanced Media Player', 'settings.json')
 # PLAYLISTS_FILE = APP_DIR / "playlists.json"
+DB_PATH = 'music.db'
+MUSIC_DIR = ''
 wikipedia.set_lang("en")
 audio_extensions = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.wma'}
 playlist_extensions = {'.m3u', '.m3u8', '.cue'}
@@ -58,7 +59,6 @@ def load_json(path: Path, default):
 def save_json(path: Path, obj):
     try:
         path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
-        print(path)
     except Exception as e:
         QMessageBox.warning(w, "Error!", str(e))
 
@@ -86,7 +86,7 @@ class ItemType(Enum):
     def set_item_type(item_type):
         if not isinstance(item_type, ItemType):
             raise ValueError("Invalid status value")
-        print(f"Status set to: {item_type.value}")
+        w.status_bar.showMessage(f"Status set to: {item_type.value}")
 
 class ListItem:
     def __init__(self):
@@ -121,6 +121,7 @@ class AudioPlayer(QWidget):
         super().__init__()
 
         # data
+        self.purge_worker = None
         self.is_local = None
         self.server_worker = None
         self.songs = None
@@ -199,6 +200,11 @@ class AudioPlayer(QWidget):
         self.scan_action.triggered.connect(self.scan_library)
         local_menu.addAction(self.scan_action)
 
+        self.purge_action = QAction("P&urge Library", self)
+        self.purge_action.setShortcut(QKeySequence("Ctrl+U"))
+        self.purge_action.triggered.connect(self.purge_library)
+        local_menu.addAction(self.purge_action)
+
         self.save_action = QAction("&Save Current Queue", self)
         self.save_action.setShortcut(QKeySequence.Save)
         self.save_action.triggered.connect(self.save_current_playlist)
@@ -260,6 +266,11 @@ class AudioPlayer(QWidget):
         self.scan_action .triggered.connect(self.scan_remote_library)
         remote_menu.addAction(self.scan_action )
 
+        self.purge_action = QAction("P&urge Library", self)
+        self.purge_action.setShortcut(QKeySequence("Ctrl+U"))
+        self.purge_action.triggered.connect(self.purge_remote_library)
+        remote_menu.addAction(self.purge_action)
+
         self.web_action = QAction("Launch &Web UI", self)
         self.web_action.setShortcut(QKeySequence("Ctrl+I"))
         self.web_action.triggered.connect(self.remote_web_ui)
@@ -286,6 +297,10 @@ class AudioPlayer(QWidget):
         help_menu = QMenu("&Help", self)
         menubar.addMenu(help_menu)
 
+        self.instructions_action = QAction("&Instructions", self)
+        self.instructions_action.triggered.connect(self.show_instructions)
+        help_menu.addAction(self.instructions_action)
+
         self.about_action = QAction("&About", self)
         self.about_action.triggered.connect(self.show_about_dialog)
         help_menu.addAction(self.about_action)
@@ -305,7 +320,7 @@ class AudioPlayer(QWidget):
         self.combo = QComboBox()
         self.combo.addItems(["artist", "song_title", "album"])
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search Server for Artist or Song, or Album…")
+        self.search.setPlaceholderText("Search for Artist, Song, or Album…")
         self.btn_local = QPushButton("Search Local")
         self.btn_go = QPushButton("Search Server")
         top.addWidget(self.combo)
@@ -578,7 +593,7 @@ class AudioPlayer(QWidget):
      #   status_code = data['status']
         if data['status'] == 200:
             self.server = data['API_URL']
-            self.remote_base = f'http://{self.server}:5000'
+            self.api_url = self.remote_base = f'http://{self.server}:5000'
             self.setWindowTitle(
                 f"Ultimate Media Player. Current Server: {self.api_url}")
             self.status_bar.showMessage(
@@ -679,6 +694,8 @@ class AudioPlayer(QWidget):
             self.scan_worker.mutex.unlock()
         if 'error' in data:
             QMessageBox.warning(self, "Scan Error", data['error'])
+        elif 'answer' in data:
+            QMessageBox.warning(self, "Scan Error", data['answer']['error'])
         else:
             QMessageBox.information(self, "Success", data['message'])
         self.status_bar.repaint()
@@ -699,6 +716,72 @@ class AudioPlayer(QWidget):
         if self.scan_worker:
             self.scan_worker.deleteLater()
             self.scan_worker = None
+
+
+    def purge_remote_library(self):
+        """async purge remote library"""
+
+        # Get folder path from user input
+        folder_path, ok = QInputDialog.getText(
+            self,
+            "Input",
+            "Enter the Remote Absolute Path of Folder to Purge:",
+            QLineEdit.Normal,
+            ""
+        )
+
+        if not (ok and folder_path):
+            return
+
+        # Update status bar and show progress
+        self.status_bar.showMessage(
+            'Scanning your Music Library for deleted files. Please Wait, it might take some time depending on the library size'
+        )
+
+        # Create and configure progress bar
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)  # Indeterminate progress
+        self.status_bar.addWidget(self.progress)
+        self.status_bar.repaint()
+
+        # Create and configure worker thread
+        self.purge_worker = Worker(("purge", folder_path), self.api_url)
+        self.purge_worker.work_completed.connect(self.on_purge_completed)
+        self.purge_worker.work_error.connect(self.on_purge_error)
+        self.purge_worker.finished.connect(self.cleanup_purge)
+
+        # Start the async operation
+        self.purge_worker.start()
+        self.purge_worker.mutex.lock()
+
+    def on_purge_completed(self, data):
+        """Handle successful Purge completion"""
+        if self.purge_worker:
+            self.purge_worker.mutex.unlock()
+        if 'error' in data:
+            QMessageBox.warning(self, "Purge Error", data['error'])
+        elif 'answer' in data:
+            QMessageBox.warning(self, "Purge Error", data['answer']['error'])
+        else:
+            QMessageBox.information(self, "Success", data['message'])
+        self.status_bar.repaint()
+
+    def on_purge_error(self, error_message):
+        """Handle Purge error"""
+        QMessageBox.critical(self, "Error", error_message)
+        self.status_bar.repaint()
+
+    def cleanup_purge(self):
+        """Clean up after Purge completion"""
+        # Remove progress bar and clear status
+        if self.progress:
+            self.status_bar.removeWidget(self.progress)
+        self.status_bar.clearMessage()
+
+        # Clean up worker reference
+        if self.purge_worker:
+            self.purge_worker.deleteLater()
+            self.purge_worker = None
 
     def shutdown_local_server(self):
         try:
@@ -754,6 +837,12 @@ class AudioPlayer(QWidget):
                                     f"Could not save file:\n{str(e)}")
 
 
+    def show_instructions(self):
+        self.instructions = TextEdit()
+        self.instructions.show()
+
+
+
     def show_about_dialog(self):
         QMessageBox.about(
             self,
@@ -762,6 +851,8 @@ class AudioPlayer(QWidget):
             "<p>HiRes Audio Player / API Client</p>"
             "<p>Created with ❤️ by EcoG</p>"
         )
+
+
 
     def on_go(self):
         col = self.combo.currentText()
@@ -1658,8 +1749,7 @@ class AudioPlayer(QWidget):
                 "Remote metadata fetch error:")
         else:
             if 'error' in data['retrieved_metadata']:
-                QMessageBox.warning(self, "Error retrieving metadata",
-                                    data['retrieved_metadata']["error"])
+                self.status_bar.showMessage(f'Error retrieving metadata: {data["retrieved_metadata"]["error"]}')
             else:
                 self.meta_data = data['retrieved_metadata']
                 title = self.meta_data.get('title', file.display_text)
@@ -1702,15 +1792,15 @@ class AudioPlayer(QWidget):
     def get_audio_metadata(self, file_path):
         """Extract metadata from audio file with comprehensive error handling"""
         try:
-            print(f"Extracting metadata from: {file_path}")
+            self.status_bar.showMessage(f"Extracting metadata from: {file_path}")
 
             if not os.path.exists(file_path):
-                print(f"File does not exist: {file_path}")
+                self.status_bar.showMessage(f"File does not exist: {file_path}")
                 return None
 
             audio_file = File(file_path)
             if audio_file is None:
-                print(f"Could not read audio file: {file_path}")
+                self.status_bar.showMessage(f"Could not read audio file: {file_path}. Make sure the file exists.")
                 return None
 
             metadata = {
@@ -1733,8 +1823,8 @@ class AudioPlayer(QWidget):
                 elif '©ART' in audio_file:
                     metadata['artist'] = str(audio_file['©ART'][0])
             except Exception as e:
-                print(
-                    f"Error reading artist metadata from {file_path}: {e}")
+                self.status_bar.showMessage(
+                    f"Error reading artist metadata from {file_path}: {str(e)}")
 
             try:
                 if 'TIT2' in audio_file:  # Title
@@ -1744,8 +1834,8 @@ class AudioPlayer(QWidget):
                 elif '©nam' in audio_file:
                     metadata['title'] = str(audio_file['©nam'][0])
             except Exception as e:
-                print(
-                    f"Error reading title metadata from {file_path}: {e}")
+                self.status_bar.showMessage(
+                    f"Error reading title metadata from {file_path}: {str(e)}")
 
             try:
                 if 'TALB' in audio_file:  # Album
@@ -1755,8 +1845,8 @@ class AudioPlayer(QWidget):
                 elif '©alb' in audio_file:
                     metadata['album'] = str(audio_file['©alb'][0])
             except Exception as e:
-                print(
-                    f"Error reading album metadata from {file_path}: {e}")
+                self.status_bar.showMessage(
+                    f"Error reading album metadata from {file_path}: {str(e)}")
 
             try:
                 if 'TDRC' in audio_file:  # Year
@@ -1766,15 +1856,15 @@ class AudioPlayer(QWidget):
                 elif '©day' in audio_file:
                     metadata['year'] = str(audio_file['©day'][0])
             except Exception as e:
-                print(
-                    f"Error reading year metadata from {file_path}: {e}")
+                self.status_bar.showMessage(
+                    f"Error reading year metadata from {file_path}: {str(e)}")
 
             # Duration
             try:
                 if audio_file.info:
                     metadata['duration'] = int(audio_file.info.length)
             except Exception as e:
-                print(f"Error reading duration from {file_path}: {e}")
+                self.status_bar.showMessage(f"Error reading duration from {file_path}: {str(e)}")
 
             # Lyrics
             try:
@@ -1806,7 +1896,7 @@ class AudioPlayer(QWidget):
                     else:
                         metadata['lyrics'] = "--"
             except Exception as e:
-                print(f"Error reading lyrics from {file_path}: {e}")
+                self.status_bar.showMessage(f"Error reading lyrics from {file_path}: {str(e)}")
 
             # Codec
             try:
@@ -1827,7 +1917,7 @@ class AudioPlayer(QWidget):
                         round(bits)) + 'bits  ' + str(
                         round(bitrate / 1000)) + 'kbps'
             except Exception as e:
-                print(f"Error reading codec from {file_path}: {e}")
+                self.status_bar.showMessage(f"Error reading codec from {file_path}: {str(e)}")
 
             # Album art
             try:
@@ -1838,15 +1928,14 @@ class AudioPlayer(QWidget):
                 elif 'covr' in audio_file:
                     metadata['picture'] = audio_file['covr'][0]
             except Exception as e:
-                print(
+                self.status_bar.showMessage(
                     f"Error reading album art from {file_path}: {e}")
 
-            print(f"Successfully extracted metadata from: {file_path}")
+            self.status_bar.showMessage(f"Successfully extracted metadata from: {file_path}")
             return metadata
 
         except Exception as e:
-            print(f"Error extracting metadata from {file_path}: {e}")
-            print(traceback.format_exc())
+            self.status_bar.showMessage( f"Error extracting metadata from {file_path}: {str(e)}")
             return None
 
     def update_metadata(self, index):
@@ -2147,6 +2236,143 @@ class AudioPlayer(QWidget):
         self.scan_worker.start()
         self.scan_worker.mutex.lock()
 
+
+
+    def delete_missing_songs(self):
+        """Delete missing audio files to database with error handling"""
+        try:
+            self.status_bar.showMessage(f"Deleting missing audio files from database")
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            deleted_songs = 0
+            errors = 0
+
+            # 1. Get all paths and IDs from the database
+            cursor.execute("SELECT id, path FROM Songs")
+            db_songs = cursor.fetchall()
+
+            # 2. Check existence for each song
+            songs_to_delete = []
+            for song_id, path in db_songs:
+                if not os.path.exists(path):
+                    songs_to_delete.append(song_id)
+                    self.status_bar.showMessage(
+                        f"File deleted externally, removing from DB: {path}")
+                    deleted_songs += 1
+
+                # 3. Perform the deletion (if any)
+            if songs_to_delete:
+                try:
+                    # The '?' allows safe parameter passing for multiple values
+                    placeholders = ', '.join(['?'] * len(songs_to_delete))
+                    sql = f"DELETE FROM Songs WHERE id IN ({placeholders})"
+                    cursor.execute(sql, songs_to_delete)
+                except sqlite3.Error as e:
+                    QMessageBox.critical(self, "Error", f"Database error deleting songs from db: {str(e)}")
+                    errors += 1
+                except Exception as e:
+                    QMessageBox.critical(self, "Error",
+                        f"Unexpected error deleting songs from db: {str(e)}")
+                    errors += 1
+
+            conn.commit()
+            conn.close()
+
+            QMessageBox.critical(self, "Error",
+                f"Successfully deleted {deleted_songs} songs from database")
+            if errors > 0:
+                QMessageBox.critical(self, "Error",
+                    f"Encountered {errors} errors while deleting songs")
+
+            return deleted_songs
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error deleting songs from database: {str(e)}")
+            return 0
+
+    def delete_missing_playlists(self):
+        """Delete missing audio files to database with error handling"""
+        try:
+            self.status_bar.showMessage(f"Deleting missing playlists from database")
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            deleted_playlists = 0
+            errors = 0
+
+            # 1. Get all paths and IDs from the database
+            cursor.execute("SELECT id, path FROM Playlists")
+            db_playlists = cursor.fetchall()
+
+            # 2. Check existence for each song
+            playlists_to_delete = []
+            for playlist_id, path in db_playlists:
+                if not os.path.exists(path):
+                    playlists_to_delete.append(playlist_id)
+                    self.status_bar.showMessage(
+                        f"Playlist deleted externally, removing from DB: {path}")
+                    deleted_playlists += 1
+
+            # 3. Perform the deletion (if any)
+            if playlists_to_delete:
+                try:
+                    # The '?' allows safe parameter passing for multiple values
+                    placeholders = ', '.join(['?'] * len(playlists_to_delete))
+                    sql = f"DELETE FROM Playlists WHERE id IN ({placeholders})"
+                    cursor.execute(sql, playlists_to_delete)
+                except sqlite3.Error as e:
+                    QMessageBox.critical(self, "Error",
+                        f"Database error deleting playlists from db: {str(e)}")
+                    errors += 1
+                except Exception as e:
+                    QMessageBox.critical(self, "Error",
+                        f"Unexpected error deleting playlists from db: {str(e)}")
+                    errors += 1
+
+            conn.commit()
+            conn.close()
+
+            QMessageBox.critical(self, "Error",
+                f"Successfully deleted {deleted_playlists} playlists from database")
+            if errors > 0:
+                QMessageBox.critical(self, "Error",
+                    f"Encountered {errors} errors while deleting playlists")
+
+            return deleted_playlists
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error deleting playlists from database: {str(e)}")
+            return 0
+
+    def purge_library(self):
+        folder_path = self.selectDirectoryDialog()
+        if not folder_path:
+            return
+        # Update status bar and show progress
+        self.status_bar.showMessage(
+            'Scanning your Music Library for deleted songs and playlists. '
+            'Please Wait, it might take some time depending on the library size'
+        )
+        self.status_bar.repaint()
+        progress = QProgressBar()
+        progress.setValue(50)
+        self.status_bar.addWidget(progress)
+        self.status_bar.repaint()
+        try:
+            # Check for deleted audio files and playlists
+            self.status_bar.showMessage("Starting library purge")
+
+            # Add to database
+            deleted_songs = self.delete_missing_songs()
+            deleted_playlists = self.delete_missing_playlists()
+
+            success_msg = f'Successfully deleted {deleted_songs} songs and {deleted_playlists} playlists from the database.'
+            self.status_bar.removeWidget(self.progress)
+            self.status_bar.showMessage(success_msg)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error",f"Error during library purge: {str(e)}")
+
+
     def get_local_playlists(self):
         self.playlist_widget.clear()
         self.playlist.clear()
@@ -2241,7 +2467,7 @@ class AudioPlayer(QWidget):
     def cleanup_playlists(self):
         """Clean up after scan completion"""
         # Remove progress bar and clear status
-        #   self.status_bar.removeWidget(self.progress)
+        self.status_bar.removeWidget(self.progress)
         self.status_bar.clearMessage()
 
         # Clean up worker reference
@@ -2633,18 +2859,16 @@ class AudioPlayer(QWidget):
     def remote_web_ui(self):
         try:
             r = requests.post(f"{self.api_url}/web_ui")
-            data = r.text
-            self.status_bar.showMessage(data)
+            QMessageBox.information(self,'info', r.text)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
     def remote_desk_ui(self):
         try:
             r = requests.post(f"{self.api_url}/desk_ui")
-         #   data = r.text
-         #   self.status_bar.showMessage(data)
+            QMessageBox.information(self,'info', r.text)
         except Exception as e:
-            self.status_bar.showMessage("Error: " + str(e))
+            QMessageBox.critical(self, "Error", str(e))
 
 
 
@@ -2756,6 +2980,8 @@ class Worker(QThread):
                 result = loop.run_until_complete(self.get_playlists_async())
             elif isinstance(self.folder_path, dict):
                 result = loop.run_until_complete(self.search_async())
+            elif isinstance(self.folder_path, tuple):
+                result = loop.run_until_complete(self.purge_library_async())
             elif self.folder_path == 'meta':
                 result = loop.run_until_complete(self.get_metadata_async())
             elif self.folder_path in {'song_title', 'artist', 'album'}:
@@ -2788,13 +3014,23 @@ class Worker(QThread):
         async with aiohttp.ClientSession() as session:
             async with session.post(
                     f"{self.api_url}/scan_library",
-                    json=self.folder_path
+                    json={'folder_path': self.folder_path}
+            ) as response:
+                return await response.json()
+
+
+    async def purge_library_async(self):
+        """Async function to purge the library"""
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                    f"{self.api_url}/purge_library",
+                    json={'folder_path': self.folder_path[1]}
             ) as response:
                 return await response.json()
 
 
     async def search_async(self):
-        """Async function to scan the library"""
+        """Async function to search the library"""
         async with aiohttp.ClientSession() as session:
             async with session.get(self.api_url,
                                    params=self.folder_path) as response:
@@ -2978,6 +3214,72 @@ class LyricsDisplay(QTextEdit):
             if self.current_line_idx != -1:
                 self.current_line_idx = -1
                 self.update_display(-1)
+
+
+
+class TextEdit(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Instructions")
+        self.resize(1180, 780)
+
+        self.instructions_edit = QTextEdit(readOnly=True)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.instructions_edit)
+        self.setLayout(layout)
+        self.instructions_edit.setPlainText("Use Instructions\n\n"
+"1. Installation\n"
+"The program is Portable. You just unzip the file Web-Media-Server-and-Player.zip\n\n"
+"2. Startup\n"
+"In the folder you unzipped the program, you run “ecoserver.exe” to start the server and the “advanced_audio_player.exe” to start the player/client.\n"
+"You can have any server-player/client combination on any computer on your network, e.g. you can run the ecoserver.exe only on the computer that your music files rely and the Player/client on your HTPC. If you have any music files on more than one computer, you can run the ecoserver.exe on each one of them. The same goes for the “advanced_audio_player.exe”.  You can run it on any computer you use to listen to music.\n\n"
+"3. Ecoserver\n"
+"Starting the server adds an icon to the hidden icons of the system tray, (a square, black on the outside, white on the inside). By right-clicking on the icon, a mini-menu appears with the following options:\n"
+"•  Open in Browser: Opens the program's website, from which the server is managed, as well as the selection and playback of the music is taking place.\n"
+"•  Open Desktop Player: Launches “advanced_audio_player.exe”, the desktop application from which the server is managed, as well as the music is selected and played.\n"
+"•  Autostart on system boot: Starts the server when the system boots\n"
+"•  Quit: Shuts down the server\n"
+"4. Audio Player / Client\n"
+"It is the desktop application from which the server is managed, as well as the selection and playback of music.\n"
+"\n"
+"The interface:\n"
+"On the left side of the application interface, is the Cue display. It displays the songs cued to play, or the playlists, or the search results, or the lists of all the songs in the music library, or artists or albums. On this Cue display, we can drop songs and/or playlists by drag'n'drop or by choosing them via the menus of the application.  Once the Cue display is filled with songs, it starts playing them immediately. If it displays the list of the music library Playlists, clicking a Playlist it then shows the songs in the playlist and starts playing them immediately. If it displays an artist list, clicking on any artist's name displays all of the artist's songs, sorted by album.\n"
+"By clicking on any song in any list, it starts playing.\n"
+"At the top right of the list is the Shuffle button to shuffle the songs in the list.\n"
+"\n"
+"On the right side of the interface, on top there is the search bar. On the left side is a drop-down menu to select the type of search, while on the right there are two buttons, one to search the database of the local computer (the one on which the desktop application is running) and one to search on a remote server on the network. With enter, the search is done on the local computer.\n"
+"Below the search bar, the cover art and basic elements of the song that is playing are displayed, while to the right of it, all the metadata. Above the metadata window is the “Push for Artist and Song Info” button. By tapping on it, information about the artist and the song playing is displayed. Below the song's cover and key elements, there's the timer, the playbar, and just below them the play buttons. By clicking on the timer the indicator changes from elapsed time to time remaining for each song. By drag'n'dropping the playbar we proceed the playback forward or backward. Using the three play buttons, we go to the previous or next song, or we pause (and restart) the playback. Below the play buttons appear the lyrics of the song playing, (if embedded or in a .lrc file), which may or may not be synchronized, depending on the lyrics file.\n"
+"Below the lyrics there are the options for mixing the songs, through the “Mix Method” menu and the setting of the transition time, as well as the settings of the Gap killer, (which is still in the experimental stage). Finally, at the bottom right is the Reveal button, which displays the song that is playing in File Explorer.\n"
+""
+"The menus:\n\n"
+" There are 3 main menus: Local, Remote and Help.\n"
+"Local manages the program's operations on the local computer, while Remote manages the program's operations on a remote server.\n"
+"The Local menu options are:\n"
+"•	Open Playlist|Load Songs: Displays the open file dialog, to select songs or playlists to play.\n"
+"•	Load Playlists: Displays all Playlists in the local computer's library\n"
+"•	List all Songs: Displays all songs in the local computer's library\n"
+"•	List all Artists: Displays all artists in the local computer's library\n"
+"•	List all Albums: Displays all albums in the local computer's library\n"
+"•	Scan Library: Displays the folder selection dialog, to select a folder which (its subfolders included) it scans and adds to the local library the audio files and playlists it finds.\n"
+"•	Purge Library: Opens the folder selection dialog, to select a folder which (its subfolders included) checks and removes any physical deleted audio and playlist files from the local library.\n"
+"•	Save current Cue: Saves the Cue list to a file\n"
+"•	Clear Playlist: Clears the Cue list\n"
+"•	Launch Web UI. Opens the program's website on the local computer, from which the server is managed, as well as the music is selected and played.\n"
+"•	Shutdown Local Server: Shuts down the local server.\n"
+"•	Exit: Terminates the operation of the application\n"
+"The Remote menu options are:\n"
+"•	Connect to Remote: Asks for the name or IP address of a remote computer on which the ecoserver is running and connects to that remote server.\n"
+"•	Load Playlists: Displays all Playlists in the remote server's library\n"
+"•	List all Songs: Displays all songs in the remote server's library\n"
+"•	List all Artists: Displays all artists in the remote server's library\n"
+"•	List all Albums: Displays all albums in the remote server's library\n"
+"•	Scan Library: Opens the folder selection dialog, to select a remote server's folder which (its subfolders included) it scans and adds to the remote server's library the audio files and playlists it finds.\n"
+"•	Purge Library: Opens the folder selection dialog, to select a remote server's folder which (its subfolders included) checks and removes any deleted audio and playlist files from the remote server's library.\n"
+"•	Launch Web UI. It opens the program's website on the remote computer, from which the server is managed, as well as the music is selected and played.\n"
+"•	Launch Desktop UI: Launches the “advanced_audio_player.exe” on the remote computer, (the desktop application from which the server is managed, as well as the music is selected and played).\n"
+"•	Shutdown Local Server: Shuts down the remote server.\n"
+"•	Exit: Terminates the operation of the program\n")
 
 
 if __name__ == "__main__":
