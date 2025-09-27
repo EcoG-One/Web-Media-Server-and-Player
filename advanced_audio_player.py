@@ -4,7 +4,7 @@ import sqlite3
 from fuzzywuzzy import fuzz
 # from django.contrib.gis.gdal.prototypes.srs import islocal
 from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot, QMutex
-from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence
+from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
@@ -1668,6 +1668,19 @@ class AudioPlayer(QWidget):
         else:
             pixmap = QPixmap.fromImage(self.sub_images[0])
         self.play_button.setIcon(QIcon(pixmap))
+
+    def keyPressEvent(self, event: QKeyEvent):
+        key = event.key()
+        if key in (Qt.Key_Space, Qt.Key_MediaTogglePlayPause, 16777350, 32):
+            self.toggle_play_pause()
+        elif key in (Qt.Key_MediaPrevious, 16777346):
+            self.prev_track()
+        elif key in (Qt.Key_MediaNext, 16777347):
+            self.next_track()
+        else:
+            super().keyPressEvent(event)
+
+
 
     def update_slider(self, position):
         duration = self.player.duration()
