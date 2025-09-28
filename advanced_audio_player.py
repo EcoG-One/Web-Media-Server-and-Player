@@ -333,7 +333,9 @@ class AudioPlayer(QWidget):
         self.playlist_widget = QListWidget()
         self.playlist_widget.setStyleSheet(
             "font-size: 12px; background-color: lightyellow; opacity: 0.6; "
-            "border-color: #D4D378; border-width: 2px; border-style: inset;")
+            "border-color: #D4D378; border-width: 2px; border-style: inset; ")
+        self.playlist_widget.setStyleSheet(
+            "QListView::item:selected{ background-color: blue; }")
         self.playlist_label = QLabel("Cue:")
         self.btn_shuffle = QPushButton("Shuffle")
         self.btn_shuffle.setFixedSize(QSize(60, 26))
@@ -593,6 +595,7 @@ class AudioPlayer(QWidget):
      #   status_code = data['status']
         if data['status'] == 200:
             self.server = data['API_URL']
+            self.playlist_widget.clear()
             self.api_url = self.remote_base = f'http://{self.server}:5000'
             self.setWindowTitle(
                 f"Ultimate Media Player. Current Server: {self.api_url}")
@@ -1550,7 +1553,7 @@ class AudioPlayer(QWidget):
     def clear_playlist(self):
         self.playlist_widget.clear()
         self.playlist.clear()
-        self.playlist_label.setText('Playlist')
+        self.playlist_label.setText('Cue:')
         self.player.stop()
         self.current_index = -1
         self.lyrics_display.clear()
@@ -3003,12 +3006,13 @@ class Worker(QThread):
                 result = loop.run_until_complete(self.get_pl_async())
             elif self.folder_path == 'server':
                 result = loop.run_until_complete(self.check_server_async())
-            else:
-                if Path(self.folder_path).is_dir():
+            elif Path(self.folder_path).is_dir():
+                if self.api_url.endswith('/scan_library'):
                     result = loop.run_until_complete(self.scan_library_async())
                 else:
                     result = loop.run_until_complete(self.reveal_remote_song_async())
-
+            else:
+                raise ValueError(f"Unknown folder_path value: {self.folder_path}")
 
             # Emit success signal
             self.work_completed.emit(result)
@@ -3029,7 +3033,10 @@ class Worker(QThread):
                     f"{self.api_url}/scan_library",
                     json={'folder_path': self.folder_path}
             ) as response:
-                return await response.json()
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    raise Exception(f"Scan failed: {response.status}")
 
 
     async def purge_library_async(self):
@@ -3039,7 +3046,10 @@ class Worker(QThread):
                     f"{self.api_url}/purge_library",
                     json={'folder_path': self.folder_path[1]}
             ) as response:
-                return await response.json()
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    raise Exception(f"Purge failed: {response.status}")
 
 
     async def search_async(self):
@@ -3047,9 +3057,12 @@ class Worker(QThread):
         async with aiohttp.ClientSession() as session:
             async with session.get(self.api_url,
                                    params=self.folder_path) as response:
-                search_result = await response.json()
-                result = {"search_result": search_result}
-                return result
+                if response.status == 200:
+                    search_result = await response.json()
+                    result = {"search_result": search_result}
+                    return result
+                else:
+                    raise Exception(f"Search failed: {response.status}")
 
 
     async def get_playlists_async(self):
@@ -3058,41 +3071,58 @@ class Worker(QThread):
             async with session.get(
                     f"{self.api_url}/get_playlists", timeout=5
             ) as response:
-                retrieved_playlists =await response.json()
-                result = {'retrieved_playlists': retrieved_playlists}
-                return result
+                if response.status == 200:
+                    retrieved_playlists =await response.json()
+                    result = {'retrieved_playlists': retrieved_playlists}
+                    return result
+                else:
+                    raise Exception(
+                        f"Failed to fetch playlists: {response.status}")
 
     async def get_songs_async(self):
         """Async function to get the playlists from server"""
         async with aiohttp.ClientSession() as session:
             async with session.get(self.api_url, params={"query": self.folder_path}) as response:
-                retrieved =await response.json()
-                result = {'retrieved': retrieved}
-                return result
+                if response.status == 200:
+                    retrieved =await response.json()
+                    result = {'retrieved': retrieved}
+                    return result
+                else:
+                    raise Exception(f"Failed to fetch songs: {response.status}")
 
     async def get_pl_async(self):
         """Async function to get a playlist from server"""
         async with aiohttp.ClientSession() as session:
             async with session.get(self.api_url) as response:
-                retrieved_playlist =await response.json()
-                result = {'pl': retrieved_playlist}
-                return result
+                if response.status == 200:
+                    retrieved_playlist =await response.json()
+                    result = {'pl': retrieved_playlist}
+                    return result
+                else:
+                    raise Exception(f"Failed to fetch playlist: {response.status}")
 
     async def get_metadata_async(self):
         """Async function to get metadata from server"""
         async with aiohttp.ClientSession() as session:
             async with session.get(self.api_url) as response:
-                retrieved_metadata = await response.json()
-                result = {'retrieved_metadata': retrieved_metadata}
-                return result
+                if response.status == 200:
+                    retrieved_metadata = await response.json()
+                    result = {'retrieved_metadata': retrieved_metadata}
+                    return result
+                else:
+                    raise Exception(f"Failed to fetch metadata: {response.status}")
+
 
 
     async def check_server_async(self):
         """Async function to check if server is valid"""
         async with aiohttp.ClientSession() as session:
             async with session.get(f'http://{self.api_url}:5000', timeout=3) as response:
-                status = response.status
-                return {'status': status, 'API_URL': self.api_url}
+                if response.status == 200:
+                    status = response.status
+                    return {'status': status, 'API_URL': self.api_url}
+                else:
+                    raise Exception(f"Server check failed: {response.status}")
 
 
     async def reveal_remote_song_async(self):
@@ -3101,9 +3131,12 @@ class Worker(QThread):
             async with session.post(
                     self.api_url,
                     json=self.folder_path) as response:
-                answer = await response.json()
-                result = {'answer': answer}
-                return result
+                if response.status == 200:
+                    answer = await response.json()
+                    result = {'answer': answer}
+                    return result
+                else:
+                    raise Exception(f"Failed to fetch songs: {response.status}")
 
 
 class SynchronizedLyrics:
