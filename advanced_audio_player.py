@@ -1064,7 +1064,7 @@ class AudioPlayer(QWidget):
             self.playlist_widget.clear()
             self.current_index = -1
             for song in self.playlist:
-                item = QListWidgetItem(os.path.basename(song))
+                item = QListWidgetItem(os.path.basename(song.display_text))
                 self.playlist_widget.addItem(item)
 
 
@@ -1314,7 +1314,7 @@ class AudioPlayer(QWidget):
                 song.path = track
                 song.is_remote = False
                 songs.append(song)
-            self.add_files(songs)
+        self.add_files(songs)
 
     def eventFilter(self, source, event):
         if source == self.playlist_widget.viewport() and event.type() == QEvent.Drop:
@@ -1331,7 +1331,25 @@ class AudioPlayer(QWidget):
             "Playlists (*.m3u *.m3u8 *.cue)",
             "All files (*)"])
         if menu.exec():
-            self.add_files(menu.selectedFiles())
+            songs = []
+            for track in menu.selectedFiles():
+                if os.path.isdir(track):
+                    self.load_dir(track)
+                else:
+                    song = ListItem()
+                    ext = Path(track).suffix.lower()
+                    if ext in audio_extensions:
+                        song.item_type = "song_title"
+                    elif ext in playlist_extensions:
+                        song.item_type = "playlist"
+                    else:
+                        continue
+                    song.display_text = os.path.basename(track)
+                    song.path = track
+                    song.is_remote = False
+                    songs.append(song)
+            self.add_files(songs)
+
 
     def add_files(self, files):
         for f in files:
@@ -1397,7 +1415,7 @@ class AudioPlayer(QWidget):
                     continue
                 song = ListItem()
                 song.item_type = "song_title"
-                song.display_text =  os. path. basename(line)
+                song.display_text = os.path.basename(line)
                 song.path = line
                 song.is_remote = False
                 songs.append(song)
@@ -1674,7 +1692,7 @@ class AudioPlayer(QWidget):
 
     def keyPressEvent(self, event: QKeyEvent):
         key = event.key()
-        if key in (Qt.Key_Space, Qt.Key_MediaTogglePlayPause, 16777350, 32):
+        if key in (Qt.Key_MediaTogglePlayPause, 16777350):
             self.toggle_play_pause()
         elif key in (Qt.Key_MediaPrevious, 16777346):
             self.prev_track()
