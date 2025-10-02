@@ -1306,11 +1306,12 @@ class AudioPlayer(QWidget):
                 ext = Path(track).suffix.lower()
                 if ext in audio_extensions:
                     song.item_type = "song_title"
+                    song.display_text = self.get_basic_metadata(track)
                 elif ext in playlist_extensions:
                     song.item_type = "playlist"
+                    song.display_text = os.path.basename(track)
                 else:
                     continue
-                song.display_text = os.path.basename(track)
                 song.path = track
                 song.is_remote = False
                 songs.append(song)
@@ -1322,6 +1323,66 @@ class AudioPlayer(QWidget):
             self.add_files(files)
             return True
         return super().eventFilter(source, event)
+
+
+    def get_basic_metadata(self, file_path):
+        audio_file = File(file_path)
+        if audio_file is None:
+            self.status_bar.showMessage(
+                f"Could not read audio file: {file_path}. Make sure the file exists.")
+            return None
+
+        metadata = {
+            'artist': '',
+            'title': '',
+            'album': '',
+            'year': '',
+            'duration': 0,
+            'lyrics': '',
+            'codec': '',
+            'picture': None
+        }
+
+        # Get basic metadata
+        try:
+            if 'TPE1' in audio_file:  # Artist
+                metadata['artist'] = str(audio_file['TPE1'])
+            elif 'ARTIST' in audio_file:
+                metadata['artist'] = str(audio_file['ARTIST'][0])
+            elif '©ART' in audio_file:
+                metadata['artist'] = str(audio_file['©ART'][0])
+        except Exception as e:
+            self.status_bar.showMessage(
+                f"Error reading artist metadata from {file_path}: {str(e)}")
+
+        try:
+            if 'TIT2' in audio_file:  # Title
+                metadata['title'] = str(audio_file['TIT2'])
+            elif 'TITLE' in audio_file:
+                metadata['title'] = str(audio_file['TITLE'][0])
+            elif '©nam' in audio_file:
+                metadata['title'] = str(audio_file['©nam'][0])
+        except Exception as e:
+            self.status_bar.showMessage(
+                f"Error reading title metadata from {file_path}: {str(e)}")
+
+        try:
+            if 'TALB' in audio_file:  # Album
+                metadata['album'] = str(audio_file['TALB'])
+            elif 'ALBUM' in audio_file:
+                metadata['album'] = str(audio_file['ALBUM'][0])
+            elif '©alb' in audio_file:
+                metadata['album'] = str(audio_file['©alb'][0])
+        except Exception as e:
+            self.status_bar.showMessage(
+                f"Error reading album metadata from {file_path}: {str(e)}")
+
+        display_text = f"{metadata['artist']} - {metadata['title']} ({metadata['album']})"
+
+        return display_text
+
+
+
 
     def show_playlist_menu(self, pos=None):
         menu = QFileDialog(self)
@@ -1340,11 +1401,12 @@ class AudioPlayer(QWidget):
                     ext = Path(track).suffix.lower()
                     if ext in audio_extensions:
                         song.item_type = "song_title"
+                        song.display_text = self.get_basic_metadata(track)
                     elif ext in playlist_extensions:
                         song.item_type = "playlist"
+                        song.display_text = os.path.basename(track)
                     else:
                         continue
-                    song.display_text = os.path.basename(track)
                     song.path = track
                     song.is_remote = False
                     songs.append(song)
@@ -1450,11 +1512,12 @@ class AudioPlayer(QWidget):
                     song = ListItem()
                     if ext in audio_extensions:
                         song.item_type = "song_title"
+                        song.display_text = self.get_basic_metadata(file_path)
                     elif ext in playlist_extensions:
                         song.item_type = "playlist"
+                        song.display_text = os.path.basename(file)
                     else:
                         continue
-                    song.display_text = os.path.basename(file)
                     song.path = file_path
                     song.is_remote = False
                     songs.append(song)
