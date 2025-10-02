@@ -3,3 +3,8 @@ mutagen~=1.47.0
 fuzzywuzzy~=0.18.0
 levenshtein
 aiohttp
+pystray
+pillow
+plyer
+python-dotenv
+wikipedia
