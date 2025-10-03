@@ -560,6 +560,7 @@ class AudioPlayer(QWidget):
         self.player.positionChanged.connect(self.check_for_mix_transition)
 
         # Init
+        self.init_database()
         self.update_play_button()
         self.show()
         for item in self.playlists:
@@ -583,7 +584,201 @@ class AudioPlayer(QWidget):
                 sub_images.append(sub_img)
         return sub_images
 
+    # Database initialization
+    def init_database(self):
+        """Initialize the database with proper error handling"""
+        try:
+            self.status_bar.showMessage("Initializing database...")
+            conn = sqlite3.connect('Music.db')
+            cursor = conn.cursor()
 
+            # Create Songs table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS Songs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path CHAR(255) NOT NULL,
+                    file_name CHAR(120) NOT NULL,
+                    artist CHAR(120) NOT NULL,
+                    song_title CHAR(120) NOT NULL,
+                    duration INT NOT NULL,
+                    album CHAR(120),
+                    year SMALLINT
+                )
+            ''')
+
+            # Create Playlists table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS Playlists (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path CHAR(255) NOT NULL,
+                    PL_name CHAR(120) NOT NULL
+                )
+            ''')
+
+            conn.commit()
+            conn.close()
+            self.status_bar.showMessage("Database initialized successfully")
+
+        except sqlite3.Error as e:
+            QMessageBox.critical(self, "Database Error",f"Database initialization failed: {str(e)}")
+            raise
+        except Exception as e:
+            QMessageBox.critical(self, "Error",
+                f"Unexpected error during database initialization: {e}")
+            raise
+
+    def scan_for_audio_files(self, directory):
+        """Scan directory for audio files and playlists with error handling"""
+        try:
+            self.status_bar.showMessage(f"Scanning directory: {directory}")
+
+            if not os.path.exists(directory):
+                QMessageBox.critical(self, "Error", f"Directory does not exist: {directory}")
+                return
+
+            if not os.path.isdir(directory):
+                QMessageBox.critical(self, "Error", f"Path is not a directory: {directory}")
+                return
+
+            audio_files = []
+            playlist_files = []
+            scan_errors = 0
+
+            for root, dirs, files in os.walk(directory):
+                self.status_bar.showMessage(f"Scanning folder: {root}")
+
+                for file in files:
+                    try:
+                        file_path = os.path.join(root, file)
+                        file_ext = Path(file).suffix.lower()
+
+                        if file_ext in audio_extensions:
+                            audio_files.append(file_path)
+                        elif file_ext in playlist_extensions:
+                            playlist_files.append(file_path)
+
+                    except Exception as e:
+                        QMessageBox.warning(self, "Scan Error", f"Error processing file {file}: {e}")
+                        scan_errors += 1
+
+            self.status_bar.showMessage(f"Scan complete. Found {len(audio_files)} audio files and {len(playlist_files)} playlists")
+            if scan_errors > 0:
+                QMessageBox.warning(self, "Scan Error",f"Encountered {scan_errors} errors during scanning")
+
+            return audio_files, playlist_files
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error scanning directory {directory}: {e}")
+            return
+
+    def add_songs_to_database(self, audio_files):
+        """Add audio files to database with error handling"""
+        try:
+            self.status_bar.showMessage(f"Adding {len(audio_files)} audio files to database")
+
+            conn = sqlite3.connect('Music.db')
+            cursor = conn.cursor()
+            added_songs = 0
+            errors = 0
+
+            for file_path in audio_files:
+                try:
+                    # Check if file already exists
+                    cursor.execute("SELECT id FROM Songs WHERE path = ?", (file_path,))
+                    if cursor.fetchone():
+                        self.status_bar.showMessage(f"File already in database: {file_path}")
+                        continue
+
+                    metadata = self.get_audio_metadata(file_path)
+                    if metadata:
+                        file_name = os.path.basename(file_path)
+                        cursor.execute('''
+                            INSERT INTO Songs (path, file_name, artist, song_title, duration, album, year)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', (
+                            file_path,
+                            file_name,
+                            metadata['artist'],
+                            metadata['title'],
+                            metadata['duration'],
+                            metadata['album'],
+                            metadata['year']
+                        ))
+                        added_songs += 1
+                        self.status_bar.showMessage(f"Added song: {metadata['artist']} - {metadata['title']}")
+                    else:
+                        QMessageBox.warning(self, "Scan Error", f"Could not extract metadata from: {file_path}")
+                        errors += 1
+
+                except sqlite3.Error as e:
+                    QMessageBox.critical(self, "Error",f"Database error adding song {file_path}: {e}")
+                    errors += 1
+                except Exception as e:
+                    QMessageBox.critical(self, "Error",f"Unexpected error adding song {file_path}: {e}")
+                    errors += 1
+
+            conn.commit()
+            conn.close()
+
+            QMessageBox.warning(self, "Scan Error", f"Successfully added {added_songs} songs to database")
+            if errors > 0:
+                QMessageBox.warning(self, "Scan Error", f"Encountered {errors} errors while adding songs")
+
+            return added_songs
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error",f"Error adding songs to database: {e}")
+
+    def add_playlists_to_database(self, playlist_files):
+        """Add playlist files to database with error handling"""
+        try:
+            self.status_bar.showMessage(f"Adding {len(playlist_files)} playlists to database")
+
+            conn = sqlite3.connect('Music.db')
+            cursor = conn.cursor()
+            added_playlists = 0
+            errors = 0
+
+            for file_path in playlist_files:
+                try:
+                    # Check if playlist already exists
+                    cursor.execute("SELECT id FROM Playlists WHERE path = ?",
+                                   (file_path,))
+                    if cursor.fetchone():
+                        self.status_bar.showMessage(
+                            f"Playlist already in database: {file_path}")
+                        continue
+
+                    pl_name = os.path.basename(file_path)
+                    cursor.execute('''
+                        INSERT INTO Playlists (path, PL_name)
+                        VALUES (?, ?)
+                    ''', (file_path, pl_name))
+                    added_playlists += 1
+                    self.status_bar.showMessage(f"Added playlist: {pl_name}")
+
+                except sqlite3.Error as e:
+                    QMessageBox.warning(self, 'error'
+                        f"Database error adding playlist {file_path}: {str(e)}")
+                    errors += 1
+                except Exception as e:
+                    QMessageBox.critical(self, 'error'
+                        f"Unexpected error adding playlist {file_path}: {str(e)}")
+                    errors += 1
+
+            conn.commit()
+            conn.close()
+
+            QMessageBox.information(self, 'success',
+                f"Successfully added {added_playlists} playlists to database")
+            if errors > 0:
+                QMessageBox.warning(self, 'error',
+                    f"Encountered {errors} errors while adding playlists")
+
+            return added_playlists
+
+        except Exception as e:
+            QMessageBox.warning(self, 'error', f"Error adding playlists to database: {str(e)}")
 
     @Slot(dict)
     def on_server_reply(self, data: dict):
@@ -2317,21 +2512,14 @@ class AudioPlayer(QWidget):
             'Scanning your Music Library. Please Wait, it might take some time depending on the library size'
         )
 
-        # Create and configure progress bar
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)  # Indeterminate progress
-        self.status_bar.addWidget(self.progress)
-        self.status_bar.repaint()
+        audio_files, playlist_files = self.scan_for_audio_files(folder_path)
+        # Add to database
+        added_songs = self.add_songs_to_database(audio_files)
+        added_playlists = self.add_playlists_to_database(playlist_files)
 
-        # Create and configure worker thread
-        self.scan_worker = Worker(folder_path, "http://localhost:5000")
-        self.scan_worker.work_completed.connect(self.on_scan_completed)
-        self.scan_worker.work_error.connect(self.on_scan_error)
-        self.scan_worker.finished.connect(self.cleanup_scan)
-
-        # Start the async operation
-        self.scan_worker.start()
-        self.scan_worker.mutex.lock()
+        success_msg = f'Successfully added {added_songs} songs and {added_playlists} playlists to the database.'
+        self.status_bar.showMessage(success_msg, 8)
+        QMessageBox.information(self,'info', success_msg)
 
 
 
@@ -2344,11 +2532,11 @@ class AudioPlayer(QWidget):
             deleted_songs = 0
             errors = 0
 
-            # 1. Get all paths and IDs from the database
+            # Get all paths and IDs from the database
             cursor.execute("SELECT id, path FROM Songs")
             db_songs = cursor.fetchall()
 
-            # 2. Check existence for each song
+            # Check existence for each song
             songs_to_delete = []
             for song_id, path in db_songs:
                 if not os.path.exists(path):
@@ -2357,25 +2545,36 @@ class AudioPlayer(QWidget):
                         f"File deleted externally, removing from DB: {path}")
                     deleted_songs += 1
 
-                # 3. Perform the deletion (if any)
-            if songs_to_delete:
-                try:
+                # Perform the deletion (if any)
+            try:
+                if songs_to_delete:
                     # The '?' allows safe parameter passing for multiple values
+                    while len(songs_to_delete) > 999:
+                        placeholders = ', '.join(['?'] * 999)
+                        sql = f"DELETE FROM Songs WHERE id IN ({placeholders})"
+                        cursor.execute(sql, songs_to_delete[:999])
+                        for item in range(999):
+                            songs_to_delete.pop(0)
+
                     placeholders = ', '.join(['?'] * len(songs_to_delete))
                     sql = f"DELETE FROM Songs WHERE id IN ({placeholders})"
                     cursor.execute(sql, songs_to_delete)
-                except sqlite3.Error as e:
-                    QMessageBox.critical(self, "Error", f"Database error deleting songs from db: {str(e)}")
-                    errors += 1
-                except Exception as e:
-                    QMessageBox.critical(self, "Error",
-                        f"Unexpected error deleting songs from db: {str(e)}")
-                    errors += 1
+                # Delete duplicates
+                cursor.execute('''
+                    DELETE FROM Songs WHERE ROWID NOT IN (SELECT MIN(ROWID) FROM Songs GROUP BY path);
+                ''')
+            except sqlite3.Error as e:
+                QMessageBox.critical(self, "Error", f"Database error deleting songs from db: {str(e)}")
+                errors += 1
+            except Exception as e:
+                QMessageBox.critical(self, "Error",
+                    f"Unexpected error deleting songs from db: {str(e)}")
+                errors += 1
 
             conn.commit()
             conn.close()
-
-            QMessageBox.critical(self, "Error",
+            if deleted_songs > 0:
+                self.status_bar.showMessage(
                 f"Successfully deleted {deleted_songs} songs from database")
             if errors > 0:
                 QMessageBox.critical(self, "Error",
@@ -2410,26 +2609,33 @@ class AudioPlayer(QWidget):
                     deleted_playlists += 1
 
             # 3. Perform the deletion (if any)
-            if playlists_to_delete:
-                try:
+            try:
+                if playlists_to_delete:
                     # The '?' allows safe parameter passing for multiple values
                     placeholders = ', '.join(['?'] * len(playlists_to_delete))
                     sql = f"DELETE FROM Playlists WHERE id IN ({placeholders})"
                     cursor.execute(sql, playlists_to_delete)
-                except sqlite3.Error as e:
-                    QMessageBox.critical(self, "Error",
-                        f"Database error deleting playlists from db: {str(e)}")
-                    errors += 1
-                except Exception as e:
-                    QMessageBox.critical(self, "Error",
-                        f"Unexpected error deleting playlists from db: {str(e)}")
-                    errors += 1
+                # Delete duplicates
+                cursor.execute('''
+                                DELETE FROM Playlists WHERE ROWID NOT IN (SELECT MIN(ROWID) FROM Playlists GROUP BY path);
+                            ''')
+            except sqlite3.Error as e:
+                QMessageBox.critical(self, "Error",
+                    f"Database error deleting playlists from db: {str(e)}")
+                errors += 1
+            except Exception as e:
+                QMessageBox.critical(self, "Error",
+                    f"Unexpected error deleting playlists from db: {str(e)}")
+                errors += 1
 
             conn.commit()
             conn.close()
-
-            QMessageBox.critical(self, "Error",
-                f"Successfully deleted {deleted_playlists} playlists from database")
+            if deleted_playlists > 0:
+                self.status_bar.showMessage(
+                f"Successfully deleted {deleted_playlists} playlists from database", 4)
+            else:
+                self.status_bar.showMessage(
+                                        f"No playlists were deleted from database", 4)
             if errors > 0:
                 QMessageBox.critical(self, "Error",
                     f"Encountered {errors} errors while deleting playlists")
@@ -2461,10 +2667,14 @@ class AudioPlayer(QWidget):
             # Add to database
             deleted_songs = self.delete_missing_songs()
             deleted_playlists = self.delete_missing_playlists()
-
-            success_msg = f'Successfully deleted {deleted_songs} songs and {deleted_playlists} playlists from the database.'
+            if deleted_songs == 0 and deleted_playlists == 0:
+                success_msg = ('No missing/duplicate songs and playlists were found.\n'
+                               'No deletions were made')
+            else:
+                success_msg = f'Successfully deleted {deleted_songs} songs and {deleted_playlists} playlists from the database.'
             self.status_bar.removeWidget(self.progress)
-            self.status_bar.showMessage(success_msg)
+            QMessageBox.information(self, 'info',  success_msg)
+
 
         except Exception as e:
             QMessageBox.critical(self, "Error",f"Error during library purge: {str(e)}")
@@ -2607,29 +2817,37 @@ class AudioPlayer(QWidget):
             conn.close()
 
             self.status_bar.showMessage(f"Retrieved {len(results)} {query}s. Creating {query} list.")
-            if query == "song_title":
-                retrieved = ([{
-                    'id'      : r[0],
-                    'artist'  : r[1],
-                    'title'   : r[2],
-                    'album'   : r[3],
-                    'path'    : r[4],
-                    'filename': r[5]
-                } for r in results])
-            elif query == "artist":
-                retrieved = [{query: r[0]} for r in results]
-            else:
-                albums = {}
-                for album in results:
-                    if not album[0] in albums.keys():
-                        albums[album[0]] = album[1]
-                retrieved = [{query: r} for r in albums.items()]
-            self.receive_list({'retrieved': retrieved})
+            self.clear_playlist()
+            files = []
+            for r in results:
+                song = ListItem()
+             #   self.get_audio_metadata(r[4])
+                if query == 'song_title':
+                    song.display_text = f"{ r[1]} - {r[2]} ({ r[3]})"
+                elif query == "artist":
+                    song.display_text = r[1]
+                else:
+                    if r[3] in files:
+                        continue
+                    else:
+                        song.display_text = r[3]
+                song.is_remote = False
+                song.item_type = query
+                song.path = r[4]
+
+                files.append(song)
+            self.playlist_label.setText(f'{query} List: ')
+
 
         except sqlite3.Error as e:
             QMessageBox.critical(self, "Error",f"Database error getting query: {str(e)}")
         except Exception as e:
             QMessageBox.critical(self, "Error",f"Error getting query: {str(e)}")
+
+        self.add_files(files)
+        self.status_bar.showMessage(
+            'List loaded. Enjoy!')
+
 
 
     def get_list(self, query):
