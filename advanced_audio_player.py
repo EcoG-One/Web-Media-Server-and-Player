@@ -1027,7 +1027,7 @@ class AudioPlayer(QWidget):
             try:
                 with open(path, "w", encoding="utf-8") as f:
                     for item in self.playlist:
-                        f.write(item + '\n')
+                        f.write(item.path + '\n')
                     f.write("# Playlist created with EcoG's Ultimate Audio Player")
                 self.status_bar.showMessage(f"Saved: {path}")
             except Exception as e:
@@ -1254,12 +1254,15 @@ class AudioPlayer(QWidget):
 
 
     def do_shuffle(self):
-        if self.playlist and self.playlist[0].item_type == 'song_title':
-            shuffle(self.playlist)
+        if self.playlist and len(self.playlist) > 1:
+            if self.playlist[0].item_type == 'song_title':
+                shuffle(self.playlist)
+            elif self.playlist[0].item_type == 'cover' and self.playlist[1].item_type == 'song_title':
+                shuffle(self.playlist[1:])
             self.playlist_widget.clear()
             self.current_index = -1
             for song in self.playlist:
-                item = QListWidgetItem(os.path.basename(song.display_text))
+                item = QListWidgetItem(song.display_text)
                 self.playlist_widget.addItem(item)
 
 
@@ -1925,13 +1928,13 @@ class AudioPlayer(QWidget):
     def next_track(self):
         if self.current_index < len(self.playlist) - 1:
             next_idx = self.current_index + 1
-            next_path = self.playlist[next_idx]
-            while next_path == "None":
+            next_path = self.playlist[next_idx].path
+            while next_path == "":
                 next_idx += 1
-                if not (0 <= next_idx < len(self.playlist) - 1):
+                if not (0 <= next_idx < len(self.playlist)):
                     return
                 next_path = self.playlist[next_idx]
-            if not (0 <= next_idx < len(self.playlist) - 1):
+            if not (0 <= next_idx < len(self.playlist)):
                 return
             self.load_track(next_idx)
 
@@ -2824,16 +2827,16 @@ class AudioPlayer(QWidget):
              #   self.get_audio_metadata(r[4])
                 if query == 'song_title':
                     song.display_text = f"{ r[1]} - {r[2]} ({ r[3]})"
+                    song.path = r[4]
                 elif query == "artist":
-                    song.display_text = r[1]
+                    song.display_text = r[0]
                 else:
-                    if r[3] in files:
+                    if r[0] in files:
                         continue
                     else:
-                        song.display_text = r[3]
+                        song.display_text = f"{r[1]} - {r[0]}"
                 song.is_remote = False
                 song.item_type = query
-                song.path = r[4]
 
                 files.append(song)
             self.playlist_label.setText(f'{query} List: ')
