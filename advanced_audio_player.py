@@ -1021,9 +1021,22 @@ class AudioPlayer(QWidget):
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Current Playlist", "",
-            "Playlist Files (*.m3u8);;All Files (*)"
+            "Jason Files (*.json);;Playlist Files (*.m3u8);;All Files (*)"
         )
-        if path:
+        if path.endswith("json"):
+            pl = []
+            for song in self.playlist:
+                jsong = {'is_remote': song.is_remote,
+                         'item_type': song.item_type,
+                         'display_text': song.display_text,
+                         'route': song.route,
+                         'path': song.path,
+                         'server': song.server
+                }
+                pl.append(jsong)
+            with open(path, "w") as f:
+                json.dump(pl, f, indent=4)
+        else:
             try:
                 with open(path, "w", encoding="utf-8") as f:
                     for item in self.playlist:
