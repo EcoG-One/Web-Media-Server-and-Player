@@ -9,8 +9,8 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
     QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar,
-    QMenu, QStatusBar,QProgressBar, QFrame, QCheckBox)
-from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
+    QMenu, QStatusBar,QProgressBar, QFrame, QCheckBox, QStyle)
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData, QAudioBufferOutput
 import mutagen
 from mutagen import File
 from mutagen.flac import FLAC
@@ -40,11 +40,11 @@ APP_DIR.mkdir(exist_ok=True)
 SETTINGS_FILE = APP_DIR / "settings.json"
 # SETTINGS_FILE  = os.path.join(os.path.expanduser('~'), 'Advanced Media Player', 'settings.json')
 # PLAYLISTS_FILE = APP_DIR / "playlists.json"
-DB_PATH = 'music.db'
+DB_PATH = APP_DIR / 'music.db'
 MUSIC_DIR = ''
 wikipedia.set_lang("en")
 audio_extensions = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.wma'}
-playlist_extensions = {'.m3u', '.m3u8', '.cue'}
+playlist_extensions = {'.m3u', '.m3u8', '.cue', '.json'}
 
 
 def load_json(path: Path, default):
@@ -64,7 +64,7 @@ def save_json(path: Path, obj):
 
 def get_settings():
     # json_data = load_json(PLAYLISTS_FILE, default={"server": "http://localhost:5000", "playlists": []})
-    default = {"server": r"http://localhost:5000",
+    default = {"server": "localhost",
                "mix_method": "Fade",
                "transition_duration": 4,
                "gap_enabled": True,
@@ -310,6 +310,9 @@ class AudioPlayer(QWidget):
         self.audio_output = QAudioOutput(self)
         self.audio_output.setVolume(1.0)  # or any value between 0.0 (mute) to 1.0 (full volume)
         self.player.setAudioOutput(self.audio_output)
+     #   self.buffer = QAudioBufferOutput(self)
+     #   self.player.setAudioBufferOutput(self.buffer)
+     #  self.buffer.bufferAvailable.connect(self.on_buffer)
         self.next_player = None  # For mixing with next track
         self.next_output = None
 
@@ -332,10 +335,14 @@ class AudioPlayer(QWidget):
         shuffle_box = QHBoxLayout()
         self.playlist_widget = QListWidget()
         self.playlist_widget.setStyleSheet(
-            "font-size: 12px; background-color: lightyellow; opacity: 0.6; "
-            "border-color: #D4D378; border-width: 2px; border-style: inset; ")
-        self.playlist_widget.setStyleSheet(
-            "QListView::item:selected{ background-color: blue; }")
+            "QListView::item:selected{ background-color: blue; }; "
+            "font-size: 12px; "
+            "background-color: lightyellow; "
+            "opacity: 0.6; "
+            "border-color: #D4D378; "
+            "border-width: 2px; "
+            "border-style: inset;"
+        )
         self.playlist_label = QLabel("Cue:")
         self.btn_shuffle = QPushButton("Shuffle")
         self.btn_shuffle.setFixedSize(QSize(60, 26))
@@ -383,25 +390,45 @@ class AudioPlayer(QWidget):
         self.slider.sliderReleased.connect(self.on_slider_released)
         self._slider_moving = False
 
+        # StatusBar
+        self.status_bar = QStatusBar()
+        self.status_bar.showMessage(
+            "Welcome! Drag-and-drop Playlists or/and Songs to Playlist pane to start the music.")
+
         image_path = 'static/images/buttons.jpg'
         tile_width = 1650
         tile_height = 1650
         self.sub_images = self.split_image(image_path, tile_width, tile_height)
 
         self.prev_button = QPushButton()
-        pixmap = QPixmap.fromImage(self.sub_images[2])
-        self.prev_button.setIcon(QIcon(pixmap))
-        self.prev_button.setIconSize(QSize(50, 50))
+        if self.sub_images:
+            pixmap = QPixmap.fromImage(self.sub_images[2])
+            self.prev_button.setIcon(QIcon(pixmap))
+            self.prev_button.setIconSize(QSize(50, 50))
+        else:
+           # self.prev_button.setEnabled(False)
+            self.prev_button.setIcon(
+                self.style().standardIcon(QStyle.SP_MediaSkipBackward))
         self.prev_button.setFixedSize(QSize(50, 50))
         self.play_button = QPushButton()
-        pixmap = QPixmap.fromImage(self.sub_images[0])
-        self.play_button.setIcon(QIcon(pixmap))
-        self.play_button.setIconSize(QSize(50, 50))
+        if self.sub_images:
+            pixmap = QPixmap.fromImage(self.sub_images[0])
+            self.play_button.setIcon(QIcon(pixmap))
+            self.play_button.setIconSize(QSize(50, 50))
+        else:
+           # self.play_button.setEnabled(False)
+            self.play_button.setIcon(
+                self.style().standardIcon(QStyle.SP_MediaPlay))
         self.play_button.setFixedSize(QSize(50, 50))
         self.next_button = QPushButton()
-        pixmap = QPixmap.fromImage(self.sub_images[3])
-        self.next_button.setIcon(QIcon(pixmap))
-        self.next_button.setIconSize(QSize(50, 50))
+        if self.sub_images:
+            pixmap = QPixmap.fromImage(self.sub_images[3])
+            self.next_button.setIcon(QIcon(pixmap))
+            self.next_button.setIconSize(QSize(50, 50))
+        else:
+         #   self.next_button.setEnabled(False)
+            self.next_button.setIcon(
+                self.style().standardIcon(QStyle.SP_MediaSkipForward))
         self.next_button.setFixedSize(QSize(50, 50))
         self.prev_button.clicked.connect(self.prev_track)
         self.play_button.clicked.connect(self.toggle_play_pause)
@@ -431,9 +458,7 @@ class AudioPlayer(QWidget):
        # self.silence_check.setChecked(self.skip_silence)
        # self.silence_check.toggled.connect(self.set_skip_silence)
 
-        # StatusBar
-        self.status_bar = QStatusBar()
-        self.status_bar.showMessage("Welcome! Drag-and-drop Playlists or/and Songs to Playlist pane to start the music.")
+
 
         mix_form = QFormLayout()
         mix_form.addRow("Mix Method:", self.mix_method_combo)
@@ -589,7 +614,7 @@ class AudioPlayer(QWidget):
         """Initialize the database with proper error handling"""
         try:
             self.status_bar.showMessage("Initializing database...")
-            conn = sqlite3.connect('Music.db')
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
 
             # Create Songs table
@@ -676,7 +701,7 @@ class AudioPlayer(QWidget):
         try:
             self.status_bar.showMessage(f"Adding {len(audio_files)} audio files to database")
 
-            conn = sqlite3.connect('Music.db')
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             added_songs = 0
             errors = 0
@@ -734,7 +759,7 @@ class AudioPlayer(QWidget):
         try:
             self.status_bar.showMessage(f"Adding {len(playlist_files)} playlists to database")
 
-            conn = sqlite3.connect('Music.db')
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             added_playlists = 0
             errors = 0
@@ -792,6 +817,13 @@ class AudioPlayer(QWidget):
             self.server = data['API_URL']
             self.playlist_widget.clear()
             self.api_url = self.remote_base = f'http://{self.server}:5000'
+            save_json(SETTINGS_FILE, {"server"              : self.server,
+                                      "mix_method"          : self.mix_method,
+                                      "transition_duration" : self.transition_duration,
+                                      "gap_enabled"         : self.gap_enabled,
+                                      "silence_threshold_db": self.silence_threshold_db,
+                                      "silence_min_duration": self.silence_min_duration
+                                      })
             self.setWindowTitle(
                 f"Ultimate Media Player. Current Server: {self.api_url}")
             self.status_bar.showMessage(
@@ -877,7 +909,7 @@ class AudioPlayer(QWidget):
         self.status_bar.repaint()
 
         # Create and configure worker thread
-        self.scan_worker = Worker(folder_path, self.api_url)
+        self.scan_worker = Worker(folder_path, f"{self.api_url}/scan_library")
         self.scan_worker.work_completed.connect(self.on_scan_completed)
         self.scan_worker.work_error.connect(self.on_scan_error)
         self.scan_worker.finished.connect(self.cleanup_scan)
@@ -1003,7 +1035,10 @@ class AudioPlayer(QWidget):
                 headers={"X-API-Key": SHUTDOWN_SECRET},
                 json={}
             )
-            self.status_bar.showMessage(resp.text.replace("\n", ""))
+            message = resp.text.replace("\n", "")
+            message = message.replace("{", "")
+            message = message.replace("}", "").lstrip()
+            self.status_bar.showMessage(message)
             self.status_bar.repaint()
         except Exception as e:
             if 'An existing connection was forcibly closed by the remote host' in str(e):
@@ -1124,7 +1159,7 @@ class AudioPlayer(QWidget):
         q = query.lower()
         if self.is_local:
             try:
-                conn = sqlite3.connect('Music.db')
+                conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
 
                 # First try exact match
@@ -1397,7 +1432,7 @@ class AudioPlayer(QWidget):
             #    self.player.play()
             #    if self.is_local_file(next_path):
              #       self.update_metadata(self.current_index)
-                self.update_play_button()
+              #  self.update_play_button()
                 self.player.positionChanged.connect(self.update_slider)
                 self.player.durationChanged.connect(self.update_duration)
                 self.player.mediaStatusChanged.connect(self.media_status_changed)
@@ -1476,7 +1511,7 @@ class AudioPlayer(QWidget):
             # Reset mix triggers unless skip_mix_check (for fade handover)
             if not skip_mix_check:
                 self._mixing_next = False
-            self.update_play_button()
+          #  self.update_play_button()
         else:
             self.title_label.setText("No Track Loaded")
             self.artist_label.setText("--")
@@ -1486,7 +1521,7 @@ class AudioPlayer(QWidget):
             self.album_art.setPixmap(QPixmap())
             self.lyrics_display.clear()
             self.lyrics_timer.stop()
-            self.update_play_button()
+        self.update_play_button()
 
     def skip_leading_silence(self):
         """A very basic silence-skip: jump forward if amplitude is zero
@@ -1600,7 +1635,7 @@ class AudioPlayer(QWidget):
         menu.setFileMode(QFileDialog.ExistingFiles)
         menu.setNameFilters([
             "Audio files (*.mp3 *.flac *.ogg *.wav *.m4a *.aac *.wma *.opus)",
-            "Playlists (*.m3u *.m3u8 *.cue)",
+            "Playlists (*.m3u *.m3u8 *.cue *.json)",
             "All files (*)"])
         if menu.exec():
             songs = []
@@ -1643,6 +1678,17 @@ class AudioPlayer(QWidget):
                         self.playlist_widget.addItem(item)
                     self.playlist_label.setText(
                         f'Playlist: {os.path.basename(f.display_text)}')
+                elif ext == '.json':
+                    pl = self.load_json_playlist(f.path)
+                    self.playlist += pl
+                    for i in pl:
+                        item = QListWidgetItem(i.display_text)  # QListWidgetItem(os.path.basename(i))
+                        self.playlist_widget.addItem(item)
+                    self.playlist_label.setText(f'Playlist: {f.display_text}')
+                else:
+                    QMessageBox.warning(self, "Error!",
+                                        f"Unsupported playlist format: {ext}")
+                    continue
             elif f.item_type == "song_title" or f.item_type == 'artist' or f.item_type == 'album':  # if ext in audio_extensions:
                 self.playlist.append(f)
                 item = QListWidgetItem(f.display_text) # item = QListWidgetItem(os.path.basename(f))
@@ -1709,6 +1755,25 @@ class AudioPlayer(QWidget):
                     song.is_remote = False
                     song.display_text = file_path
                     songs.append(song)
+        return songs
+
+
+    def load_json_playlist(self, path):
+        songs = []
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            for entry in data:
+                song = ListItem()
+                song.is_remote = entry.get('is_remote', False)
+                song.item_type = entry.get('item_type', 'song_title')
+                song.display_text = entry.get('display_text', os.path.basename(entry.get('path', 'Unknown')))
+                song.route = entry.get('route', '')
+                song.path = entry.get('path', '')
+                song.server = entry.get('server', '')
+                songs.append(song)
+        except Exception as e:
+            QMessageBox.critical(self, "Error!", f"Error loading JSON playlist: {str(e)}")
         return songs
 
 
@@ -1952,17 +2017,27 @@ class AudioPlayer(QWidget):
             self.load_track(next_idx)
 
     def toggle_play_pause(self):
-        if self.player.playbackState() == QMediaPlayer.PlayingState:
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
         else:
             self.player.play()
 
     def update_play_button(self):
-        if self.player.playbackState() == QMediaPlayer.PlayingState:
-            pixmap = QPixmap.fromImage(self.sub_images[1])
+        if self.sub_images:
+            if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                pixmap = QPixmap.fromImage(self.sub_images[1])
+            else:
+                pixmap = QPixmap.fromImage(self.sub_images[0])
+            self.play_button.setIcon(QIcon(pixmap))
+            return
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.play_button.setIcon(
+                self.style().standardIcon(
+                    QStyle.StandardPixmap.SP_MediaPause))
         else:
-            pixmap = QPixmap.fromImage(self.sub_images[0])
-        self.play_button.setIcon(QIcon(pixmap))
+            self.play_button.setIcon(
+                self.style().standardIcon(
+                    QStyle.StandardPixmap.SP_MediaPlay))
 
     def keyPressEvent(self, event: QKeyEvent):
         key = event.key()
@@ -1975,8 +2050,6 @@ class AudioPlayer(QWidget):
         else:
             super().keyPressEvent(event)
 
-
-
     def update_slider(self, position):
         duration = self.player.duration()
         if duration > 0:
@@ -1984,6 +2057,9 @@ class AudioPlayer(QWidget):
             self.slider.blockSignals(True)
             self.slider.setValue(value)
             self.slider.blockSignals(False)
+            # Call on_buffer if within last 10 seconds
+      #      if duration - position <= 10000:
+       #         self.on_buffer(self.buffer)
         self.update_time_label(position, duration)
 
     def on_slider_moved(self, value):
@@ -2278,7 +2354,8 @@ class AudioPlayer(QWidget):
             meta_list = mutagen.File(file.path).pprint().split('=')
             new_meta_list = [meta_list[0]]
             for m in range(len(meta_list) - 1):
-                if (not 'LYRICS' in meta_list[m]) and (not 'lyrics' in meta_list[m]):
+                if ((not 'LYRICS' in meta_list[m]) and (not 'lyrics' in meta_list[m])
+                        and (not '©lyr' in meta_list[m])):
                     new_meta_list.append(meta_list[m + 1])
             new_meta_str = ': '.join([str(s) for s in new_meta_list])
             new_meta_str = new_meta_str.replace('LYRICS:', 'DATE:')
@@ -2447,10 +2524,40 @@ class AudioPlayer(QWidget):
 
         # --- Gap Killer (experimental)
 
-    def on_buffer(self, buf):
-        self._probe_buffer(buf)
+    def on_buffer(self, audio_buffer):
+        """
+        Called when a buffer of audio data is available.
+        Probes the buffer for silence at the end of the track and loads the next track if detected.
+        """
+        buf_bytes = audio_buffer.data()
+        if self._probe_buffer(buf_bytes):
+            self.next_track()
 
-    def _probe_buffer(self, buffer):
+
+    def _probe_buffer(self, buf, silence_threshold=0.001, min_silence_ms=1000):
+        """
+        Checks if the buffer contains a period of silence at the end of the track.
+        Returns True if silence is detected, False otherwise.
+        """
+        import numpy as np
+
+        # Convert buffer to numpy array (assuming 16-bit PCM)
+        audio_data = np.frombuffer(buf, dtype=np.int16)
+        # Normalize to [-1, 1]
+        audio_data = audio_data / 32768.0
+
+        # Check last N ms for silence
+        sample_rate = 44100  # Adjust if needed
+        samples_to_check = int((min_silence_ms / 1000) * sample_rate)
+        if len(audio_data) < samples_to_check:
+            return False
+
+        tail = audio_data[-samples_to_check:]
+        if np.max(np.abs(tail)) < silence_threshold:
+            return True
+        return False
+
+    def _probe_buffer_old(self, buffer):
         if not self.skip_silence:
             self._silence_ms = 0
             return
@@ -2699,7 +2806,7 @@ class AudioPlayer(QWidget):
     def get_local_playlists(self):
         self.playlist_widget.clear()
         self.playlist.clear()
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("SELECT id, PL_name FROM Playlists")
         playlists = cursor.fetchall()
@@ -2820,7 +2927,7 @@ class AudioPlayer(QWidget):
         self.playlist_widget.clear()
         self.playlist.clear()
         try:
-            conn = sqlite3.connect('Music.db')
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             if query == "song_title":
                 selection = "SELECT id, artist, song_title, album, path, file_name FROM Songs ORDER BY artist ASC"
@@ -3100,7 +3207,7 @@ class AudioPlayer(QWidget):
             playlist_id = file.id
             if not file.is_remote:
                 try:
-                    conn = sqlite3.connect('Music.db')
+                    conn = sqlite3.connect(DB_PATH)
                     cursor = conn.cursor()
                     cursor.execute(
                         "SELECT path, PL_name FROM Playlists WHERE id = ?",
@@ -3273,8 +3380,6 @@ class AudioPlayer(QWidget):
 
 
     def quit(self):
-      #  save_json(PLAYLISTS_FILE,{"server"   : self.api_url,
-      #                                 "playlists": self.playlists})
         save_json(SETTINGS_FILE, {"server"   : self.server,
                                   "mix_method": self.mix_method,
                                   "transition_duration": self.transition_duration,
@@ -3307,7 +3412,9 @@ class Worker(QThread):
             asyncio.set_event_loop(loop)
 
             # Run the async scan
-            if self.folder_path is None:
+            if self.api_url.endswith('scan_library'):
+                result = loop.run_until_complete(self.scan_library_async())
+            elif self.folder_path is None:
                 result = loop.run_until_complete(self.get_playlists_async())
             elif isinstance(self.folder_path, dict):
                 result = loop.run_until_complete(self.search_async())
@@ -3322,10 +3429,7 @@ class Worker(QThread):
             elif self.folder_path == 'server':
                 result = loop.run_until_complete(self.check_server_async())
             elif Path(self.folder_path).is_dir():
-                if self.api_url.endswith('/scan_library'):
-                    result = loop.run_until_complete(self.scan_library_async())
-                else:
-                    result = loop.run_until_complete(self.reveal_remote_song_async())
+                result = loop.run_until_complete(self.reveal_remote_song_async())
             else:
                 raise ValueError(f"Unknown folder_path value: {self.folder_path}")
 
@@ -3345,7 +3449,7 @@ class Worker(QThread):
         """Async function to scan the library"""
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                    f"{self.api_url}/scan_library",
+                    self.api_url,
                     json={'folder_path': self.folder_path}
             ) as response:
                 if response.status == 200:
