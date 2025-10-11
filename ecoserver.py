@@ -1088,7 +1088,7 @@ def shutdown_server():
     func()
 
 @app.route("/shutdown", methods=["POST"])
-def shutdown(icon):
+def shutdown():
     # Restrict to localhost only
    # if request.remote_addr not in ("127.0.0.1", "::1"):
     #    abort(403, "Forbidden: only localhost may request shutdown")
@@ -1168,6 +1168,7 @@ def on_quit(icon, item):
     sys.exit()
 
 def setup_tray():
+    global icon
     icon = Icon("Ecoserver", title="Ecoserver is running")
     icon.icon = create_image()
     icon.menu = Menu(MenuItem("Open in browser", open_browser),
