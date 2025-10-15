@@ -157,7 +157,15 @@ class AudioPlayer(QWidget):
         self.lyrics_timer = QTimer(self)
         self.lyrics_timer.setInterval(200)
         self.lyrics_timer.timeout.connect(self.update_lyrics_display)
-        self.meta_data =None
+        self.meta_data = {'album': '',
+                          'artist': '',
+                          'codec': '',
+                          'duration': 0,
+                          'lyrics': '',
+                          'picture': None,
+                          'title': '',
+                          'year': ''
+                          } # Current track metadata
 
         # Layout
         layout = QVBoxLayout(self)
@@ -860,11 +868,12 @@ class AudioPlayer(QWidget):
                                                 QLineEdit.Normal, "")
         if ok_pressed and server != '':
             self.status_bar.showMessage(f'Please Wait, testing connection with server: {server}')
-            self.status_bar.repaint()
+         #   self.status_bar.clearMessage()
             self.progress = QProgressBar()
+            self.progress.setStyleSheet("::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
             self.progress.setRange(0, 0)  # Indeterminate progress
-            self.status_bar.addWidget(self.progress)
-            self.status_bar.repaint()
+            self.status_bar.addPermanentWidget(self.progress)
+            self.status_bar.update()
 
             self.server_worker = Worker('server', server)
             self.server_worker.work_completed.connect(
@@ -904,9 +913,11 @@ class AudioPlayer(QWidget):
 
         # Create and configure progress bar
         self.progress = QProgressBar()
+        self.progress.setStyleSheet(
+            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
         self.progress.setRange(0, 0)  # Indeterminate progress
-        self.status_bar.addWidget(self.progress)
-        self.status_bar.repaint()
+        self.status_bar.addPermanentWidget(self.progress)
+        self.status_bar.update()
 
         # Create and configure worker thread
         self.scan_worker = Worker(folder_path, f"{self.api_url}/scan_library")
@@ -970,9 +981,11 @@ class AudioPlayer(QWidget):
 
         # Create and configure progress bar
         self.progress = QProgressBar()
+        self.progress.setStyleSheet(
+            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
         self.progress.setRange(0, 0)  # Indeterminate progress
-        self.status_bar.addWidget(self.progress)
-        self.status_bar.repaint()
+        self.status_bar.addPermanentWidget(self.progress)
+        self.status_bar.update()
 
         # Create and configure worker thread
         self.purge_worker = Worker(("purge", folder_path), self.api_url)
@@ -1107,10 +1120,12 @@ class AudioPlayer(QWidget):
             self.is_local = False
             self.status_bar.showMessage(
                 f'Searching for {col} {q}. Please Wait...')
-            progress = QProgressBar()
-            progress.setValue(50)
-            self.status_bar.addWidget(progress)
-            self.status_bar.repaint()
+            self.progress = QProgressBar()
+            self.progress.setStyleSheet(
+                "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+            self.progress.setRange(0, 0)  # Indeterminate progress
+            self.status_bar.addPermanentWidget(self.progress)
+            self.status_bar.update()
             self.search_tracks(col, q)
 
 
@@ -1121,10 +1136,12 @@ class AudioPlayer(QWidget):
             self.is_local = True
             self.status_bar.showMessage(
                 f'Searching for {col} {q}. Please Wait...')
-            progress = QProgressBar()
-            progress.setValue(50)
-            self.status_bar.addWidget(progress)
-            self.status_bar.repaint()
+            self.progress = QProgressBar()
+            self.progress.setStyleSheet(
+                "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+            self.progress.setRange(0, 0)  # Indeterminate progress
+            self.status_bar.addPermanentWidget(self.progress)
+            self.status_bar.update()
             self.search_tracks(col, q)
 
 
@@ -1221,15 +1238,13 @@ class AudioPlayer(QWidget):
                 self.on_search_completed({"search_result": search_result})
             except Exception as e:
                 QMessageBox.critical(self, "Error",f"Error searching songs: {str(e)}")
+                # Remove progress bar and clear status
+            if self.progress:
+                self.status_bar.removeWidget(self.progress)
+            self.status_bar.clearMessage()
         else:
             params = {"column":column, "query":q}
             url = f"{self.api_url}/search_songs"
-
-            # Create and configure progress bar
-            self.progress = QProgressBar()
-            self.progress.setRange(0, 0)  # Indeterminate progress
-            self.status_bar.addWidget(self.progress)
-            self.status_bar.repaint()
 
             # Create and configure worker thread
             self.search_worker = Worker(params, url)
@@ -1483,10 +1498,11 @@ class AudioPlayer(QWidget):
     def load_track(self, idx, auto_play=True, skip_mix_check=False, skip_silence=False):
         if 0 <= idx < len(self.playlist):
             file = self.playlist[idx]
-            if file.item_type == 'cover':
+            if file.item_type != 'song_title':
                 idx += 1
                 if 0 <= idx < len(self.playlist):
                     file = self.playlist[idx]
+                    self.playlist_widget.setCurrentRow(idx)
                 else:
                     return
             path = file.path
@@ -1496,22 +1512,26 @@ class AudioPlayer(QWidget):
             media_url = file.absolute_path()
             self.player.setSource(media_url)
             self.slider.setValue(0)
-            if auto_play:
-                try:
-                    self.player.play()
-                except Exception as e:
-                    QMessageBox.critical(self, "Error!", str(e))
-            self.lyrics_timer.start()
-         #   if self.is_local_file(path):
+            self.meta_data.clear()
             self.update_metadata(idx)
-            self.playlist_widget.setCurrentRow(idx)
-            # Optionally skip silence at start (very basic, see note below)
-            if skip_silence:
-                QTimer.singleShot(500, self.skip_leading_silence)
-            # Reset mix triggers unless skip_mix_check (for fade handover)
-            if not skip_mix_check:
-                self._mixing_next = False
-          #  self.update_play_button()
+            if not self.meta_data:
+                print(idx, path, "No metadata, skipping track")
+               # self.next_track()
+            elif self.meta_data['duration'] == 0:
+                print(idx, path, "Zero-length track, skipping")
+                self.playlist_widget.setCurrentRow(idx +1)
+                self.next_track()
+            if auto_play:
+                self.player.play()
+                self.lyrics_timer.start()
+                self.playlist_widget.setCurrentRow(idx)
+                # Optionally skip silence at start (very basic, see note below)
+                if skip_silence:
+                    QTimer.singleShot(500, self.skip_leading_silence)
+                # Reset mix triggers unless skip_mix_check (for fade handover)
+                if not skip_mix_check:
+                    self._mixing_next = False
+              #  self.update_play_button()
         else:
             self.title_label.setText("No Track Loaded")
             self.artist_label.setText("--")
@@ -1540,6 +1560,7 @@ class AudioPlayer(QWidget):
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
+
     def dropEvent(self, event):
         files = [u.toLocalFile() for u in event.mimeData().urls()]
         songs = []
@@ -1660,6 +1681,16 @@ class AudioPlayer(QWidget):
 
 
     def add_files(self, files):
+        if self.progress:
+            self.status_bar.removeWidget(self.progress)
+        self.progress = QProgressBar()
+        self.progress.setStyleSheet(
+            "::chunk {background-color: green; width: 8px; margin: 0.5px;}")
+        self.progress.setRange(0, 0)  # Indeterminate progress
+        self.status_bar.addPermanentWidget(self.progress)
+        self.status_bar.showMessage('adding files')
+        self.status_bar.update()
+        print('adding files')
         for f in files:
             if f.item_type == "playlist": # if os.path.isfile(f):
                 ext = Path(f.path).suffix.lower()
@@ -1695,11 +1726,17 @@ class AudioPlayer(QWidget):
                 self.playlist_widget.addItem(item)
             elif f.item_type == 'directory': # os.path.isdir(f):
                 self.load_dir(f)
-            if self.current_index == -1 and self.playlist[-1].item_type == 'song_title':
-                self.load_track(0)
+            self.status_bar.update()
         if self.progress:
             self.status_bar.removeWidget(self.progress)
         self.status_bar.clearMessage()
+        self.status_bar.update()
+        if self.playlist:
+            if self.current_index == -1 and self.playlist[-1].item_type == 'song_title':
+                self.load_track(0)
+        else:
+            QMessageBox.warning(self, "Error!", "No valid audio files found in selection.")
+
 
     def load_m3u_playlist(self, path):
         songs = []
@@ -1809,18 +1846,31 @@ class AudioPlayer(QWidget):
 
 
     def add_albums(self, albums):
+        if self.progress:
+            self.status_bar.removeWidget(self.progress)
+        self.progress = QProgressBar()
+        self.progress.setStyleSheet(
+            "::chunk {background-color: green; width: 8px; margin: 0.5px;}")
+        self.progress.setRange(0, 0)  # Indeterminate progress
+        self.status_bar.addPermanentWidget(self.progress)
+        self.status_bar.showMessage('adding albums')
+        self.status_bar.update()
+        print('adding albums')
         for album in albums:
             self.add_album(album)
             for song in albums[album]:
                 self.playlist.append(song)
                 item = QListWidgetItem(song.display_text)
                 self.playlist_widget.addItem(item)
-
-            if self.current_index == -1 and self.playlist:
-                self.load_track(0)
+            self.status_bar.update()
         if self.progress:
             self.status_bar.removeWidget(self.progress)
         self.status_bar.clearMessage()
+        self.status_bar.update()
+
+        if self.current_index == -1 and self.playlist:
+            self.load_track(0)
+
 
 
     def add_album(self, data):
@@ -1911,10 +1961,10 @@ class AudioPlayer(QWidget):
         self.playlist_widget.clear()
         self.playlist.clear()
         self.playlist_label.setText('Cue:')
-        self.player.stop()
+      #  self.player.stop()
         self.current_index = -1
-        self.lyrics_display.clear()
-        self.update_play_button()
+       # self.lyrics_display.clear()
+       # self.update_play_button()
 
     def is_remote_file(self, path):
         return path.is_remote
@@ -2014,6 +2064,7 @@ class AudioPlayer(QWidget):
                 next_path = self.playlist[next_idx]
             if not (0 <= next_idx < len(self.playlist)):
                 return
+           # self.playlist_widget.setCurrentRow(next_idx)
             self.load_track(next_idx)
 
     def toggle_play_pause(self):
@@ -2107,9 +2158,11 @@ class AudioPlayer(QWidget):
 
     def handle_error(self, error, error_string):
         if error != QMediaPlayer.NoError:
+            QMessageBox.critical(self, "Error!",
+                                 "Playback Error: " + error_string)
             self.next_track()
-            self.status_bar.showMessage("Playback Error: " + error_string)
-            self.update_play_button()
+
+            # self.update_play_button()
 
     def on_metadata_changed(self):
         path = self.playlist[self.current_index]
@@ -2135,7 +2188,7 @@ class AudioPlayer(QWidget):
             if 'error' in data['retrieved_metadata']:
                 self.status_bar.showMessage(f'Error retrieving metadata: {data["retrieved_metadata"]["error"]}')
             else:
-                self.meta_data = data['retrieved_metadata']
+                self.meta_data = data['retrieved_metadata'].copy()
                 title = self.meta_data.get('title', file.display_text)
                 artist = self.meta_data.get('artist', "--")
                 album = self.meta_data.get('album', "--")
@@ -2363,6 +2416,7 @@ class AudioPlayer(QWidget):
             for item in final_meta:
                 self.text.append(item)
             self.move_to_top()
+
 
 
 
@@ -2778,11 +2832,12 @@ class AudioPlayer(QWidget):
             'Scanning your Music Library for deleted songs and playlists. '
             'Please Wait, it might take some time depending on the library size'
         )
-        self.status_bar.repaint()
-        progress = QProgressBar()
-        progress.setValue(50)
-        self.status_bar.addWidget(progress)
-        self.status_bar.repaint()
+        self.progress = QProgressBar()
+        self.progress.setStyleSheet(
+            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+        self.progress.setRange(0, 0)  # Indeterminate progress
+        self.status_bar.addPermanentWidget(self.progress)
+        self.status_bar.update()
         try:
             # Check for deleted audio files and playlists
             self.status_bar.showMessage("Starting library purge")
@@ -2839,11 +2894,12 @@ class AudioPlayer(QWidget):
         self.playlist_label.setText('Loading Playlists from Server')
         self.status_bar.showMessage(
             'Loading Playlists from Server. Please Wait, it might take some time...')
-        self.status_bar.repaint()
-        progress = QProgressBar()
-        progress.setValue(50)
-        self.status_bar.addWidget(progress)
-        self.status_bar.repaint()
+        self.progress = QProgressBar()
+        self.progress.setStyleSheet(
+            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+        self.progress.setRange(0, 0)  # Indeterminate progress
+        self.status_bar.addPermanentWidget(self.progress)
+        self.status_bar.update()
         self.playlist_widget.clear()
         self.playlist.clear()
 
@@ -2896,9 +2952,10 @@ class AudioPlayer(QWidget):
 
     def cleanup_playlists(self):
         """Clean up after scan completion"""
-        # Remove progress bar and clear status
-        self.status_bar.removeWidget(self.progress)
+        if self.progress:
+            self.status_bar.removeWidget(self.progress)
         self.status_bar.clearMessage()
+        self.status_bar.update()
 
         # Clean up worker reference
         if self.playlists_worker:
@@ -2919,11 +2976,12 @@ class AudioPlayer(QWidget):
         self.playlist_label.setText('Getting local song list')
         self.status_bar.showMessage(
             'Getting local song list. Please Wait, it might take some time...')
-    #    self.status_bar.repaint()
-        progress = QProgressBar()
-        progress.setValue(50)
-        self.status_bar.addWidget(progress)
-        self.status_bar.repaint()
+        self.progress = QProgressBar()
+        self.progress.setStyleSheet(
+            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+        self.progress.setRange(0, 0)  # Indeterminate progress
+        self.status_bar.addPermanentWidget(self.progress)
+        self.status_bar.update()
         self.playlist_widget.clear()
         self.playlist.clear()
         try:
@@ -2961,30 +3019,34 @@ class AudioPlayer(QWidget):
                 files.append(song)
             self.playlist_label.setText(f'{query} List: ')
 
-
         except sqlite3.Error as e:
             QMessageBox.critical(self, "Error",f"Database error getting query: {str(e)}")
         except Exception as e:
             QMessageBox.critical(self, "Error",f"Error getting query: {str(e)}")
 
+        # Remove progress bar and clear status
+        if self.progress:
+            self.status_bar.removeWidget(self.progress)
+        self.status_bar.clearMessage()
+        self.status_bar.update()
+        self.status_bar.showMessage('List loaded. Enjoy!')
         self.add_files(files)
-        self.status_bar.showMessage(
-            'List loaded. Enjoy!')
 
 
 
     def get_list(self, query):
         self.is_local = False
         self.remote_base = self.api_url
-        self.playlist_label.setText(f'Getting {query} list from Server')
+        self.playlist_label.setText(f'Getting {query} list from Server. Please Wait...')
         self.status_bar.showMessage(
             f'Getting {query} list from Server. Please Wait, it might take '
             'some time...')
-        self.status_bar.repaint()
-        progress = QProgressBar()
-        progress.setValue(50)
-        self.status_bar.addWidget(progress)
-        self.status_bar.repaint()
+        self.progress = QProgressBar()
+        self.progress.setStyleSheet(
+            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+        self.progress.setRange(0, 0)  # Indeterminate progress
+        self.status_bar.addPermanentWidget(self.progress)
+        self.status_bar.update()
         self.playlist_widget.clear()
         self.playlist.clear()
         self.songs_worker = Worker(query, f'{self.api_url}/get_all')
@@ -3001,6 +3063,7 @@ class AudioPlayer(QWidget):
     @Slot(dict)
     def receive_list(self, retrieved: dict):
         """Handle successful playlist retrieval completion"""
+        self.status_bar.update()
         if self.songs_worker:
             self.is_local = False
             self.songs_worker.mutex.unlock()
@@ -3008,7 +3071,7 @@ class AudioPlayer(QWidget):
             self.is_local = True
         if 'error' in retrieved:
             QMessageBox.warning(self, "Error", retrieved['error'])
-        self.status_bar.repaint()
+        self.status_bar.update()
 
         try:
             self.clear_playlist()
@@ -3065,9 +3128,10 @@ class AudioPlayer(QWidget):
 
     def cleanup_songs(self):
         """Clean up after scan completion"""
-        # Remove progress bar and clear status
-     #   self.status_bar.removeWidget(self.progress)
+        if self.progress:
+            self.status_bar.removeWidget(self.progress)
         self.status_bar.clearMessage()
+        self.status_bar.update()
 
         # Clean up worker reference
         if self.songs_worker:
@@ -3114,9 +3178,10 @@ class AudioPlayer(QWidget):
 
     def cleanup_pl(self):
         """Clean up after scan completion"""
-        # Remove progress bar and clear status
-     #   self.status_bar.removeWidget(self.progress)
+        if self.progress:
+            self.status_bar.removeWidget(self.progress)
         self.status_bar.clearMessage()
+        self.status_bar.update()
 
         # Clean up worker reference
         if self.pl_worker:
@@ -3270,10 +3335,6 @@ class AudioPlayer(QWidget):
             else:
                 self.status_bar.showMessage(
                     'Loading Playlist from Server. Please Wait, it might take some time...')
-                progress = QProgressBar()
-                progress.setValue(50)
-                self.status_bar.addWidget(progress)
-                self.status_bar.repaint()
 
                 # Create and configure worker thread
                 self.pl_worker = Worker('pl', f"{self.api_url}/load_playlist/{playlist_id}")
@@ -3362,9 +3423,11 @@ class AudioPlayer(QWidget):
 
             # Create and configure progress bar
             self.progress = QProgressBar()
+            self.progress.setStyleSheet(
+                "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
             self.progress.setRange(0, 0)  # Indeterminate progress
-            self.status_bar.addWidget(self.progress)
-            self.status_bar.repaint()
+            self.status_bar.addPermanentWidget(self.progress)
+            self.status_bar.update()
 
             # Create and configure worker thread
             self.start_worker = Worker(folder_path, f"{self.api_url}/start")
@@ -3526,6 +3589,17 @@ class Worker(QThread):
             async with session.get(self.api_url) as response:
                 if response.status == 200:
                     retrieved_metadata = await response.json()
+                    result = {'retrieved_metadata': retrieved_metadata}
+                    return result
+                elif response.status == 404:
+                    retrieved_metadata = {'album': '',
+                                          'artist': '',
+                                          'codec': 'audio/flac 44.1kHz/16bits  860kbps',
+                                          'duration': 0,
+                                          'lyrics': '',
+                                          'picture': None,
+                                          'title': 'Not Found',
+                                          'year': ''}
                     result = {'retrieved_metadata': retrieved_metadata}
                     return result
                 else:
