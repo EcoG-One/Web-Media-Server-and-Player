@@ -92,12 +92,12 @@ class ListItem:
     def __init__(self):
         super().__init__()
         self.is_remote = False
-        self.item_type = ItemType
+        self.item_type = ItemType.SONG
         self.display_text ='Unknown'
         self.route = ''
         self.path = ''
         self.server = w.server
-        self.id = int
+     #   self.id = int
 
     def absolute_path(self):
         if self.is_remote:
@@ -791,11 +791,11 @@ class AudioPlayer(QWidget):
                     self.status_bar.showMessage(f"Added playlist: {pl_name}")
 
                 except sqlite3.Error as e:
-                    QMessageBox.warning(self, 'error'
+                    QMessageBox.warning(self, 'error',
                         f"Database error adding playlist {file_path}: {str(e)}")
                     errors += 1
                 except Exception as e:
-                    QMessageBox.critical(self, 'error'
+                    QMessageBox.critical(self, 'error',
                         f"Unexpected error adding playlist {file_path}: {str(e)}")
                     errors += 1
 
@@ -1212,6 +1212,7 @@ class AudioPlayer(QWidget):
             except sqlite3.Error as e:
                 QMessageBox.critical(self, "Error",
                                      f"Database error searching songs: {str(e)}")
+                return
             try:
                 albums = []
                 new_results = []
@@ -3376,11 +3377,11 @@ class AudioPlayer(QWidget):
         """Handle successful completion"""
         if not result:
             QMessageBox.warning(self, "Error", "Song was not revealed")
-            self.status_bar.repaint()
+            self.status_bar.update()
             return
         else:
             self.status_bar.showMessage(result["answer"])
-            self.status_bar.repaint()
+            self.status_bar.update()
             QMessageBox.information(self, 'Info:',
                                     result["answer"])
 
@@ -3393,10 +3394,11 @@ class AudioPlayer(QWidget):
 
 
     def cleanup_start(self):
-        """Clean up after scan completion"""
-        # Remove progress bar and clear status
-        #   self.status_bar.removeWidget(self.progress)
+        """Clean up after completion"""
+        if self.progress:
+            self.status_bar.removeWidget(self.progress)
         self.status_bar.clearMessage()
+        self.status_bar.update()
 
         # Clean up worker reference
         if self.start_worker:
@@ -3408,23 +3410,16 @@ class AudioPlayer(QWidget):
             self.request_reveal.emit(self.playlist[self.current_index])
 
     def reveal_path(self, song):
-        if not song.is_remote:
-            if sys.platform.startswith("win"):
-                os.startfile(os.path.dirname(song.path))
-            elif sys.platform == "darwin":
-                os.system(f'open -R "{song.path}"')
-            else:
-                os.system(f'xdg-open "{os.path.dirname(song.path)}"')
-        else:
+        if song.is_remote:
             folder_path = song.path
             self.status_bar.showMessage(
-                'Trying to reveal Song in remote server. Please Wait, it might take some time...'
-            )
+                'Trying to reveal Song in remote server. '
+                'Please Wait, it might take some time...')
 
             # Create and configure progress bar
             self.progress = QProgressBar()
             self.progress.setStyleSheet(
-                "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+                "::chunk {background-color: green; width: 8px; margin: 0.5px;}")
             self.progress.setRange(0, 0)  # Indeterminate progress
             self.status_bar.addPermanentWidget(self.progress)
             self.status_bar.update()
@@ -3440,6 +3435,13 @@ class AudioPlayer(QWidget):
                 self.start_worker.start()
             except Exception as e:
                 self.status_bar.showMessage("Error: " + str(e))
+        else:
+            if sys.platform.startswith("win"):
+                os.startfile(os.path.dirname(song.path))
+            elif sys.platform == "darwin":
+                os.system(f'open -R "{song.path}"')
+            else:
+                os.system(f'xdg-open "{os.path.dirname(song.path)}"')
 
 
     def quit(self):
@@ -3477,6 +3479,8 @@ class Worker(QThread):
             # Run the async scan
             if self.api_url.endswith('scan_library'):
                 result = loop.run_until_complete(self.scan_library_async())
+            elif self.api_url.endswith('start'):
+                result = loop.run_until_complete(self.reveal_remote_song_async())
             elif self.folder_path is None:
                 result = loop.run_until_complete(self.get_playlists_async())
             elif isinstance(self.folder_path, dict):
@@ -3491,8 +3495,6 @@ class Worker(QThread):
                 result = loop.run_until_complete(self.get_pl_async())
             elif self.folder_path == 'server':
                 result = loop.run_until_complete(self.check_server_async())
-            elif Path(self.folder_path).is_dir():
-                result = loop.run_until_complete(self.reveal_remote_song_async())
             else:
                 raise ValueError(f"Unknown folder_path value: {self.folder_path}")
 

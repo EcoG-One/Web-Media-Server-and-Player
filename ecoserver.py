@@ -1118,7 +1118,7 @@ def start():
         data = request.json
         path = data.replace('/', '\\')
         subprocess.Popen(r'explorer /select,"' + path + '"', shell=True)
-        return jsonify("Song Revealed on Server")
+        return jsonify(f"Song {path} Revealed on Server")
     except Exception as e:
         logger.error(f"Error launching Desktop Interface: {e}")
         logger.error(traceback.format_exc())
