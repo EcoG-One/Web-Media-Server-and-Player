@@ -2,7 +2,6 @@ import sys
 import os
 import sqlite3
 from fuzzywuzzy import fuzz
-# from django.contrib.gis.gdal.prototypes.srs import islocal
 from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot, QMutex
 from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence, QKeyEvent
 from PySide6.QtWidgets import (
@@ -10,13 +9,15 @@ from PySide6.QtWidgets import (
     QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
     QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar,
     QMenu, QStatusBar,QProgressBar, QFrame, QCheckBox, QStyle)
-from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData, QAudioBufferOutput
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 import mutagen
 from mutagen import File
 from mutagen.flac import FLAC
 from pathlib import Path
 from random import shuffle
-# import itertools
+import librosa
+import numpy as np
 import re
 import math
 from enum import Enum
@@ -28,10 +29,6 @@ import base64
 import webbrowser
 import wikipedia
 from dotenv import load_dotenv
-#  from sqlalchemy.orm import remote
-# from transformers.utils import is_remote_url
-
-# from ecoserver import is_localhost
 
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
@@ -65,11 +62,11 @@ def save_json(path: Path, obj):
 def get_settings():
     # json_data = load_json(PLAYLISTS_FILE, default={"server": "http://localhost:5000", "playlists": []})
     default = {"server": "localhost",
-               "mix_method": "Fade",
+               "mix_method": "Auto",
                "transition_duration": 4,
                "gap_enabled": True,
                "silence_threshold_db": -46,
-               "silence_min_duration": 0.5
+               "silence_min_duration": 0.1
                }
     json_settings = load_json(SETTINGS_FILE, default=default)
     return json_settings
@@ -92,7 +89,7 @@ class ListItem:
     def __init__(self):
         super().__init__()
         self.is_remote = False
-        self.item_type = ItemType.SONG
+        self.item_type = ItemType
         self.display_text ='Unknown'
         self.route = ''
         self.path = ''
@@ -447,7 +444,7 @@ class AudioPlayer(QWidget):
         self.lyrics_display.setReadOnly(True)
 
         # Mixing Controls UI
-        self.crossfade_modes = ["Fade", "Smooth", "Full", "Scratch", "Cue"]
+        self.crossfade_modes = ["Auto", "Fade", "Smooth", "Full", "Scratch", "Cue"]
         self.mix_method_combo = QComboBox()
         self.mix_method_combo.addItems(self.crossfade_modes)
         self.mix_method_combo.setCurrentText(self.mix_method)
@@ -579,7 +576,7 @@ class AudioPlayer(QWidget):
         self.player.playbackStateChanged.connect(self.update_play_button)
         self.slider.sliderPressed.connect(lambda: self.player.pause())
         self.slider.sliderReleased.connect(lambda: self.player.play())
-     #   self.player.metaDataChanged.connect(self.on_metadata_changed)
+        self.player.metaDataChanged.connect(self.on_metadata_changed)
         self.chk_gap.toggled.connect(lambda v: setattr(self, "gap_enabled", v))
         self.silence_db.valueChanged.connect(
             lambda v: setattr(self, "silence_threshold_db", v))
@@ -1331,6 +1328,51 @@ class AudioPlayer(QWidget):
 
 
     # --- Mixing/transition config slots ---
+
+    def detect_low_intensity_segments(self, audio_path, threshold_db=-46,
+                                      frame_duration=0.1):
+        # Load audio file
+        y, sr = librosa.load(audio_path, sr=None)
+        duration = librosa.get_duration(y=y, sr=sr)
+        time_in_audio = self.transition_duration
+
+        # Focus on the last 10 seconds
+        if duration < 10:
+            self.status_bar.showMessage("Audio is shorter than 10 seconds.")
+            start_sample = 0
+        else:
+            start_sample = int((duration - 10) * sr)
+        y_last10 = y[start_sample:]
+
+        # Frame analysis
+        frame_length = int(frame_duration * sr)
+        hop_length = frame_length
+        num_frames = int(len(y_last10) / hop_length)
+
+        for i in range(num_frames):
+            start = i * hop_length
+            end = start + frame_length
+            frame = y_last10[start:end]
+
+            # Avoid empty frames
+            if len(frame) == 0:
+                continue
+
+            rms = np.sqrt(np.mean(frame ** 2))
+            db = 20 * np.log10(rms + 1e-10)  # Avoid log(0)
+
+            if db < threshold_db:
+                time_in_audio = (start_sample + start) / sr
+                break
+        transition_duration = duration - time_in_audio
+        if transition_duration >= 10.0:
+            transition_duration = 9.8
+        if transition_duration <= 1.0:
+            transition_duration = 1.1
+
+        return transition_duration
+
+
     def set_mix_method(self, method):
         self.mix_method = method
 
@@ -1351,7 +1393,9 @@ class AudioPlayer(QWidget):
             if not hasattr(self, "_mixing_next") or not self._mixing_next:
                 self._mixing_next = True
                 # Dispatch to correct crossfade mode
-                if self.mix_method == "Fade":
+                if self.mix_method == "Auto":
+                    self.start_fade_to_next(mode="auto")
+                elif self.mix_method == "Fade":
                     self.start_fade_to_next(mode="fade")
                 elif self.mix_method == "Smooth":
                     self.start_fade_to_next(mode="smooth")
@@ -1364,7 +1408,7 @@ class AudioPlayer(QWidget):
         else:
             self._mixing_next = False
 
-    def start_fade_to_next(self, mode="fade"):
+    def start_fade_to_next(self, mode="auto"):
         """Perform the selected crossfade mode when transitioning."""
         next_idx = self.current_index + 1
         if not (0 <= next_idx < len(self.playlist)):
@@ -1376,12 +1420,8 @@ class AudioPlayer(QWidget):
                 return
             next_song = self.playlist[next_idx]
         if next_song.is_remote:
-           # abs_path = next_path.split('5000/')[1]
-         #   next_song.server = self.api_url
             next_song.route = 'serve_audio'
-      #      next_path = next_song.absolute_path()  # f"{next_song}/serve_audio/{abs_path}"
-      #  else:
-       #     next_path = next_song.path
+
         self.next_player = QMediaPlayer(self)
         self.next_output = QAudioOutput(self)
         self.next_player.setAudioOutput(self.next_output)
@@ -1389,11 +1429,7 @@ class AudioPlayer(QWidget):
 #        self.next_player.setSource(QUrl.fromLocalFile(next_path))
         self.next_output.setVolume(0)
         self.slider.setValue(0)
-     #   self.update_metadata(next_idx)
-       # if self.is_local_file(next_path):
-        #    self.set_album_art(next_path)
         self.next_player.play()
-        self.update_metadata(next_idx)
        # self.load_lyrics(next_path)
         self.lyrics_timer.start()
         self.playlist_widget.setCurrentRow(next_idx)
@@ -1404,9 +1440,14 @@ class AudioPlayer(QWidget):
 
         def fade():
             self._fade_step += 1
+         #   print(self._fade_step, fade_steps)
             frac = self._fade_step / fade_steps
 
-            if mode == "fade":
+            if mode == "auto":
+                # Next track starts at full volume, old does not fade out
+                self.audio_output.setVolume(1.0)
+                self.next_output.setVolume(1.0)
+            elif mode == "fade":
                 # Linear fade out/in
                 self.audio_output.setVolume(max(0, 1.0 - frac))
                 self.next_output.setVolume(min(1.0, frac))
@@ -1432,28 +1473,26 @@ class AudioPlayer(QWidget):
                     self.audio_output.setVolume(0.0)
                     self.next_output.setVolume(1.0)
             else:
-                # Default to fade
-                self.audio_output.setVolume(max(0, 1.0 - frac))
-                self.next_output.setVolume(min(1.0, frac))
+                # Default to auto
+                self.audio_output.setVolume(1.0)
+                self.next_output.setVolume(1.0)
 
             if self._fade_step >= fade_steps:
+             #   print("Fade complete, switching tracks")
                 self.fade_timer.stop()
                 self.audio_output.setVolume(1.0)
                 self.player.stop()
                 # Switch to next player
                 self.player = self.next_player
                 self.audio_output = self.next_output
+                self.update_metadata(next_idx)
                 self.current_index = next_idx
-            #    self.load_track(self.current_index, auto_play=False, skip_mix_check=True)
-            #    self.player.play()
-            #    if self.is_local_file(next_path):
-             #       self.update_metadata(self.current_index)
-              #  self.update_play_button()
+
                 self.player.positionChanged.connect(self.update_slider)
                 self.player.durationChanged.connect(self.update_duration)
                 self.player.mediaStatusChanged.connect(self.media_status_changed)
                 self.player.playbackStateChanged.connect(self.update_play_button)
-            #    self.player.metaDataChanged.connect(self.on_metadata_changed)
+                self.player.metaDataChanged.connect(self.on_metadata_changed)
                 self.player.errorOccurred.connect(self.handle_error)
                 self.player.positionChanged.connect(self.check_for_mix_transition)
                 self.next_player = None
@@ -1496,7 +1535,7 @@ class AudioPlayer(QWidget):
             # Already a URL
             return QUrl(path)
 
-    def load_track(self, idx, auto_play=True, skip_mix_check=False, skip_silence=False):
+    def load_track(self, idx, auto_play=True):
         if 0 <= idx < len(self.playlist):
             file = self.playlist[idx]
             if file.item_type != 'song_title':
@@ -1513,26 +1552,12 @@ class AudioPlayer(QWidget):
             media_url = file.absolute_path()
             self.player.setSource(media_url)
             self.slider.setValue(0)
-            self.meta_data.clear()
-            self.update_metadata(idx)
-            if not self.meta_data:
-                print(idx, path, "No metadata, skipping track")
-               # self.next_track()
-            elif self.meta_data['duration'] == 0:
-                print(idx, path, "Zero-length track, skipping")
-                self.playlist_widget.setCurrentRow(idx +1)
-                self.next_track()
-            if auto_play:
-                self.player.play()
-                self.lyrics_timer.start()
-                self.playlist_widget.setCurrentRow(idx)
-                # Optionally skip silence at start (very basic, see note below)
-                if skip_silence:
-                    QTimer.singleShot(500, self.skip_leading_silence)
-                # Reset mix triggers unless skip_mix_check (for fade handover)
-                if not skip_mix_check:
-                    self._mixing_next = False
-              #  self.update_play_button()
+            self.player.play()
+            self.lyrics_timer.start()
+            self.playlist_widget.setCurrentRow(idx)
+            if not self.is_local_file(path):
+                self.update_metadata(idx)
+          #  self.update_play_button()
         else:
             self.title_label.setText("No Track Loaded")
             self.artist_label.setText("--")
@@ -1691,7 +1716,7 @@ class AudioPlayer(QWidget):
         self.status_bar.addPermanentWidget(self.progress)
         self.status_bar.showMessage('adding files')
         self.status_bar.update()
-        print('adding files')
+        self.status_bar.showMessage('Now adding the files. Please Wait...')
         for f in files:
             if f.item_type == "playlist": # if os.path.isfile(f):
                 ext = Path(f.path).suffix.lower()
@@ -1856,7 +1881,7 @@ class AudioPlayer(QWidget):
         self.status_bar.addPermanentWidget(self.progress)
         self.status_bar.showMessage('adding albums')
         self.status_bar.update()
-        print('adding albums')
+        self.status_bar.showMessage('Songs found, now shorting them in Albums. Please Wait...')
         for album in albums:
             self.add_album(album)
             for song in albums[album]:
@@ -2166,11 +2191,12 @@ class AudioPlayer(QWidget):
             # self.update_play_button()
 
     def on_metadata_changed(self):
-        path = self.playlist[self.current_index]
+        path = self.playlist[self.current_index].path
         if self.is_local_file(path):
             md = self.player.metaData()
             if not md.isEmpty():
                 self.update_metadata(self.current_index)
+
 
     def move_to_top(self):
         cursor = self.text.textCursor()
@@ -2195,6 +2221,9 @@ class AudioPlayer(QWidget):
                 album = self.meta_data.get('album', "--")
                 year = self.meta_data.get('year', "--")
                 codec = self.meta_data.get('codec', "--").replace('audio/', '')
+                if self.mix_method == "Auto":
+                    self.transition_duration = self.meta_data.get(
+                        'transition_duration', 5)
               #  self.set_album_art(path)
 
                 self.set_metadata_label()
@@ -2249,7 +2278,8 @@ class AudioPlayer(QWidget):
                 'duration': 0,
                 'lyrics'  : '',
                 'codec'   : '',
-                'picture' : None
+                'picture' : None,
+                'transition_duration' : 5.0
             }
 
             # Get basic metadata
@@ -2367,7 +2397,17 @@ class AudioPlayer(QWidget):
                     metadata['picture'] = audio_file['covr'][0]
             except Exception as e:
                 self.status_bar.showMessage(
-                    f"Error reading album art from {file_path}: {e}")
+                    f"Error reading album art from {file_path}: {str(e)}")
+
+            # Transition Duration
+            try:
+                metadata["transition_duration"] = self.detect_low_intensity_segments(
+                    file_path, threshold_db=self.silence_threshold_db,
+                                    frame_duration=0.1)
+            except Exception as e:
+                self.status_bar.showMessage(
+                    f"Error detecting transition duration from {file_path}: {str(e)}")
+
 
             self.status_bar.showMessage(f"Successfully extracted metadata from: {file_path}")
             return metadata
@@ -2396,6 +2436,9 @@ class AudioPlayer(QWidget):
             # local fallback
             self.meta_data = None
             self.meta_data = self.get_audio_metadata(file.path)
+            if self.mix_method == "Auto":
+                self.transition_duration = self.meta_data.get(
+                    'transition_duration', 5)
             self.set_metadata_label()
             if self.meta_data['year'] is None:
                 self.year_label.setText('Year: ---')

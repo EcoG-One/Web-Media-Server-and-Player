@@ -15,7 +15,8 @@ from PIL import Image, ImageDraw
 from fuzzywuzzy import fuzz, process
 import webbrowser
 import signal
-# import shutil
+import librosa
+import numpy as np
 from plyer import notification
 from dotenv import load_dotenv
 
@@ -152,6 +153,49 @@ def init_database():
         logger.error(traceback.format_exc())
         raise
 
+def detect_low_intensity_segments(audio_path, threshold_db=-46,
+                                  frame_duration=0.1):
+    # Load audio file
+    y, sr = librosa.load(audio_path, sr=None)
+    duration = librosa.get_duration(y=y, sr=sr)
+    time_in_audio = 5
+
+    # Focus on the last 10 seconds
+    if duration < 10:
+        print("Audio is shorter than 10 seconds.")
+        start_sample = 0
+    else:
+        start_sample = int((duration - 10) * sr)
+    y_last10 = y[start_sample:]
+
+    # Frame analysis
+    frame_length = int(frame_duration * sr)
+    hop_length = frame_length
+    num_frames = int(len(y_last10) / hop_length)
+
+    for i in range(num_frames):
+        start = i * hop_length
+        end = start + frame_length
+        frame = y_last10[start:end]
+
+        # Avoid empty frames
+        if len(frame) == 0:
+            continue
+
+        rms = np.sqrt(np.mean(frame ** 2))
+        db = 20 * np.log10(rms + 1e-10)  # Avoid log(0)
+
+        if db < threshold_db:
+            time_in_audio = (start_sample + start) / sr
+            break
+    transition_duration = duration - time_in_audio
+    if transition_duration >= 10.0:
+        transition_duration = 9.8
+    if transition_duration <= 1.0:
+        transition_duration = 1.1
+
+    return transition_duration
+
 
 def get_audio_metadata(file_path):
     """Extract metadata from audio file with comprehensive error handling"""
@@ -175,7 +219,8 @@ def get_audio_metadata(file_path):
             'duration': 0,
             'lyrics'  : '',
             'codec'   : '',
-            'picture' : None
+            'picture' : None,
+            'transition_duration' : 5.0
         }
 
         # Get basic metadata
@@ -285,6 +330,12 @@ def get_audio_metadata(file_path):
                 metadata['picture'] = audio_file['covr'][0]
         except Exception as e:
             logger.warning(f"Error reading album art from {file_path}: {e}")
+
+        try:
+            metadata["transition_duration"] = detect_low_intensity_segments(file_path)
+        except Exception as e:
+            logger.error(
+                f"Error detecting transition duration from {file_path}: {e}")
 
         logger.debug(f"Successfully extracted metadata from: {file_path}")
         return metadata
