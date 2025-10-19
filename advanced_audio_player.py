@@ -1334,7 +1334,7 @@ class AudioPlayer(QWidget):
         # Load audio file
         y, sr = librosa.load(audio_path, sr=None)
         duration = librosa.get_duration(y=y, sr=sr)
-        time_in_audio = self.transition_duration
+        time_in_audio = 0
 
         # Focus on the last 10 seconds
         if duration < 10:
@@ -1365,10 +1365,8 @@ class AudioPlayer(QWidget):
                 time_in_audio = (start_sample + start) / sr
                 break
         transition_duration = duration - time_in_audio
-        if transition_duration >= 10.0:
-            transition_duration = 9.8
-        if transition_duration <= 1.0:
-            transition_duration = 1.1
+        if time_in_audio <= 0:
+            transition_duration = 0.1  # Minimum transition duration
 
         return transition_duration
 
@@ -1498,6 +1496,8 @@ class AudioPlayer(QWidget):
                 self.next_player = None
                 self.next_output = None
                 self._mixing_next = False
+                self.update_play_button()
+                self.playlist_widget.setCurrentRow(self.current_index)
 
         self.fade_timer.timeout.connect(fade)
         self.fade_timer.start()
@@ -1557,7 +1557,7 @@ class AudioPlayer(QWidget):
             self.playlist_widget.setCurrentRow(idx)
             if not self.is_local_file(path):
                 self.update_metadata(idx)
-          #  self.update_play_button()
+            self.update_play_button()
         else:
             self.title_label.setText("No Track Loaded")
             self.artist_label.setText("--")
@@ -1567,7 +1567,7 @@ class AudioPlayer(QWidget):
             self.album_art.setPixmap(QPixmap())
             self.lyrics_display.clear()
             self.lyrics_timer.stop()
-        self.update_play_button()
+       # self.update_play_button()
 
     def skip_leading_silence(self):
         """A very basic silence-skip: jump forward if amplitude is zero

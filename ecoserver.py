@@ -158,7 +158,7 @@ def detect_low_intensity_segments(audio_path, threshold_db=-46,
     # Load audio file
     y, sr = librosa.load(audio_path, sr=None)
     duration = librosa.get_duration(y=y, sr=sr)
-    time_in_audio = 5
+    time_in_audio = 0
 
     # Focus on the last 10 seconds
     if duration < 10:
@@ -189,10 +189,9 @@ def detect_low_intensity_segments(audio_path, threshold_db=-46,
             time_in_audio = (start_sample + start) / sr
             break
     transition_duration = duration - time_in_audio
-    if transition_duration >= 10.0:
-        transition_duration = 9.8
-    if transition_duration <= 1.0:
-        transition_duration = 1.1
+    if time_in_audio == 0:
+        transition_duration = 0.1  # Default if no low-intensity segment found
+
 
     return transition_duration
 
