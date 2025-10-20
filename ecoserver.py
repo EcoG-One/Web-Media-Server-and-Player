@@ -12,12 +12,13 @@ import base64
 from threading import Thread
 from pystray import Icon, MenuItem, Menu
 from PIL import Image, ImageDraw
-from fuzzywuzzy import fuzz, process
+from fuzzywuzzy import fuzz
 import webbrowser
 import signal
 import librosa
 import numpy as np
 from plyer import notification
+from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
 
 app = Flask(__name__)
@@ -296,6 +297,21 @@ def get_audio_metadata(file_path):
                     if audio_file.tags.get('\xa9lyr'):
                         metadata['lyrics'] = audio_file.tags['\xa9lyr'][0]
                 else:
+                    metadata['lyrics'] = "--"
+            if metadata['lyrics'] == "":
+                try:
+                    lyr = LyricsPlugin()
+                    metadata['lyrics'] = lyr.get_lyrics(metadata['artist'],
+                                                        metadata['title'],
+                                                        metadata['album'],
+                                                        metadata['duration'])
+                    if metadata['lyrics'] != "":
+                        lrc_path = os.path.splitext(file_path)[0] + ".lrc"
+                        with open(lrc_path, "w", encoding='utf-8-sig') as f:
+                            f.write(metadata['lyrics'])
+                except Exception as e:
+                    logger.warning(
+                        f"Error reading lyrics from {file_path}: {str(e)}")
                     metadata['lyrics'] = "--"
         except Exception as e:
             logger.warning(f"Error reading lyrics from {file_path}: {e}")
@@ -1043,6 +1059,8 @@ def get_song_metadata(file_path):
             if metadata['picture']:
                 try:
                     metadata['picture'] = base64.b64encode(metadata['picture']).decode('utf-8')
+                    metadata['picture'] = base64.b64encode(metadata['picture']).decode('utf-8')
+                    metadata['picture'] = base64.b64encode(metadata['picture']).decode('utf-8')
                 except Exception as e:
                     logger.warning(f"Error encoding album art: {e}")
                     metadata['picture'] = None
@@ -1131,7 +1149,6 @@ def desk_ui():
 
 
 def shutdown_server():
-    from werkzeug import Request
     func = request.environ.get('werkzeug.server.shutdown')
     if func is None:
         raise RuntimeError('Not running with the Werkzeug Server')

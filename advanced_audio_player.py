@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar,
     QMenu, QStatusBar,QProgressBar, QFrame, QCheckBox, QStyle)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 import mutagen
 from mutagen import File
 from mutagen.flac import FLAC
@@ -28,6 +27,7 @@ import requests
 import base64
 import webbrowser
 import wikipedia
+from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -2363,6 +2363,19 @@ class AudioPlayer(QWidget):
                             metadata['lyrics'] = audio_file.tags['\xa9lyr'][0]
                     else:
                         metadata['lyrics'] = "--"
+                if metadata['lyrics'] == "":
+                    try:
+                        lyr = LyricsPlugin()
+                        metadata['lyrics'] = lyr.get_lyrics(metadata['artist'], metadata['title'],
+                                             metadata['album'], metadata['duration'])
+                        if metadata['lyrics'] != "":
+                            lrc_path = os.path.splitext(file_path)[0] + ".lrc"
+                            with open(lrc_path, "w", encoding='utf-8-sig') as f:
+                                f.write(metadata['lyrics'])
+                    except Exception as e:
+                        self.status_bar.showMessage(
+                            f"Error reading lyrics from {file_path}: {str(e)}")
+                        metadata['lyrics'] = "--"
             except Exception as e:
                 self.status_bar.showMessage(f"Error reading lyrics from {file_path}: {str(e)}")
 
@@ -3682,51 +3695,19 @@ class SynchronizedLyrics:
         self.times = []
         self.lines = []
         self.raw_lyrics = ""
-        if w.is_remote_file(audio):
-            try:
-                if w.meta_data and 'lyrics' in w.meta_data and w.meta_data[
-                    'lyrics']:
-             #       data = r.json()
-                    self.raw_lyrics = w.meta_data['lyrics']
-                else:
-                    self.raw_lyrics = "--"
-            except Exception as e:
-                w.status_bar.showMessage("Remote lyrics fetch error:" + str(e))
-        else:
-            if audio.path:
-                lrc_path = os.path.splitext(audio.path)[0] + ".lrc"
-                if os.path.exists(lrc_path):
-                    with open(lrc_path, encoding='utf-8-sig') as f:
-                        self.raw_lyrics = f.read()
-                else:
-                    self.raw_lyrics = self.get_embedded_lyrics(audio.path)
+
+        try:
+            if w.meta_data and 'lyrics' in w.meta_data and w.meta_data[
+                'lyrics']:
+         #       data = r.json()
+                self.raw_lyrics = w.meta_data['lyrics']
+            else:
+                self.raw_lyrics = "--"
+        except Exception as e:
+            w.status_bar.showMessage("Remote lyrics fetch error:" + str(e))
+
         self.parse_lyrics(self.raw_lyrics)
 
-    def get_embedded_lyrics(self, audio_path):
-        audio = File(audio_path)
-        if audio is None:
-            return ""
-
-            # FLAC/Vorbis
-        if audio.__class__.__name__ == 'FLAC':
-            for key in audio:
-                if key.lower() in ('lyrics', 'unsyncedlyrics', 'lyric'):
-                    return audio[key][0]
-            return ""
-
-            # MP3 (ID3)
-        if hasattr(audio, 'tags') and audio.tags:
-            # USLT (unsynchronized lyrics) is the standard for ID3
-            for k in audio.tags.keys():
-                if k.startswith('USLT') or k.startswith('SYLT'):
-                    return str(audio.tags[k])
-                if k.lower() in ('lyrics', 'unsyncedlyrics', 'lyric'):
-                    return str(audio.tags[k])
-            # MP4/AAC
-        if hasattr(audio, 'tags') and hasattr(audio.tags, 'get'):
-            if audio.tags.get('\xa9lyr'):
-                return audio.tags['\xa9lyr'][0]
-        return ""
 
     def parse_lyrics(self, lyrics_text):
         time_tag = re.compile(r"\[(\d+):(\d+)(?:\.(\d+))?\]")
