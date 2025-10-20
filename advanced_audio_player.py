@@ -3512,20 +3512,42 @@ class AudioPlayer(QWidget):
 
 
 class Worker(QThread):
-    """Worker thread for handling the asynchronous scan operation"""
+    """
+    Worker thread for handling asynchronous operations such as scanning, purging,
+    searching libraries, and interacting with remote servers. This class uses
+    PySide6's QThread to perform tasks in a separate thread to avoid blocking
+    the main GUI thread.
+
+    Attributes:
+        work_completed (Signal): Signal emitted when the work is successfully completed.
+        work_error (Signal): Signal emitted when an error occurs during the operation.
+        mutex (QMutex): Mutex to ensure thread-safe operations.
+        folder_path (str): Path to the folder being processed.
+        api_url (str): URL of the API endpoint for the operation.
+    """
 
     # Define signals for communicating with the main thread
     work_completed = Signal(dict)  # Emits scan result data
     work_error = Signal(str)  # Emits error message
 
     def __init__(self, folder_path, api_url):
+        """
+        Initialize the Worker thread with the folder path and API URL.
+
+        Args:
+            folder_path (str): Path to the folder to be processed.
+            api_url (str): URL of the API endpoint for the operation.
+        """
         super().__init__()
         self.mutex = QMutex()
         self.folder_path = folder_path
         self.api_url = api_url
 
     def run(self):
-        """Run the async work in a separate thread"""
+        """
+        Run the asynchronous work in a separate thread. This method is executed
+        when the thread starts. It handles exceptions and ensures proper cleanup.
+        """
         result = None
         try:
             # Create new event loop for this thread
@@ -3567,7 +3589,10 @@ class Worker(QThread):
             loop.close()
 
     async def scan_library_async(self):
-        """Async function to scan the library"""
+        """
+        Asynchronous function to scan the library. Uses aiohttp to interact
+        with the API endpoint for scanning the library.
+        """
         async with aiohttp.ClientSession() as session:
             async with session.post(
                     self.api_url,
@@ -3580,7 +3605,10 @@ class Worker(QThread):
 
 
     async def purge_library_async(self):
-        """Async function to purge the library"""
+        """
+        Asynchronous function to purge the library. Uses aiohttp to interact
+        with the API endpoint for purging the library.
+        """
         async with aiohttp.ClientSession() as session:
             async with session.post(
                     f"{self.api_url}/purge_library",
@@ -3593,7 +3621,10 @@ class Worker(QThread):
 
 
     async def search_async(self):
-        """Async function to search the library"""
+        """
+        Asynchronous function to search the library. Uses aiohttp to interact
+        with the API endpoint for searching the library.
+        """
         async with aiohttp.ClientSession() as session:
             async with session.get(self.api_url,
                                    params=self.folder_path) as response:
@@ -3606,7 +3637,10 @@ class Worker(QThread):
 
 
     async def get_playlists_async(self):
-        """Async function to get the playlists from server"""
+        """
+        Asynchronous function to retrieve playlists from the server. Uses aiohttp
+        to interact with the API endpoint for fetching playlists.
+        """
         async with aiohttp.ClientSession() as session:
             async with session.get(
                     f"{self.api_url}/get_playlists", timeout=5
@@ -3620,7 +3654,10 @@ class Worker(QThread):
                         f"Failed to fetch playlists: {response.status}")
 
     async def get_songs_async(self):
-        """Async function to get the playlists from server"""
+        """
+        Asynchronous function to retrieve songs from the server. Uses aiohttp
+        to interact with the API endpoint for fetching songs.
+        """
         async with aiohttp.ClientSession() as session:
             async with session.get(self.api_url, params={"query": self.folder_path}) as response:
                 if response.status == 200:
@@ -3631,7 +3668,10 @@ class Worker(QThread):
                     raise Exception(f"Failed to fetch songs: {response.status}")
 
     async def get_pl_async(self):
-        """Async function to get a playlist from server"""
+        """
+        Asynchronous function to retrieve a specific playlist from the server.
+        Uses aiohttp to interact with the API endpoint for fetching the playlist.
+        """
         async with aiohttp.ClientSession() as session:
             async with session.get(self.api_url) as response:
                 if response.status == 200:
@@ -3642,7 +3682,10 @@ class Worker(QThread):
                     raise Exception(f"Failed to fetch playlist: {response.status}")
 
     async def get_metadata_async(self):
-        """Async function to get metadata from server"""
+        """
+        Asynchronous function to retrieve metadata from the server. Uses aiohttp
+        to interact with the API endpoint for fetching metadata.
+        """
         async with aiohttp.ClientSession() as session:
             async with session.get(self.api_url) as response:
                 if response.status == 200:
@@ -3666,7 +3709,10 @@ class Worker(QThread):
 
 
     async def check_server_async(self):
-        """Async function to check if server is valid"""
+        """
+        Asynchronous function to check if the server is valid and reachable.
+        Uses aiohttp to interact with the API endpoint for server validation.
+        """
         async with aiohttp.ClientSession() as session:
             async with session.get(f'http://{self.api_url}:5000', timeout=3) as response:
                 if response.status == 200:
@@ -3677,7 +3723,10 @@ class Worker(QThread):
 
 
     async def reveal_remote_song_async(self):
-        """Async function to reveal playing song in remote server"""
+        """
+        Asynchronous function to reveal the currently playing song on the remote server.
+        Uses aiohttp to interact with the API endpoint for revealing the song.
+        """
         async with aiohttp.ClientSession() as session:
             async with session.post(
                     self.api_url,
