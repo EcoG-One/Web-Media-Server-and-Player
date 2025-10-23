@@ -4,6 +4,46 @@
     <title>EcoG's Media Player</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="static/css/style.css">
+    <style>
+        /* Minimal inline styles for lyrics & list display & artists/albums */
+        .lyrics { max-height: 240px; overflow-y: auto; padding: 10px; border: 1px solid #ddd; border-radius: 5px; background: #fff; }
+        .lyrics-line { padding: 4px 6px; color: #333; }
+        .lyrics-line.current { background: #333; color: #fff; border-radius: 3px; }
+        .list-album { margin-bottom: 12px; }
+        .list-song { padding: 4px 6px; border-bottom: 1px dashed #eee; cursor: pointer; }
+        .artist-item, .album-item { display: inline-block; margin: 8px; vertical-align: top; width: 160px; cursor: pointer; text-align: center; }
+        .album-cover { width: 150px; height: 150px; object-fit: cover; border-radius: 4px; border: 1px solid #ddd; display: block; margin: 0 auto 6px; }
+        .artist-name { font-weight: bold; margin-bottom: 4px; }
+        .hidden { display: none; }
+        .controls-inline { display: inline-block; margin-left: 8px; }
+        .next {font-family: inherit;
+                -webkit-box-pack: center;
+                justify-content: center;
+                background: #f5f4ec;
+                border: 1px solid #f5f4ec;
+                border-radius: 4px;
+                display: flex;
+                cursor: pointer;
+                -webkit-box-align: center;
+                align-items: center;
+                gap: 8px;
+                padding: 8px 12px 8px 8px;
+                width: 73px;
+                height: 24px;}
+        .icon {font-family: inherit;
+                cursor: pointer;
+                forced-color-adjust: auto;
+                width: 10px;}
+        .prevnext { color: #000;
+                font-family: Helvetica Neue,Helvetica,Nimbus Sans,Arial,sans-serif;
+                font-size: 14px;
+                display: flex;
+                -webkit-box-align: center;
+                align-items: center;
+                gap: 4px;
+                -webkit-box-pack: center;
+                justify-content: center;}
+    </style>
 </head>
 <body>
     <h1>EcoG's Media Player</h1>
@@ -15,15 +55,62 @@
         {% endif %}
         <button onclick="showPlayFromPlaylist()">Play Playlists</button>
         <button onclick="showPlayFile()">Play Songs</button>
+
+        <!-- New Buttons -->
+        <button onclick="listSongs()">List Songs</button>
+        <button onclick="listArtists()">List Artists</button>
+        <button onclick="listAlbums()">List Albums</button>
+        <button onclick="toggleLyricsPanel()">Show/Hide Lyrics</button>
+      <!--  <button onclick="toggleLyricsSync()">Toggle Lyrics Sync</button> -->
     </div>
 
     <div id="content" class="content">
         <div id="status"></div>
+
         <div id="playlist-section" class="hidden">
                 <label for="randomize">Play in Random Order</label>
                 <input type="checkbox" id="randomize" name="randomize" value=0 onclick="this.value=this.checked ? '1' : '0';">
             <h3>Select Playlist</h3>
             <div id="playlist-list"></div>
+        </div>
+
+        <div id="list-section" class="hidden">
+            <h3>All Songs (grouped by album)</h3>
+            <div id="all-songs-list">Loading...</div>
+        </div>
+
+        <div id="artists-section" class="hidden">
+            <h3>Artists</h3>
+            <div id="artists-list">Loading...</div>
+        </div>
+
+        <div id="artist-albums-section" class="hidden">
+            <h3 id="artist-name"></h3>
+            <div id="artist-albums-list"></div>
+        </div>
+
+        <div id="albums-section" class="hidden">
+            <h3>Albums</h3>
+            <div class="prevnext">
+            <label for="limit">Albums per Page:</label>
+            <input type="number" value=20 min=1 max=999 name="limit" id='limit' />
+            <button onclick="listAlbums()" class="next">
+                <svg viewBox="0 0 1024 1024" class="icon" role="img" aria-hidden="true">
+                    <path d="M358 311q0 7-5 13L128 549l225 224q5 6 5 13t-5 13l-29 29q-6 6-13 6t-13-6L31 562q-5-6-5-13t5-14l267-266q5-6 13-6t13 6l29 29q5 5 5 13z">
+
+                    </path>
+                </svg>
+                <!-- -->
+                Prev
+            </button>
+            <button onclick="loadNextPage()" class="next">
+                Next<!-- -->
+                <svg viewBox="0 0 1024 1024" class="icon" role="img" aria-hidden="true">
+                    <path d="M340 549q0 7-6 13L68 828q-6 6-13 6t-13-6l-29-29q-6-5-6-13t6-13l225-224L13 324q-6-6-6-13t6-13l29-29q5-6 13-6t13 6l266 266q6 6 6 14z"></path>
+                </svg>
+            </button>
+            </div>
+            <div id="albums-list">Loading, it takes some time, please wait...</div>
         </div>
 
         <div id="search-section" class="hidden">
@@ -65,6 +152,14 @@
                 <audio id="audio2" controls></audio>
             </div>
             <div id="metadata" class="metadata"></div>
+
+            <div id="lyrics-panel" class="hidden" style="margin-top:10px;">
+                <h3>Lyrics <span class="controls-inline">
+                    <label><input type="checkbox" id="sync-lyrics" checked> Sync</label>
+                </span></h3>
+                <div id="lyrics" class="lyrics"></div>
+            </div>
+
             <div id="playlist-display" class="playlist-display hidden">
                 <h3 id="playlist_name"></h3>
                 <div id="playlist-songs"></div>
@@ -73,6 +168,7 @@
     </div>
 
 <script>
+        let offset = 0;
         let currentAudio = 1;
         let playlist = [];
         let currentIndex = 0;
@@ -84,6 +180,11 @@
         let isTransitioning = false;
         let crossfadeActive = false;
         let currentEventListeners = new Map(); // Track active listeners
+
+        // Lyrics state
+        window.currentLyrics = []; // [{time: seconds, text: "..."}]
+        window.lyricsSyncEnabled = true;
+        window.currentLyricIndex = -1;
 
         // Gap Killer variables
         let audioContext = null;
@@ -314,6 +415,11 @@
             document.getElementById('playlist-section').classList.add('hidden');
             document.getElementById('search-section').classList.add('hidden');
             document.getElementById('player-section').classList.add('hidden');
+            document.getElementById('list-section').classList.add('hidden');
+            document.getElementById('artists-section').classList.add('hidden');
+            document.getElementById('artist-albums-section').classList.add('hidden');
+            document.getElementById('albums-section').classList.add('hidden');
+            document.getElementById('lyrics-panel').classList.add('hidden');
         }
 
         function loadPlaylists() {
@@ -514,7 +620,11 @@
                 .then(data => {
                     if (!data.error) {
                         displayMetadata(data);
+                    } else {
+                        clearLyricsDisplay();
                     }
+                }).catch(() => {
+                    clearLyricsDisplay();
                 });
         }
 
@@ -719,10 +829,185 @@
 
             metadataDiv.innerHTML = html;
             document.title = metadata.artist + ' - ' + metadata.title;
+
+            // Handle lyrics (both plain and synchronized)
+            if (metadata.synchronized_lyrics) {
+                const raw = metadata.synchronized_lyrics;
+                const parsed = parseSynchronizedLyrics(raw);
+                window.currentLyrics = parsed;
+                renderLyrics(parsed);
+                window.lyricsSyncEnabled = document.getElementById('sync-lyrics') ? document.getElementById('sync-lyrics').checked : true;
+                if (window.lyricsSyncEnabled) startLyricsSync();
+                document.getElementById('lyrics-panel').classList.remove('hidden');
+            } else if (metadata.lyrics) {
+                const raw = metadata.lyrics;
+                window.currentLyrics = [{time: null, text: raw}];
+                renderPlainLyrics(raw);
+                document.getElementById('lyrics-panel').classList.remove('hidden');
+                stopLyricsSync();
+            } else {
+                clearLyricsDisplay();
+            }
+        }
+
+        function parseSynchronizedLyrics(raw) {
+            const lines = raw.split(/\r?\n/);
+            const parsed = [];
+            const timeTagRegex = /\[(\d+):(\d+)(?:\.(\d+))?\](.*)/;
+            lines.forEach(line => {
+                const match = line.match(timeTagRegex);
+                if (match) {
+                    const min = parseInt(match[1], 10);
+                    const sec = parseInt(match[2], 10);
+                    const ms = match[3] ? parseInt((match[3] + (match[3].length === 1 ? '0' : '')).slice(0,3), 10) : 0;
+                    const text = match[4].trim();
+                    const timeInSeconds = min * 60 + sec + (ms / 1000);
+                    parsed.push({ time: timeInSeconds, text: text });
+                } else {
+                    if (line.trim()) {
+                        parsed.push({ time: null, text: line.trim() });
+                    }
+                }
+            });
+            parsed.sort((a, b) => {
+                if (a.time === null) return 1;
+                if (b.time === null) return -1;
+                return a.time - b.time;
+            });
+            return parsed;
+        }
+
+        function renderLyrics(parsed) {
+            const lyricsDiv = document.getElementById('lyrics');
+            lyricsDiv.innerHTML = '';
+            parsed.forEach((item, idx) => {
+                const lineDiv = document.createElement('div');
+                lineDiv.className = 'lyrics-line';
+                lineDiv.textContent = item.text;
+                if (item.time !== null) {
+                    lineDiv.dataset.time = item.time;
+                }
+                lineDiv.dataset.idx = idx;
+                lyricsDiv.appendChild(lineDiv);
+            });
+            window.currentLyricIndex = -1;
+            lyricsDiv.scrollTop = 0;
+        }
+
+        function renderPlainLyrics(text) {
+            const lyricsDiv = document.getElementById('lyrics');
+            lyricsDiv.innerHTML = '';
+            const paragraphs = text.split(/\r?\n\r?\n/);
+            paragraphs.forEach((p, i) => {
+                const div = document.createElement('div');
+                div.className = 'lyrics-line';
+                div.textContent = p.trim();
+                div.dataset.idx = i;
+                lyricsDiv.appendChild(div);
+            });
+        }
+
+        function clearLyricsDisplay() {
+            window.currentLyrics = [];
+            window.currentLyricIndex = -1;
+            stopLyricsSync();
+            const lyricsDiv = document.getElementById('lyrics');
+            if (lyricsDiv) lyricsDiv.innerHTML = '<em>No lyrics available</em>';
+        }
+
+        function startLyricsSync() {
+            stopLyricsSync();
+            const audioId = `audio${currentAudio}`;
+            const handler = function() {
+                if (!window.currentLyrics || window.currentLyrics.length === 0) return;
+                if (!window.lyricsSyncEnabled) return;
+                const t = this.currentTime;
+                updateLyricsHighlight(t);
+            };
+            addEventListenerTracked(audioId, 'timeupdate', handler);
+        }
+
+        function stopLyricsSync() {
+            currentEventListeners.forEach((listeners, audioId) => {
+                const audio = document.getElementById(audioId);
+                const remaining = [];
+                listeners.forEach(({event, handler}) => {
+                    if (event === 'timeupdate') {
+                        try { audio.removeEventListener(event, handler); } catch(e) {}
+                    } else {
+                        remaining.push({event, handler});
+                    }
+                });
+                if (remaining.length > 0) {
+                    currentEventListeners.set(audioId, remaining);
+                } else {
+                    currentEventListeners.delete(audioId);
+                }
+            });
+        }
+
+        function updateLyricsHighlight(timeSeconds) {
+            const lyricsDiv = document.getElementById('lyrics');
+            if (!lyricsDiv) return;
+            const parsed = window.currentLyrics || [];
+            if (!parsed || parsed.length === 0) return;
+
+            let idx = -1;
+            for (let i = 0; i < parsed.length; i++) {
+                if (parsed[i].time === null) continue;
+                if (parsed[i].time <= timeSeconds) {
+                    idx = i;
+                } else {
+                    break;
+                }
+            }
+
+            if (idx === -1) {
+                return;
+            }
+
+            if (idx === window.currentLyricIndex) return;
+
+            const prev = lyricsDiv.querySelector('.lyrics-line.current');
+            if (prev) prev.classList.remove('current');
+
+            const newLine = lyricsDiv.querySelector(`.lyrics-line[data-idx="${idx}"]`);
+            if (newLine) {
+                newLine.classList.add('current');
+                const offsetTop = newLine.offsetTop;
+                const half = lyricsDiv.clientHeight / 2;
+                lyricsDiv.scrollTop = Math.max(0, offsetTop - half);
+            }
+
+            window.currentLyricIndex = idx;
+        }
+
+        function toggleLyricsPanel() {
+            const panel = document.getElementById('lyrics-panel');
+            if (panel.classList.contains('hidden')) {
+                panel.classList.remove('hidden');
+            } else {
+                panel.classList.add('hidden');
+            }
+        }
+
+        function toggleLyricsSync() {
+            const checkbox = document.getElementById('sync-lyrics');
+            if (checkbox) {
+                checkbox.checked = !checkbox.checked;
+                window.lyricsSyncEnabled = checkbox.checked;
+                if (window.lyricsSyncEnabled) {
+                    startLyricsSync();
+                } else {
+                    stopLyricsSync();
+                }
+            } else {
+                window.lyricsSyncEnabled = !window.lyricsSyncEnabled;
+                if (window.lyricsSyncEnabled) startLyricsSync(); else stopLyricsSync();
+            }
         }
 
         function loadPlaylistMetadata() {
-            // Load metadata for all songs in the playlist
             playlist.forEach((songPath, index) => {
                 fetch(`/get_song_metadata/${encodeURIComponent(songPath)}`)
                     .then(response => response.json())
@@ -730,7 +1015,6 @@
                         if (!data.error) {
                             playlistMetadata[index] = data;
                         } else {
-                            // Fallback to filename if metadata unavailable
                             const fileName = songPath.split('/').pop().split('\\').pop();
                             playlistMetadata[index] = {
                                 artist: 'Unknown Artist',
@@ -739,11 +1023,9 @@
                                 duration: 0
                             };
                         }
-                        // Update display when metadata is loaded
                         updatePlaylistDisplay();
                     })
                     .catch(() => {
-                        // Fallback for network errors
                         const fileName = songPath.split('/').pop().split('\\').pop();
                         playlistMetadata[index] = {
                             artist: 'Unknown Artist',
@@ -766,7 +1048,6 @@
                 const songDiv = document.createElement('div');
                 songDiv.className = 'playlist-song';
 
-                // Add current, played, and hover classes
                 if (index === currentIndex) {
                     songDiv.classList.add('current');
                 } else if (playedSongs.has(index)) {
@@ -832,7 +1113,6 @@
         function playSearchResults() {
             if (!window.searchResults || window.searchResults.length === 0) return;
 
-            // Convert search results to playlist format
             playlist = window.searchResults.map(song => song.path);
             currentIndex = 0;
             playedSongs.clear();
@@ -840,19 +1120,17 @@
             isTransitioning = false;
             crossfadeActive = false;
 
-            // Populate metadata from search results
             window.searchResults.forEach((song, index) => {
                 playlistMetadata[index] = {
                     artist: song.artist,
                     title: song.title,
                     album: song.album,
-                    duration: 0 // Will be loaded when played
+                    duration: 0
                 };
             });
 
             showPlayerSection();
             updatePlaylistDisplay();
-           // document.getElementById('playlist_name').innerHTML = playlistMetadata[currentIndex].album
            document.getElementById('playlist_name').innerHTML = ''
             playCurrentSong();
         }
@@ -860,7 +1138,6 @@
         function playSearchResultsFrom(startIndex) {
             if (!window.searchResults || window.searchResults.length === 0) return;
 
-            // Convert search results to playlist format
             playlist = window.searchResults.map(song => song.path);
             currentIndex = startIndex;
             playedSongs.clear();
@@ -868,13 +1145,12 @@
             isTransitioning = false;
             crossfadeActive = false;
 
-            // Populate metadata from search results
             window.searchResults.forEach((song, index) => {
                 playlistMetadata[index] = {
                     artist: song.artist,
                     title: song.title,
                     album: song.album,
-                    duration: 0 // Will be loaded when played
+                    duration: 0
                 };
             });
 
@@ -884,9 +1160,313 @@
             playCurrentSong();
         }
 
+        // List all songs (existing)
+        function listSongs() {
+            document.getElementById('status').innerHTML = '';
+            hideAllSections();
+            document.getElementById('list-section').classList.remove('hidden');
+            const container = document.getElementById('all-songs-list');
+            container.innerHTML = 'Loading...';
+
+            fetch('/list_songs')
+                .then(r => r.json())
+                .then(data => {
+                    if (!Array.isArray(data)) {
+                        container.innerHTML = 'Unexpected response format.';
+                        return;
+                    }
+                    const albums = {};
+                    data.forEach(song => {
+                        const albumName = song.album || 'Unknown Album';
+                        if (!albums[albumName]) albums[albumName] = [];
+                        albums[albumName].push(song);
+                    });
+
+                    container.innerHTML = '';
+                    Object.keys(albums).forEach(albumName => {
+                        const albumDiv = document.createElement('div');
+                        albumDiv.className = 'list-album';
+                        const header = document.createElement('h4');
+                        header.textContent = albumName;
+                        albumDiv.appendChild(header);
+
+                        albums[albumName].forEach(s => {
+                            const songDiv = document.createElement('div');
+                            songDiv.className = 'list-song';
+                            songDiv.textContent = `${s.artist} - ${s.title} (${s.album || 'Unknown Album'})`;
+                            songDiv.onclick = () => {
+                                playSingleSong(s.path);
+                            };
+                            albumDiv.appendChild(songDiv);
+                        });
+
+                        container.appendChild(albumDiv);
+                    });
+                })
+                .catch(err => {
+                    console.error('Error listing songs:', err);
+                    document.getElementById('all-songs-list').innerHTML = 'Error fetching songs.';
+                });
+        }
+
+        // New: List Artists
+        function listArtists() {
+            document.getElementById('status').innerHTML = '';
+            hideAllSections();
+            document.getElementById('artists-section').classList.remove('hidden');
+            const container = document.getElementById('artists-list');
+            container.innerHTML = 'Loading...';
+
+            // Expected server response: [{ artist: "Artist Name" }, ... ]
+            fetch('/list_artists')
+                .then(r => {
+                    if (!r.ok) throw new Error(`Server ${r.status} ${r.statusText}`);
+                    return r.json();
+                })
+                .then(data => {
+                    if (!Array.isArray(data)) {
+                        container.innerHTML = 'Unexpected response format.';
+                        console.error('list_artists returned:', data);
+                        return;
+                    }
+                    container.innerHTML = '';
+                    data.forEach(item => {
+                        const div = document.createElement('div');
+                        div.className = 'artist-item';
+                        div.innerHTML = `<div class="artist-name">${item.artist}</div>`;
+                        div.onclick = () => showArtistAlbums(item.artist);
+                        container.appendChild(div);
+                    });
+                })
+                .catch(err => {
+                    console.error('Error listing artists:', err);
+                    container.innerHTML = 'Error fetching artists: ' + err.message;
+                });
+        }
+
+        // When clicking an artist: fetch and display albums and album covers grouped with songs
+        // Expected endpoint: GET /artist_albums?artist=Artist%20Name
+        // Expected response: [{ album: "Album Title", cover: "<base64-or-null>", songs: [{ title, path, duration, artist }, ...] }, ...]
+        function showArtistAlbums(artist) {
+            document.getElementById('status').innerHTML = '';
+            hideAllSections();
+            document.getElementById('artist-albums-section').classList.remove('hidden');
+            document.getElementById('artist-name').textContent = artist;
+            const container = document.getElementById('artist-albums-list');
+            container.innerHTML = 'Loading albums, please wait...';
+
+            fetch(`/artist_albums?artist=${encodeURIComponent(artist)}`)
+                .then(r => {
+                    if (!r.ok) throw new Error(`Server ${r.status} ${r.statusText}`);
+                    return r.json();
+                })
+                .then(data => {
+                    if (!Array.isArray(data)) {
+                        container.innerHTML = 'Unexpected response format.';
+                        console.error('artist_albums returned:', data);
+                        return;
+                    }
+                    container.innerHTML = '';
+                    if (data.length === 0) {
+                        container.innerHTML = '<em>No albums found for this artist.</em>';
+                        return;
+                    }
+                    data.forEach(album => {
+                        const alb = document.createElement('div');
+                        alb.className = 'album-item';
+                        const imgSrc = album.cover ? `data:image/jpeg;base64,${album.cover}` : 'static/img/no-cover.png';
+                        alb.innerHTML = `
+                            <img src="${imgSrc}" class="album-cover" alt="Cover">
+                            <div class="album-title">${album.album}</div>
+                            <div class="album-artist" style="color:#666; font-size:0.9em;">${album.artist || artist}</div>
+                        `;
+                        alb.onclick = () => {
+                            // display album songs and start playing them
+                            if (album.songs && album.songs.length > 0) {
+                                playAlbumSongs(album);
+                            } else {
+                                // fallback: fetch album songs endpoint if songs not included
+                                fetchAlbumSongs(album.album, album.artist || artist);
+                            }
+                        };
+                        container.appendChild(alb);
+                    });
+                })
+                .catch(err => {
+                    console.error('Error fetching artist albums:', err);
+                    container.innerHTML = 'Error fetching albums: ' + err.message;
+                });
+        }
+
+        function getLimitValue() {
+            // 1. Get the value from the input field
+            const limitInput = document.getElementById('limit');
+
+            // 2. Convert the string value to an integer (number)
+            // Use parseInt() with radix 10 to ensure it's treated as a decimal number.
+            const limit = parseInt(limitInput.value, 10);
+
+            // 3. Add a basic validation check
+            if (isNaN(limit) || limit <= 0) {
+                console.error("Invalid limit value. Please enter a positive number.");
+                return 20; // Default to 20 or handle error display
+        }
+
+    return limit;
+}
+
+        function loadNextPage() {
+            const limit = getLimitValue(); // Get the current limit to calculate the new offset
+            offset += limit;
+            listAlbums();
+        }
+
+        function loadPrevPage() {
+            const limit = getLimitValue(); // Get the current limit to calculate the new offset
+            offset -= limit;
+            listAlbums();
+        }
+
+        // List Albums (all albums)
+        // Expected server response: [{ album: "Title", artist: "Artist", cover: "<base64-or-null>" }, ...]
+
+        function listAlbums() {
+            document.getElementById('status').innerHTML = '';
+            hideAllSections();
+            document.getElementById('albums-section').classList.remove('hidden');
+            const limit = getLimitValue(); // Get the current, parsed limit
+            const container = document.getElementById('albums-list');
+            const params = new URLSearchParams({
+                limit: limit,
+                offset: offset
+            }).toString();
+            container.innerHTML = 'Loading, it takes some time, please wait...';
+
+            fetch(`/list_albums?${params}`)
+                .then(r => {
+                    if (!r.ok) throw new Error(`Server ${r.status} ${r.statusText}`);
+                    return r.json();
+                })
+                .then(data => {
+                    if (!container) {
+                        console.error('HTML container element not found.');
+                        return;
+                    }
+                    if (!Array.isArray(data)) {
+                        container.innerHTML = 'Unexpected response format.';
+                        console.error('list_albums returned:', data);
+                        return;
+                    }
+                    container.innerHTML = '';
+                    if (data.length === 0) {
+                        container.innerHTML = '<em>No albums found.</em>';
+                        return;
+                    }
+                    data.forEach(album => {
+                        const alb = document.createElement('div');
+                        alb.className = 'album-item';
+                        const imgSrc = album.cover ? `data:image/jpeg;base64,${album.cover}` : 'static/img/no-cover.png';
+                        alb.innerHTML = `
+                            <img src="${imgSrc}" class="album-cover" alt="Cover">
+                            <div class="album-title">${album.album}</div>
+                            <div class="album-artist" style="color:#666; font-size:0.9em;">${album.artist || ''}</div>
+                        `;
+                        alb.onclick = () => {
+                            // fetch and play album songs
+                            fetchAlbumSongs(album.album, album.artist || '');
+                        };
+                        container.appendChild(alb);
+                    });
+                })
+                .catch(err => {
+                    console.error('Error listing albums:', err);
+                    if (container) {
+                    container.innerHTML = 'Error fetching albums: ' + err.message;
+                    }
+                });
+        }
+
+        // Fetch album songs via endpoint and play them (used by both artists and album lists)
+        // Expected endpoint: GET /album_songs?album=Album%20Title&artist=Artist%20Name (artist optional)
+        // Expected response: { album: "Title", artist: "Artist", cover: "<base64-or-null>", songs: [{ title, path, duration, artist }, ...] }
+        function fetchAlbumSongs(albumName, artistName) {
+            const params = new URLSearchParams();
+            params.append('album', albumName);
+            if (artistName) params.append('artist', artistName);
+
+            const container = document.getElementById('artist-albums-list') || document.getElementById('albums-list');
+            if (container) container.innerHTML = 'Loading songs...';
+
+            fetch(`/album_songs?${params.toString()}`)
+                .then(r => {
+                    if (!r.ok) throw new Error(`Server ${r.status} ${r.statusText}`);
+                    return r.json();
+                })
+                .then(data => {
+                    if (!data || !Array.isArray(data.songs)) {
+                        console.error('album_songs returned unexpected:', data);
+                        if (container) container.innerHTML = 'Unexpected response format.';
+                        return;
+                    }
+                    // prepare playlist from album songs
+                    const songs = data.songs;
+                    playAlbumSongs({ album: data.album || albumName, artist: data.artist || artistName, cover: data.cover, songs: songs });
+                })
+                .catch(err => {
+                    console.error('Error fetching album songs:', err);
+                    if (container) container.innerHTML = 'Error fetching album songs: ' + err.message;
+                });
+        }
+
+        // Given an album object with songs, set playlist and start playback
+        function playAlbumSongs(albumObj) {
+            if (!albumObj || !Array.isArray(albumObj.songs)) return;
+            playlist = albumObj.songs.map(s => s.path);
+            currentIndex = 0;
+            playedSongs.clear();
+            playlistMetadata = [];
+            isTransitioning = false;
+            crossfadeActive = false;
+
+            // Use metadata provided by album data if available
+            albumObj.songs.forEach((s, idx) => {
+                playlistMetadata[idx] = {
+                    artist: s.artist || albumObj.artist || 'Unknown Artist',
+                    title: s.title || s.name || s.path.split('/').pop(),
+                    album: albumObj.album,
+                    duration: s.duration || 0,
+                };
+            });
+
+            // Update UI and start playback
+            showPlayerSection();
+            document.getElementById('playlist_name').innerHTML = `${albumObj.artist ? albumObj.artist + ' - ' : ''}${albumObj.album}`;
+            updatePlaylistDisplay();
+
+            // Pre-load album cover in metadata area if available
+            if (albumObj.cover) {
+                const metadataDiv = document.getElementById('metadata');
+                // keep existing metadata but show album cover at top
+                const existing = metadataDiv.innerHTML || '';
+                const coverImg = `<img src="data:image/jpeg;base64,${albumObj.cover}" class="album-art"><br>`;
+                metadataDiv.innerHTML = coverImg + existing;
+            }
+
+            playCurrentSong();
+        }
+
         // Initialize gap killer controls when page loads
         document.addEventListener('DOMContentLoaded', function() {
             initializeGapKillerControls();
+
+            const syncCheckbox = document.getElementById('sync-lyrics');
+            if (syncCheckbox) {
+                syncCheckbox.addEventListener('change', (e) => {
+                    window.lyricsSyncEnabled = e.target.checked;
+                    if (window.lyricsSyncEnabled) startLyricsSync();
+                    else stopLyricsSync();
+                });
+            }
         });
     </script>
 </body>
