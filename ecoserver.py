@@ -8,6 +8,8 @@ from pathlib import Path
 from flask import Flask, render_template, request, jsonify, redirect, url_for, \
     send_file, abort
 from mutagen import File
+from PIL import Image
+from io import BytesIO
 import base64
 from threading import Thread
 from pystray import Icon, MenuItem, Menu
@@ -28,6 +30,8 @@ secret_key = os.getenv("SECRET_KEY")
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
 DB_PATH = 'music.db'
 MUSIC_DIR = ''
+size = 256, 256
+results = None
 
 
 def run_flask():
@@ -555,8 +559,17 @@ def add_covers_to_database():
                 conn = sqlite3.connect('Covers.db')
                 cursor = conn.cursor()
                 for result in results:
-                    cover = get_album_art(result[1])
                     album = result[0]
+                    img = get_album_art(result[1])
+                    if img is None:
+                        cover = None
+                    else:
+                        im = Image.open(BytesIO(base64.b64decode(img)))
+                        im.thumbnail(size)
+                        im_file = BytesIO()
+                        im.save(im_file, format="JPEG")
+                        im_bytes = im_file.getvalue()  # im_bytes: image in binary format.
+                        cover = base64.b64encode(im_bytes).decode('utf-8')
                     cursor.execute('''
                         INSERT INTO Covers (album, cover) 
                         VALUES (?,?)''', (album, cover))
@@ -907,7 +920,7 @@ def scan_library():
         added_playlists = add_playlists_to_database(playlist_files)
         added_covers = add_covers_to_database()
 
-        success_msg = f'Successfully added {added_songs} songs and {added_playlists} playlists to the database.'
+        success_msg = f'Successfully added {added_songs} songs, {added_playlists} playlists and {added_covers} to the database.'
         logger.info(success_msg)
 
         return jsonify({

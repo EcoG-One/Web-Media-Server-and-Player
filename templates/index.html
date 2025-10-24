@@ -53,13 +53,13 @@
         <button onclick="scanLibrary()">Scan Library</button>
         <button onclick="showSettings()">Settings</button>
         {% endif %}
-        <button onclick="showPlayFromPlaylist()">Play Playlists</button>
-        <button onclick="showPlayFile()">Play Songs</button>
+        <button onclick="showPlayFromPlaylist()">Playlists</button>
+        <button onclick="showPlayFile()">Search</button>
 
         <!-- New Buttons -->
-        <button onclick="listSongs()">List Songs</button>
-        <button onclick="listArtists()">List Artists</button>
-        <button onclick="listAlbums()">List Albums</button>
+        <button onclick="listSongs()">All Songs</button>
+        <button onclick="listArtists()">All Artists</button>
+        <button onclick="listAlbums()">All Albums</button>
         <button onclick="toggleLyricsPanel()">Show/Hide Lyrics</button>
       <!--  <button onclick="toggleLyricsSync()">Toggle Lyrics Sync</button> -->
     </div>
@@ -357,7 +357,7 @@
             const duration = audioElement.duration;
             
             // Jump forward by small increments to find audio
-            const jumpIncrement = 10; // seconds
+            const jumpIncrement = 1; // seconds
             let searchTime = Math.min(currentTime + jumpIncrement, duration - 5);
             
             // Set new playback position
@@ -1039,7 +1039,7 @@
         }
 
         function updatePlaylistDisplay() {
-            if (playlist.length <= 1) return;
+        //    if (playlist.length <= 1) return;
 
             const playlistSongsDiv = document.getElementById('playlist-songs');
             playlistSongsDiv.innerHTML = '';

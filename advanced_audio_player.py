@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar,
     QMenu, QStatusBar,QProgressBar, QFrame, QCheckBox, QStyle)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
+import qdarkstyle
 import mutagen
 from mutagen import File
 from mutagen.flac import FLAC
@@ -24,9 +25,13 @@ import json
 import asyncio
 import aiohttp
 import requests
+from PIL import Image
+from io import BytesIO
 import base64
 import webbrowser
 import wikipedia
+from qdarkstyle import DarkPalette, LightPalette
+
 from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
 
@@ -298,6 +303,22 @@ class AudioPlayer(QWidget):
         self.exit_action.triggered.connect(self.quit)
         remote_menu.addAction(self.exit_action)
 
+        # Style menu
+        style_menu = QMenu("&Style", self)
+        menubar.addMenu(style_menu)
+
+        self.dark_action = QAction("&Dark", self)
+        self.dark_action.triggered.connect(self.set_dark_style)
+        style_menu.addAction(self.dark_action)
+
+        self.light_action = QAction("&Light", self)
+        self.light_action.triggered.connect(self.set_light_style)
+        style_menu.addAction(self.light_action)
+
+        self.normal_action = QAction("&Normal", self)
+        self.normal_action.triggered.connect(self.set_no_style)
+        style_menu.addAction(self.normal_action)
+
         # Help menu
         help_menu = QMenu("&Help", self)
         menubar.addMenu(help_menu)
@@ -340,7 +361,7 @@ class AudioPlayer(QWidget):
         shuffle_box = QHBoxLayout()
         self.playlist_widget = QListWidget()
         self.playlist_widget.setStyleSheet(
-            "QListView::item:selected{ background-color: blue; }; "
+            "QListView::item:selected{ color: black; background-color: lightblue; }; "
             "font-size: 12px; "
             "background-color: lightyellow; "
             "opacity: 0.6; "
@@ -596,6 +617,8 @@ class AudioPlayer(QWidget):
         for item in self.playlists:
             self.playlist_widget.addItem(item['name'])
 
+
+
     def split_image(self, image_path, tile_width, tile_height):
         image = QImage(image_path)
         if image.isNull():
@@ -613,6 +636,131 @@ class AudioPlayer(QWidget):
                 sub_img = image.copy(rect)
                 sub_images.append(sub_img)
         return sub_images
+
+
+    def set_dark_style(self):
+        # setup stylesheet
+        app.setStyleSheet(qdarkstyle.load_stylesheet(palette=DarkPalette))
+        self.lyrics_display.setStyleSheet(
+            "color: black; font-size: 18px; background: #E0F0FF; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+        self.playlist_widget.setStyleSheet(
+            "QListView::item:selected{ background-color: blue;};"
+        )
+        dark_image_path = 'static/images/buttons_dark.jpg'
+      #  self.sub_images.load(dark_image_path)
+     #   self.lbl.setPixmap(self.sub_images)
+        tile_width = 1650
+        tile_height = 1650
+        self.sub_images = self.split_image(dark_image_path, tile_width, tile_height)
+
+        if self.sub_images:
+            pixmap = QPixmap.fromImage(self.sub_images[2])
+            self.prev_button.setIcon(QIcon(pixmap))
+            self.prev_button.setIconSize(QSize(50, 50))
+        else:
+            self.prev_button.setIcon(
+                self.style().standardIcon(QStyle.SP_MediaSkipBackward))
+        self.prev_button.setFixedSize(QSize(50, 50))
+        if self.sub_images:
+            pixmap = QPixmap.fromImage(self.sub_images[0])
+            self.play_button.setIcon(QIcon(pixmap))
+            self.play_button.setIconSize(QSize(50, 50))
+        else:
+            self.play_button.setIcon(
+                self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.play_button.setFixedSize(QSize(50, 50))
+        if self.sub_images:
+            pixmap = QPixmap.fromImage(self.sub_images[3])
+            self.next_button.setIcon(QIcon(pixmap))
+            self.next_button.setIconSize(QSize(50, 50))
+        else:
+            #   self.next_button.setEnabled(False)
+            self.next_button.setIcon(
+                self.style().standardIcon(QStyle.SP_MediaSkipForward))
+        self.next_button.setFixedSize(QSize(50, 50))
+
+
+    def set_light_style(self):
+        # setup stylesheet
+        app.setStyleSheet(qdarkstyle.load_stylesheet(palette=LightPalette))
+        self.playlist_widget.setStyleSheet(
+            "QListView::item:selected{ background-color: lightblue;}; ")
+        image_path = 'static/images/buttons_light.jpg'
+        tile_width = 1650
+        tile_height = 1650
+        self.sub_images = self.split_image(image_path, tile_width,
+                                           tile_height)
+        if self.sub_images:
+            pixmap = QPixmap.fromImage(self.sub_images[2])
+            self.prev_button.setIcon(QIcon(pixmap))
+            self.prev_button.setIconSize(QSize(50, 50))
+        else:
+            self.prev_button.setIcon(
+                self.style().standardIcon(QStyle.SP_MediaSkipBackward))
+        self.prev_button.setFixedSize(QSize(50, 50))
+        if self.sub_images:
+            pixmap = QPixmap.fromImage(self.sub_images[0])
+            self.play_button.setIcon(QIcon(pixmap))
+            self.play_button.setIconSize(QSize(50, 50))
+        else:
+            self.play_button.setIcon(
+                self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.play_button.setFixedSize(QSize(50, 50))
+        if self.sub_images:
+            pixmap = QPixmap.fromImage(self.sub_images[3])
+            self.next_button.setIcon(QIcon(pixmap))
+            self.next_button.setIconSize(QSize(50, 50))
+        else:
+            #   self.next_button.setEnabled(False)
+            self.next_button.setIcon(
+                self.style().standardIcon(QStyle.SP_MediaSkipForward))
+        self.next_button.setFixedSize(QSize(50, 50))
+
+
+    def set_no_style(self):
+        # setup stylesheet
+        app.setStyleSheet("")
+        self.playlist_widget.setStyleSheet(
+            "QListView::item:selected{ color: black; background-color: lightblue; }; "
+            "font-size: 12px; "
+            "background-color: lightyellow; "
+            "opacity: 0.6; "
+            "border-color: #D4D378; "
+            "border-width: 2px; "
+            "border-style: inset;"
+        )
+        image_path = 'static/images/buttons.jpg'
+        tile_width = 1650
+        tile_height = 1650
+        self.sub_images = self.split_image(image_path, tile_width,
+                                           tile_height)
+        if self.sub_images:
+            pixmap = QPixmap.fromImage(self.sub_images[2])
+            self.prev_button.setIcon(QIcon(pixmap))
+            self.prev_button.setIconSize(QSize(50, 50))
+        else:
+            self.prev_button.setIcon(
+                self.style().standardIcon(QStyle.SP_MediaSkipBackward))
+        self.prev_button.setFixedSize(QSize(50, 50))
+        if self.sub_images:
+            pixmap = QPixmap.fromImage(self.sub_images[0])
+            self.play_button.setIcon(QIcon(pixmap))
+            self.play_button.setIconSize(QSize(50, 50))
+        else:
+            self.play_button.setIcon(
+                self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.play_button.setFixedSize(QSize(50, 50))
+        if self.sub_images:
+            pixmap = QPixmap.fromImage(self.sub_images[3])
+            self.next_button.setIcon(QIcon(pixmap))
+            self.next_button.setIconSize(QSize(50, 50))
+        else:
+            #   self.next_button.setEnabled(False)
+            self.next_button.setIcon(
+                self.style().standardIcon(QStyle.SP_MediaSkipForward))
+        self.next_button.setFixedSize(QSize(50, 50))
+
+
 
     # Database initialization
     def init_database(self):
@@ -758,6 +906,81 @@ class AudioPlayer(QWidget):
 
         except Exception as e:
             QMessageBox.critical(self, "Error",f"Error adding songs to database: {e}")
+
+    def add_covers_to_database(self):
+        size = 256, 256
+        results = None
+        """Add album art files to database with error handling"""
+        try:
+            added_covers = 0
+            errors = 0
+            results = None
+            try:
+                conn = sqlite3.connect('Music.db')
+                cursor = conn.cursor()
+                # Select a song per album
+                cursor.execute("SELECT album, path FROM Songs GROUP BY album")
+                results = cursor.fetchall()
+                conn.commit()
+                conn.close()
+            except sqlite3.Error as e:
+                QMessageBox.warning(self, "Scan Error",
+                    f"Database error getting Albums from database: {str(e)}")
+                errors += 1
+            except Exception as e:
+                QMessageBox.warning(self, "Scan Error",
+                    f"Unexpected error getting Albums from database: {str(e)}")
+                errors += 1
+
+            if results:
+                self.status_bar.showMessage(f"Adding {len(results)} covers to database")
+                try:
+                    conn = sqlite3.connect('Covers.db')
+                    cursor = conn.cursor()
+                    for result in results:
+                        album = result[0]
+                        img = self.get_album_art(result[1])
+                        if img is None:
+                            cover = None
+                        else:
+                            im = Image.open(BytesIO(base64.b64decode(img)))
+                            im.thumbnail(size)
+                            im_file = BytesIO()
+                            im.save(im_file, format="JPEG")
+                            im_bytes = im_file.getvalue()  # im_bytes: image in binary format.
+                            cover = base64.b64encode(im_bytes).decode('utf-8')
+                        cursor.execute('''
+                            INSERT INTO Covers (album, cover) 
+                            VALUES (?,?)''', (album, cover))
+                        added_covers += 1
+                        self.status_bar.showMessage(
+                            f"Added cover from album: {album}")
+                    else:
+                        self.status_bar.showMessage(
+                            f"Could not get album art from album: {album}")
+                        errors += 1
+                    conn.commit()
+                    conn.close()
+                except sqlite3.Error as e:
+                    self.status_bar.showMessage(
+                        f"Database error adding album art from album: {album}: {e}")
+                    errors += 1
+                except Exception as e:
+                    self.status_bar.showMessage(
+                        f"Unexpected error adding album art from album: {album}: {e}")
+                    errors += 1
+
+                self.status_bar.showMessage(
+                    f"Successfully added {added_covers} songs to database")
+                if errors > 0:
+                    self.status_bar.showMessage(
+                        f"Encountered {errors} errors while adding songs")
+
+                return added_covers
+
+        except Exception as e:
+            QMessageBox.warning(self, "Scan Error", f"Error adding covers to database: {str(e)}")
+            return 0
 
     def add_playlists_to_database(self, playlist_files):
         """Add playlist files to database with error handling"""
@@ -2526,6 +2749,8 @@ class AudioPlayer(QWidget):
 
     def get_info(self):
         meta = self.player.metaData()
+        if not meta.data:
+            return
         title = meta.stringValue(QMediaMetaData.Title) or None
        # index = self.playlist_widget.currentRow()
        # path = self.playlist[index]
@@ -2750,8 +2975,9 @@ class AudioPlayer(QWidget):
         # Add to database
         added_songs = self.add_songs_to_database(audio_files)
         added_playlists = self.add_playlists_to_database(playlist_files)
+        added_covers = self.add_covers_to_database()
 
-        success_msg = f'Successfully added {added_songs} songs and {added_playlists} playlists to the database.'
+        success_msg = f'Successfully added {added_songs} songs, {added_playlists} playlists and {added_covers} to the database.'
         self.status_bar.showMessage(success_msg, 8)
         QMessageBox.information(self,'info', success_msg)
 
