@@ -777,6 +777,7 @@ class AudioPlayer(QWidget):
                     path CHAR(255) NOT NULL,
                     file_name CHAR(120) NOT NULL,
                     artist CHAR(120) NOT NULL,
+                    album_artist CHAR(120),
                     song_title CHAR(120) NOT NULL,
                     duration INT NOT NULL,
                     album CHAR(120),
@@ -1899,7 +1900,6 @@ class AudioPlayer(QWidget):
 
 
 
-
     def show_playlist_menu(self, pos=None):
         menu = QFileDialog(self)
         menu.setFileMode(QFileDialog.ExistingFiles)
@@ -2495,6 +2495,7 @@ class AudioPlayer(QWidget):
 
             metadata = {
                 'artist'  : '',
+                'album_artist': '',
                 'title'   : '',
                 'album'   : '',
                 'year'    : '',
@@ -2516,6 +2517,28 @@ class AudioPlayer(QWidget):
             except Exception as e:
                 self.status_bar.showMessage(
                     f"Error reading artist metadata from {file_path}: {str(e)}")
+
+            try:
+                if 'TPE2' in audio_file:  # Album artist (ID3)
+                    metadata['album_artist'] = str(audio_file['TPE2'])
+                elif 'ALBUMARTIST' in audio_file:
+                    metadata['album_artist'] = str(
+                        audio_file['ALBUMARTIST'][0])
+                elif 'albumartist' in audio_file:
+                    metadata['album_artist'] = str(
+                        audio_file['albumartist'][0])
+                elif 'aART' in audio_file:  # MP4 atom for album artist
+                    metadata['album_artist'] = str(audio_file['aART'][0])
+                else:
+                    # fallback: use artist if album artist not present
+                    if metadata['artist']:
+                        metadata['album_artist'] = metadata['artist']
+            except Exception as e:
+                self.status_bar.showMessage(
+                    f"Error reading album artist metadata from {file_path}: {str(e)}")
+                # fallback to artist
+                if metadata['artist']:
+                    metadata['album_artist'] = metadata['artist']
 
             try:
                 if 'TIT2' in audio_file:  # Title
@@ -3267,39 +3290,69 @@ class AudioPlayer(QWidget):
         self.status_bar.update()
         self.playlist_widget.clear()
         self.playlist.clear()
+        self.clear_playlist()
+        files = []
         try:
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            if query == "song_title":
-                selection = "SELECT id, artist, song_title, album, path, file_name FROM Songs ORDER BY artist ASC"
-            elif query == "artist":
-                selection = f"SELECT DISTINCT artist FROM Songs ORDER BY artist ASC"
+            if query != "album":
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                if query == "song_title":
+                    selection = "SELECT id, artist, song_title, album, path, file_name FROM Songs ORDER BY artist ASC"
+                else: # query == "artist":
+                    selection = f"SELECT DISTINCT artist FROM Songs ORDER BY artist ASC"
+                # else:
+                    # selection = f"SELECT DISTINCT album, album_artist FROM Songs ORDER BY album ASC"
+                cursor.execute(selection)
+                results = cursor.fetchall()
+                conn.close()
+                self.status_bar.showMessage(
+                    f"Retrieved {len(results)} {query}s. Creating {query} list.")
             else:
-                selection = f"SELECT DISTINCT album, artist FROM Songs ORDER BY artist ASC"
-            cursor.execute(selection)
-            results = cursor.fetchall()
-            conn.close()
+                conn = sqlite3.connect('Covers.db')
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"SELECT album, cover FROM Covers ORDER BY album")
+                covers = cursor.fetchall()
+                conn.close()
+                for c in covers:
 
-            self.status_bar.showMessage(f"Retrieved {len(results)} {query}s. Creating {query} list.")
-            self.clear_playlist()
-            files = []
-            for r in results:
-                song = ListItem()
-             #   self.get_audio_metadata(r[4])
-                if query == 'song_title':
-                    song.display_text = f"{ r[1]} - {r[2]} ({ r[3]})"
-                    song.path = r[4]
-                elif query == "artist":
-                    song.display_text = r[0]
-                else:
-                    if r[0] in files:
-                        continue
+                    album_art = QListWidgetItem()
+                    if c[1] is not None:
+                        img_bytes = base64.b64decode(c[1])
+                        img = QImage.fromData(img_bytes)
+                        pix = QPixmap.fromImage(img)
+                        album_art.setIcon(QIcon(pix))
                     else:
-                        song.display_text = f"{r[1]} - {r[0]}"
-                song.is_remote = False
-                song.item_type = query
+                        album_art.setIcon(
+                            QPixmap(
+                                "static/images/default_album_art.png") if os.path.exists(
+                                "static/images/default_album_art.png") else QPixmap())
+                    self.playlist_widget.setIconSize(QSize(256, 256))
+                    album = ListItem()
+                    album.item_type = 'cover'
+                    album.is_remote = False
+                    album.display_text = c[0]
+                    album_item = QListWidgetItem(album.display_text)
+                    self.playlist_widget.addItem(album_art)
+                    self.playlist_widget.addItem(album_item)
 
-                files.append(song)
+                    self.playlist.append(album_art)
+                    self.playlist.append(album)
+
+                self.status_bar.showMessage(f"Retrieved {len(covers)} {query}s. Creating {query} list.")
+
+            if query != "album":
+                for r in results:
+                    song = ListItem()
+                 #   self.get_audio_metadata(r[4])
+                    if query == 'song_title':
+                        song.display_text = f"{ r[1]} - {r[2]} ({ r[3]})"
+                        song.path = r[4]
+                    elif query == "artist":
+                        song.display_text = r[0]
+                    song.is_remote = False
+                    song.item_type = query
+                    files.append(song)
             self.playlist_label.setText(f'{query} List: ')
 
         except sqlite3.Error as e:
@@ -3313,7 +3366,8 @@ class AudioPlayer(QWidget):
         self.status_bar.clearMessage()
         self.status_bar.update()
         self.status_bar.showMessage('List loaded. Enjoy!')
-        self.add_files(files)
+        if files:
+            self.add_files(files)
 
 
 
@@ -3540,10 +3594,19 @@ class AudioPlayer(QWidget):
         idx = self.playlist_widget.currentRow()
         item = self.playlist_widget.currentItem()
         file = self.playlist[idx]
-        if file.item_type == "cover":
-            return
+        try:
+            if file.item_type == "cover":
+                self.search_tracks('album', file.display_text)
+        except AttributeError:
+            idx += 1
+            if 0 <= idx < len(self.playlist):
+                file = self.playlist[idx]
+                self.playlist_widget.setCurrentRow(idx)
+                self.play_selected_playlist()
+            else:
+                return
         # item_ext = Path(item.text()).suffix
-        elif file.item_type == 'artist':
+        if file.item_type == 'artist':
             self.search_tracks('artist', file.display_text)
         elif file.item_type == 'album':
             dash = file.display_text.find(' - ')
