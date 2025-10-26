@@ -37,6 +37,8 @@ results = None
 def run_flask():
     try:
         init_database()
+        # Ensure the Songs table has an album_artist column and populate it
+        migrate_add_album_artist()
         logger.info(f"Starting Flask server on port 5000")
         app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
     except Exception as e:
@@ -124,13 +126,14 @@ def init_database():
         conn = sqlite3.connect('Music.db')
         cursor = conn.cursor()
 
-        # Create Songs table
+        # Create Songs table (including album_artist column)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS Songs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 path CHAR(255) NOT NULL,
                 file_name CHAR(120) NOT NULL,
                 artist CHAR(120) NOT NULL,
+                album_artist CHAR(120),
                 song_title CHAR(120) NOT NULL,
                 duration INT NOT NULL,
                 album CHAR(120),
@@ -236,6 +239,7 @@ def get_audio_metadata(file_path):
 
         metadata = {
             'artist'             : '',
+            'album_artist'       : '',
             'title'              : '',
             'album'              : '',
             'year'               : '',
@@ -246,9 +250,9 @@ def get_audio_metadata(file_path):
             'transition_duration': 5.0
         }
 
-        # Get basic metadata
+        # Get basic metadata - ARTIST
         try:
-            if 'TPE1' in audio_file:  # Artist
+            if 'TPE1' in audio_file:  # Artist (ID3)
                 metadata['artist'] = str(audio_file['TPE1'])
             elif 'ARTIST' in audio_file:
                 metadata['artist'] = str(audio_file['ARTIST'][0])
@@ -257,6 +261,27 @@ def get_audio_metadata(file_path):
         except Exception as e:
             logger.warning(
                 f"Error reading artist metadata from {file_path}: {e}")
+
+        # Get album artist (common tags: TPE2 (ID3), ALBUMARTIST, albumartist, aART (MP4))
+        try:
+            if 'TPE2' in audio_file:  # Album artist (ID3)
+                metadata['album_artist'] = str(audio_file['TPE2'])
+            elif 'ALBUMARTIST' in audio_file:
+                metadata['album_artist'] = str(audio_file['ALBUMARTIST'][0])
+            elif 'albumartist' in audio_file:
+                metadata['album_artist'] = str(audio_file['albumartist'][0])
+            elif 'aART' in audio_file:  # MP4 atom for album artist
+                metadata['album_artist'] = str(audio_file['aART'][0])
+            else:
+                # fallback: use artist if album artist not present
+                if metadata['artist']:
+                    metadata['album_artist'] = metadata['artist']
+        except Exception as e:
+            logger.warning(
+                f"Error reading album artist metadata from {file_path}: {e}")
+            # fallback to artist
+            if metadata['artist']:
+                metadata['album_artist'] = metadata['artist']
 
         try:
             if 'TIT2' in audio_file:  # Title
@@ -490,21 +515,23 @@ def add_songs_to_database(audio_files):
                 metadata = get_audio_metadata(file_path)
                 if metadata:
                     file_name = os.path.basename(file_path)
+                    # Insert including album_artist (may be empty)
                     cursor.execute('''
-                        INSERT INTO Songs (path, file_name, artist, song_title, duration, album, year)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO Songs (path, file_name, artist, album_artist, song_title, duration, album, year)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         file_path,
                         file_name,
-                        metadata['artist'],
-                        metadata['title'],
-                        metadata['duration'],
-                        metadata['album'],
-                        metadata['year']
+                        metadata.get('artist', ''),
+                        metadata.get('album_artist', ''),
+                        metadata.get('title', ''),
+                        metadata.get('duration', 0),
+                        metadata.get('album', ''),
+                        metadata.get('year', '')
                     ))
                     added_songs += 1
                     logger.debug(
-                        f"Added song: {metadata['artist']} - {metadata['title']}")
+                        f"Added song: {metadata.get('artist','')} - {metadata.get('title','')}")
                 else:
                     logger.warning(
                         f"Could not extract metadata from: {file_path}")
@@ -840,6 +867,59 @@ def parse_playlist_file(playlist_path):
         return []
 
 
+# New migration function: add album_artist column if missing and populate it
+def migrate_add_album_artist():
+    """
+    Ensure 'album_artist' column exists in Songs table and populate it for each record
+    using metadata extracted from the audio file at the path stored in the record.
+    """
+    try:
+        logger.info("Running migration: add/populate 'album_artist' column in Songs table")
+        conn = sqlite3.connect('Music.db')
+        cursor = conn.cursor()
+
+        # Check if column exists
+        cursor.execute("PRAGMA table_info(Songs)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if 'album_artist' not in cols:
+            logger.info("'album_artist' column not found; adding column.")
+            try:
+                cursor.execute("ALTER TABLE Songs ADD COLUMN album_artist CHAR(120)")
+                conn.commit()
+                logger.info("'album_artist' column added successfully.")
+            except sqlite3.Error as e:
+                logger.error(f"Failed to add 'album_artist' column: {e}")
+                # continue - maybe another process added it
+        else:
+            logger.info("'album_artist' column already present.")
+
+        # Populate the column for each song
+        cursor.execute("SELECT id, path FROM Songs")
+        rows = cursor.fetchall()
+        updated = 0
+        for row in rows:
+            song_id, path = row
+            try:
+                if path and os.path.exists(path):
+                    metadata = get_audio_metadata(path)
+                    if metadata:
+                        album_artist = metadata.get('album_artist') or metadata.get('artist') or ''
+                        cursor.execute("UPDATE Songs SET album_artist = ? WHERE id = ?", (album_artist, song_id))
+                        updated += 1
+                    else:
+                        logger.warning(f"Metadata could not be extracted for: {path}")
+                else:
+                    logger.warning(f"File path missing or does not exist for DB record id={song_id}: {path}")
+            except Exception as e:
+                logger.error(f"Error updating album_artist for id={song_id}, path={path}: {e}")
+        conn.commit()
+        conn.close()
+        logger.info(f"Migration complete. Updated album_artist for {updated} records.")
+    except Exception as e:
+        logger.error(f"Migration failed: {e}")
+        logger.error(traceback.format_exc())
+
+
 # Flask error handlers
 @app.errorhandler(404)
 def not_found_error(error):
@@ -1110,33 +1190,33 @@ def list_artists():
 
 @app.route('/artist_albums')
 def artist_albums():
-    artist = request.args.get('artist')
+    album_artist = request.args.get('artist')
 
-    logger.info(f"Getting all {artist}'s Albums from db")
+    logger.info(f"Getting all {album_artist}'s Albums from db")
 
-    if not artist:
+    if not album_artist:
         logger.warning("Missing search parameters")
         return jsonify({'error': 'Missing parameters'}), 400
     try:
         conn = sqlite3.connect('Music.db')
         cursor = conn.cursor()
         cursor.execute(
-            f"SELECT song_title, album, path, duration FROM songs WHERE artist='{artist}'")
+            f"SELECT song_title, artist, album, path, duration FROM songs WHERE album_artist='{album_artist}'")
         results = cursor.fetchall()
         conn.close()
         albums = {}
         for r in results:
-            if not r[1] in albums.keys():
-                album = r[1]
-                cover = get_album_art(r[2])
-                song ={'song_title': r[0], 'path': r[2], 'duration': r[3], 'artist': artist}# "<base64-or-null>"
+            if not r[2] in albums.keys():
+                album = r[2]
+                cover = get_album_art(r[3])
+                song ={'song_title': r[0], 'artist': r[1], 'path': r[3], 'duration': r[4]}# "<base64-or-null>"
                 albums[album] = {
                     'album' : album,
-                    'artist': artist,
+                    'artist': album_artist,
                     'cover' : cover,
                     'songs' : [song]                }
             else:
-                albums[r[1]]['songs'].append({'song_title': r[0], 'path': r[2], 'duration': r[3], 'artist': artist})
+                albums[r[2]]['songs'].append({'song_title': r[0], 'artist': r[1], 'path': r[3], 'duration': r[4]})
         return jsonify(list(albums.values()))
     except Exception as e:
         # return useful error for debugging (remove or mask details in production)
@@ -1154,7 +1234,7 @@ def list_albums():
         conn = sqlite3.connect('Music.db')
         cursor = conn.cursor()
         cursor.execute(
-            f"SELECT album, artist, path FROM Songs GROUP BY album ORDER BY album LIMIT {offset}, {limit}")
+            f"SELECT album, album_artist, path FROM Songs GROUP BY album ORDER BY album LIMIT {offset}, {limit}")
         results = cursor.fetchall()
         conn.close()
 
@@ -1179,7 +1259,7 @@ def list_albums():
 def album_songs():
     album = request.args.get('album')
     album = album.replace('"', '""')
-    artist = request.args.get('artist')
+    album_artist = request.args.get('album_artist')
     try:
         conn = sqlite3.connect('Music.db')
         cursor = conn.cursor()
@@ -1198,7 +1278,7 @@ def album_songs():
         cover = get_album_art(rows[0][2])
         return jsonify({
                 'album': album,
-                'artist': artist,
+                'album_artist': album_artist,
                 'cover': cover,
                 'songs':songs})
     except Exception as e:

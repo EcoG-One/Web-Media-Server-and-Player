@@ -1389,10 +1389,10 @@
         // Fetch album songs via endpoint and play them (used by both artists and album lists)
         // Expected endpoint: GET /album_songs?album=Album%20Title&artist=Artist%20Name (artist optional)
         // Expected response: { album: "Title", artist: "Artist", cover: "<base64-or-null>", songs: [{ title, path, duration, artist }, ...] }
-        function fetchAlbumSongs(albumName, artistName) {
+        function fetchAlbumSongs(albumName, albumArtistName) {
             const params = new URLSearchParams();
             params.append('album', albumName);
-            if (artistName) params.append('artist', artistName);
+            if (albumArtistName) params.append('album_artist', albumArtistName);
 
             const container = document.getElementById('artist-albums-list') || document.getElementById('albums-list');
             if (container) container.innerHTML = 'Loading songs...';
@@ -1410,7 +1410,7 @@
                     }
                     // prepare playlist from album songs
                     const songs = data.songs;
-                    playAlbumSongs({ album: data.album || albumName, artist: data.artist || artistName, cover: data.cover, songs: songs });
+                    playAlbumSongs({ album: data.album || albumName, artist: data.album_artist || albumArtistName, cover: data.cover, songs: songs });
                 })
                 .catch(err => {
                     console.error('Error fetching album songs:', err);
@@ -1440,7 +1440,7 @@
 
             // Update UI and start playback
             showPlayerSection();
-            document.getElementById('playlist_name').innerHTML = `${albumObj.artist ? albumObj.artist + ' - ' : ''}${albumObj.album}`;
+            document.getElementById('playlist_name').innerHTML = `${albumObj.album_artist ? albumObj.album_artist + ' - ' : ''}${albumObj.album}`;
             updatePlaylistDisplay();
 
             // Pre-load album cover in metadata area if available
