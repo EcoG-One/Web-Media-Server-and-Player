@@ -38,7 +38,7 @@ def run_flask():
     try:
         init_database()
         # Ensure the Songs table has an album_artist column and populate it
-        migrate_add_album_artist()
+        # migrate_add_album_artist()
         logger.info(f"Starting Flask server on port 5000")
         app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
     except Exception as e:
@@ -161,6 +161,7 @@ def init_database():
             CREATE TABLE IF NOT EXISTS Covers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 album CHAR(120) NOT NULL,
+                album_artist CHAR(120) NOT NULL,
                 cover TEXT
             )
         ''')

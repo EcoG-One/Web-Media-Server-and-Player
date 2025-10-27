@@ -43,6 +43,7 @@ SETTINGS_FILE = APP_DIR / "settings.json"
 # SETTINGS_FILE  = os.path.join(os.path.expanduser('~'), 'Advanced Media Player', 'settings.json')
 # PLAYLISTS_FILE = APP_DIR / "playlists.json"
 DB_PATH = APP_DIR / 'music.db'
+COVERS_DB_PATH = APP_DIR / 'covers.db'
 MUSIC_DIR = ''
 wikipedia.set_lang("en")
 audio_extensions = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.wma'}
@@ -796,7 +797,22 @@ class AudioPlayer(QWidget):
 
             conn.commit()
             conn.close()
-            self.status_bar.showMessage("Database initialized successfully")
+            conn = sqlite3.connect(COVERS_DB_PATH)
+            cursor = conn.cursor()
+
+            # Create Album Art table
+            cursor.execute('''
+                        CREATE TABLE IF NOT EXISTS Covers (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            album CHAR(120) NOT NULL,
+                            album_artist CHAR(120) NOT NULL,
+                            cover TEXT
+                        )
+                    ''')
+
+            conn.commit()
+            conn.close()
+            self.status_bar.showMessage("Databases initialized successfully")
 
         except sqlite3.Error as e:
             QMessageBox.critical(self, "Database Error",f"Database initialization failed: {str(e)}")
@@ -858,7 +874,10 @@ class AudioPlayer(QWidget):
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             added_songs = 0
+            added_covers = 0
             errors = 0
+            size = 256, 256
+            cursor.execute(f'ATTACH DATABASE "{COVERS_DB_PATH}" AS Covers')
 
             for file_path in audio_files:
                 try:
@@ -872,12 +891,13 @@ class AudioPlayer(QWidget):
                     if metadata:
                         file_name = os.path.basename(file_path)
                         cursor.execute('''
-                            INSERT INTO Songs (path, file_name, artist, song_title, duration, album, year)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            INSERT INTO Songs (path, file_name, artist, album_artist, song_title, duration, album, year)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         ''', (
                             file_path,
                             file_name,
                             metadata['artist'],
+                            metadata['album_artist'],
                             metadata['title'],
                             metadata['duration'],
                             metadata['album'],
@@ -885,6 +905,25 @@ class AudioPlayer(QWidget):
                         ))
                         added_songs += 1
                         self.status_bar.showMessage(f"Added song: {metadata['artist']} - {metadata['title']}")
+                        cursor.execute("SELECT Covers.album FROM Covers WHERE Covers.album = ?",
+                                       (metadata['album'],))
+                        if cursor.fetchone():
+                            self.status_bar.showMessage(
+                                f"Cover already in database: {metadata['album']}")
+                            continue
+                        img = self.get_album_art(file_path)
+                        if img is None:
+                            cover = None
+                        else:
+                            im = Image.open(BytesIO(base64.b64decode(img)))
+                            im.thumbnail(size)
+                            im_file = BytesIO()
+                            im.save(im_file, format="JPEG")
+                            im_bytes = im_file.getvalue()  # im_bytes: image in binary format.
+                            cover = base64.b64encode(im_bytes).decode('utf-8')
+                        cursor.execute('''INSERT INTO Covers (album, album_artist, cover) VALUES (?, ?, ?)''',
+                                       (metadata['album'], metadata['album_artist'], cover))
+                        added_covers += 1
                     else:
                         QMessageBox.warning(self, "Scan Error", f"Could not extract metadata from: {file_path}")
                         errors += 1
@@ -899,89 +938,15 @@ class AudioPlayer(QWidget):
             conn.commit()
             conn.close()
 
-            QMessageBox.warning(self, "Scan Error", f"Successfully added {added_songs} songs to database")
+            QMessageBox.warning(self, "Scan Error", f"Successfully added {added_songs} songs and {added_covers} covers to database")
             if errors > 0:
                 QMessageBox.warning(self, "Scan Error", f"Encountered {errors} errors while adding songs")
 
-            return added_songs
+            return added_songs, added_covers
 
         except Exception as e:
-            QMessageBox.critical(self, "Error",f"Error adding songs to database: {e}")
+            QMessageBox.critical(self, "Error",f"Error adding songs to database: {str(e)}")
 
-    def add_covers_to_database(self):
-        size = 256, 256
-        results = None
-        """Add album art files to database with error handling"""
-        try:
-            added_covers = 0
-            errors = 0
-            results = None
-            try:
-                conn = sqlite3.connect('Music.db')
-                cursor = conn.cursor()
-                # Select a song per album
-                cursor.execute("SELECT album, path FROM Songs GROUP BY album")
-                results = cursor.fetchall()
-                conn.commit()
-                conn.close()
-            except sqlite3.Error as e:
-                QMessageBox.warning(self, "Scan Error",
-                    f"Database error getting Albums from database: {str(e)}")
-                errors += 1
-            except Exception as e:
-                QMessageBox.warning(self, "Scan Error",
-                    f"Unexpected error getting Albums from database: {str(e)}")
-                errors += 1
-
-            if results:
-                self.status_bar.showMessage(f"Adding {len(results)} covers to database")
-                try:
-                    conn = sqlite3.connect('Covers.db')
-                    cursor = conn.cursor()
-                    for result in results:
-                        album = result[0]
-                        img = self.get_album_art(result[1])
-                        if img is None:
-                            cover = None
-                        else:
-                            im = Image.open(BytesIO(base64.b64decode(img)))
-                            im.thumbnail(size)
-                            im_file = BytesIO()
-                            im.save(im_file, format="JPEG")
-                            im_bytes = im_file.getvalue()  # im_bytes: image in binary format.
-                            cover = base64.b64encode(im_bytes).decode('utf-8')
-                        cursor.execute('''
-                            INSERT INTO Covers (album, cover) 
-                            VALUES (?,?)''', (album, cover))
-                        added_covers += 1
-                        self.status_bar.showMessage(
-                            f"Added cover from album: {album}")
-                    else:
-                        self.status_bar.showMessage(
-                            f"Could not get album art from album: {album}")
-                        errors += 1
-                    conn.commit()
-                    conn.close()
-                except sqlite3.Error as e:
-                    self.status_bar.showMessage(
-                        f"Database error adding album art from album: {album}: {e}")
-                    errors += 1
-                except Exception as e:
-                    self.status_bar.showMessage(
-                        f"Unexpected error adding album art from album: {album}: {e}")
-                    errors += 1
-
-                self.status_bar.showMessage(
-                    f"Successfully added {added_covers} songs to database")
-                if errors > 0:
-                    self.status_bar.showMessage(
-                        f"Encountered {errors} errors while adding songs")
-
-                return added_covers
-
-        except Exception as e:
-            QMessageBox.warning(self, "Scan Error", f"Error adding covers to database: {str(e)}")
-            return 0
 
     def add_playlists_to_database(self, playlist_files):
         """Add playlist files to database with error handling"""
@@ -2996,18 +2961,17 @@ class AudioPlayer(QWidget):
 
         audio_files, playlist_files = self.scan_for_audio_files(folder_path)
         # Add to database
-        added_songs = self.add_songs_to_database(audio_files)
+        added_songs, added_covers = self.add_songs_to_database(audio_files)
         added_playlists = self.add_playlists_to_database(playlist_files)
-        added_covers = self.add_covers_to_database()
 
-        success_msg = f'Successfully added {added_songs} songs, {added_playlists} playlists and {added_covers} to the database.'
+        success_msg = f'Successfully added {added_songs} songs, {added_playlists} playlists and {added_covers} albums to the database.'
         self.status_bar.showMessage(success_msg, 8)
         QMessageBox.information(self,'info', success_msg)
 
 
 
     def delete_missing_songs(self):
-        """Delete missing audio files to database with error handling"""
+        """Delete missing audio files and covers to databases"""
         try:
             self.status_bar.showMessage(f"Deleting missing audio files from database")
             conn = sqlite3.connect(DB_PATH)
@@ -3021,6 +2985,7 @@ class AudioPlayer(QWidget):
 
             # Check existence for each song
             songs_to_delete = []
+            covers_to_delete = []
             for song_id, path in db_songs:
                 if not os.path.exists(path):
                     songs_to_delete.append(song_id)
@@ -3031,6 +2996,9 @@ class AudioPlayer(QWidget):
                 # Perform the deletion (if any)
             try:
                 if songs_to_delete:
+                    for song_id in songs_to_delete:
+                        cursor.execute(f"SELECT DISTINCT album FROM Songs WHERE id = ?", (song_id,))
+                        covers_to_delete.extend(cursor.fetchall())
                     # The '?' allows safe parameter passing for multiple values
                     while len(songs_to_delete) > 999:
                         placeholders = ', '.join(['?'] * 999)
@@ -3056,6 +3024,13 @@ class AudioPlayer(QWidget):
 
             conn.commit()
             conn.close()
+            if covers_to_delete:
+                conn = sqlite3.connect('Covers.db')
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"DELETE FROM Covers WHERE album IN ({covers_to_delete})")
+                conn.commit()
+                conn.close()
             if deleted_songs > 0:
                 self.status_bar.showMessage(
                 f"Successfully deleted {deleted_songs} songs from database")
@@ -3129,6 +3104,7 @@ class AudioPlayer(QWidget):
             QMessageBox.critical(self, "Error", f"Error deleting playlists from database: {str(e)}")
             return 0
 
+
     def purge_library(self):
         folder_path = self.selectDirectoryDialog()
         if not folder_path:
@@ -3151,6 +3127,7 @@ class AudioPlayer(QWidget):
             # Add to database
             deleted_songs = self.delete_missing_songs()
             deleted_playlists = self.delete_missing_playlists()
+
             if deleted_songs == 0 and deleted_playlists == 0:
                 success_msg = ('No missing/duplicate songs and playlists were found.\n'
                                'No deletions were made')
