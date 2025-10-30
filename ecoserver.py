@@ -28,7 +28,11 @@ app = Flask(__name__)
 load_dotenv()
 secret_key = os.getenv("SECRET_KEY")
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
-DB_PATH = 'music.db'
+APP_DIR = Path.home() / "Web-Media-Server-and-Player"
+APP_DIR.mkdir(exist_ok=True)
+SETTINGS_FILE = APP_DIR / "settings.json"
+DB_PATH = APP_DIR / 'music.db'
+COVERS_DB_PATH = APP_DIR / 'covers.db'
 MUSIC_DIR = ''
 size = 256, 256
 results = None
@@ -123,7 +127,7 @@ def init_database():
     """Initialize the database with proper error handling"""
     try:
         logger.info("Initializing database...")
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
         # Create Songs table (including album_artist column)
@@ -153,7 +157,7 @@ def init_database():
         conn.commit()
         conn.close()
 
-        conn = sqlite3.connect('Covers.db')
+        conn = sqlite3.connect(COVERS_DB_PATH)
         cursor = conn.cursor()
 
         # Create Album Art table
@@ -499,7 +503,7 @@ def add_songs_to_database(audio_files):
     try:
         logger.info(f"Adding {len(audio_files)} audio files to database")
 
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         added_songs = 0
         errors = 0
@@ -567,7 +571,7 @@ def add_covers_to_database():
         errors = 0
         results = None
         try:
-            conn = sqlite3.connect('Music.db')
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             # Select a song per album
             cursor.execute("SELECT album, path FROM Songs GROUP BY album")
@@ -584,7 +588,7 @@ def add_covers_to_database():
         if results:
             logger.info(f"Adding {len(results)} covers to database")
             try:
-                conn = sqlite3.connect('Covers.db')
+                conn = sqlite3.connect(COVERS_DB_PATH)
                 cursor = conn.cursor()
                 for result in results:
                     album = result[0]
@@ -689,7 +693,7 @@ def add_playlists_to_database(playlist_files):
     try:
         logger.info(f"Adding {len(playlist_files)} playlists to database")
 
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         added_playlists = 0
         errors = 0
@@ -876,7 +880,7 @@ def migrate_add_album_artist():
     """
     try:
         logger.info("Running migration: add/populate 'album_artist' column in Songs table")
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
         # Check if column exists
@@ -1077,7 +1081,7 @@ def get_playlists():
     try:
         logger.info("Getting playlists")
 
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("SELECT id, PL_name FROM Playlists")
         playlists = cursor.fetchall()
@@ -1106,10 +1110,10 @@ def get_all():
             logger.warning("Missing search parameters")
             return jsonify({'error': 'Missing parameters'}), 400
 
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         if query == "song_title":
-            selection = "SELECT id, artist, song_title, album, path, file_name FROM Songs ORDER BY artist ASC"
+            selection = "SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs ORDER BY artist ASC"
         elif query == "artist":
             selection = f"SELECT DISTINCT artist FROM Songs ORDER BY artist ASC"
         else:
@@ -1123,6 +1127,7 @@ def get_all():
             return jsonify([{
                 'id'      : r[0],
                 'artist'  : r[1],
+                'album_artist': r[6],
                 'title'   : r[2],
                 'album'   : r[3],
                 'path'    : r[4],
@@ -1149,7 +1154,7 @@ def get_all():
 @app.route('/list_songs')
 def list_songs():
     try:
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         # Adjust table/column names to your schema: songs table with artist, title, album, path
         cursor.execute(
@@ -1175,7 +1180,7 @@ def list_songs():
 @app.route('/list_artists')
 def list_artists():
     try:
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         # Adjust table/column names to your schema: songs table with artist, title, album, path
         cursor.execute("SELECT DISTINCT artist FROM Songs ORDER BY artist ASC")
@@ -1199,7 +1204,7 @@ def artist_albums():
         logger.warning("Missing search parameters")
         return jsonify({'error': 'Missing parameters'}), 400
     try:
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
             f"SELECT song_title, artist, album, path, duration FROM songs WHERE album_artist='{album_artist}'")
@@ -1229,26 +1234,18 @@ def artist_albums():
 
 @app.route('/list_albums')
 def list_albums():
-    limit = int(request.args.get('limit', 20))
+    limit = int(request.args.get('limit', 100))
     offset = int(request.args.get('offset', 0))
     try:
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(COVERS_DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            f"SELECT album, album_artist, path FROM Songs GROUP BY album ORDER BY album LIMIT {offset}, {limit}")
-        results = cursor.fetchall()
+            f"SELECT album, album_artist, cover FROM Covers ORDER BY album LIMIT {offset}, {limit}")
+        albums = cursor.fetchall()
         conn.close()
-
-        conn = sqlite3.connect('Covers.db')
-        cursor = conn.cursor()
-        cursor.execute(
-            f"SELECT album, cover FROM Covers GROUP BY album ORDER BY album LIMIT {offset}, {limit}")
-        covers = cursor.fetchall()
-        conn.close()
-        if len(results) == len(covers):
-            return jsonify([{ "album": results[i][0],
-                              "artist": results[i][1],
-                              "cover": covers[i][1] } for i in range(len(results))])
+        return jsonify([{ "album": album[0],
+                          "artist": album[1],
+                          "cover": album[2] } for album in albums])
     except Exception as e:
         # return useful error for debugging (remove or mask details in production)
         app.logger.exception("Error in /list_songs")
@@ -1262,7 +1259,7 @@ def album_songs():
     album = album.replace('"', '""')
     album_artist = request.args.get('album_artist')
     try:
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
             f'SELECT artist, song_title, path, file_name, duration FROM Songs WHERE album="{album}"')
@@ -1294,7 +1291,7 @@ def load_playlist(playlist_id):
     try:
         logger.info(f"Loading playlist ID: {playlist_id}")
 
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("SELECT path, PL_name FROM Playlists WHERE id = ?",
                        (playlist_id,))
@@ -1330,35 +1327,62 @@ def search_songs():
     try:
         column = request.args.get('column')
         query = request.args.get('query')
-
+        query = query.lower().replace('"', '""')
         logger.info(f"Searching songs: column={column}, query={query}")
 
         if not column or not query:
             logger.warning("Missing search parameters")
             return jsonify({'error': 'Missing parameters'}), 400
 
-        conn = sqlite3.connect('Music.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-
         # First try exact match
-        cursor.execute(
-            f"SELECT id, artist, song_title, album, path, file_name FROM Songs WHERE {column} LIKE ?",
-            (f'%{query}%',))
+        if column == 'song_title':
+            # If searching by song, include album_artist in the query
+            if " - " in query and len(query) > 3:
+                logger.info(
+                    "Searching by song artist and title...")
+                cursor.execute(
+                    f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE artist LIKE ? AND song_title LIKE ?",
+                    (f'%{query.split(" - ")[0]}%',
+                     f'%{query.split(" - ")[1]}%',))
+            else:
+                cursor.execute(
+                    f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE song_title LIKE ?",
+                    (f'%{query}%',))
+        elif column == 'album':
+            # If searching by album, include album_artist in the query
+            if " - " in query and len(query) > 3:
+                logger.info(
+                    "Searching by album artist and album title...")
+                cursor.execute(
+                    f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE album_artist LIKE ? AND album LIKE ?",
+                    (f'%{query.split(" - ")[0]}%',
+                     f'%{query.split(" - ")[1]}%',))
+            else:
+                cursor.execute(
+                    f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE album LIKE ?",
+                    (f'%{query}%',))
+        else:
+            # column = artist
+            cursor.execute(
+                f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE artist LIKE ?",
+                (f'%{query}%',))
         results = cursor.fetchall()
 
         # If no results, try fuzzy matching
         if not results:
             logger.info("No exact matches, trying fuzzy search")
             cursor.execute(
-                f"SELECT id, artist, song_title, album, path, file_name, {column} FROM Songs")
+                f"SELECT id, artist, song_title, album, path, file_name, album_artist, {column} FROM Songs")
             all_songs = cursor.fetchall()
 
             fuzzy_matches = []
             for song in all_songs:
                 try:
-                    ratio = fuzz.ratio(query.lower(), song[6].lower())
+                    ratio = fuzz.ratio(query.lower(), song[7].lower())
                     if ratio > 60:  # Threshold for fuzzy matching
-                        fuzzy_matches.append((song[:6], ratio))
+                        fuzzy_matches.append((song[:7], ratio))
                 except Exception as e:
                     logger.warning(
                         f"Error in fuzzy matching for song {song[0]}: {e}")
@@ -1375,7 +1399,7 @@ def search_songs():
         albums = []
         new_results = []
         for result in results:
-            if not f'{result[1]} - {result[3]}' in albums:
+            if not f'{result[6]} - {result[3]}' in albums:
                 albums.append(result[3])
                 album_art = get_album_art(result[4])
             else:
@@ -1388,11 +1412,12 @@ def search_songs():
         return jsonify([{
             'id'       : r[0],
             'artist'   : r[1],
+            'album_artist': r[6],
             'title'    : r[2],
             'album'    : r[3],
             'path'     : r[4],
             'filename' : r[5],
-            'album_art': r[6]
+            'album_art': r[7]
         } for r in new_results])
 
     except sqlite3.Error as e:

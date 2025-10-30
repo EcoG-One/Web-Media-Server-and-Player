@@ -76,12 +76,12 @@
 
         <div id="list-section" class="hidden">
             <h3>All Songs (grouped by album)</h3>
-            <div id="all-songs-list">Loading...</div>
+            <div id="all-songs-list">Fetching all songs it may take some time, please wait...</div>
         </div>
 
         <div id="artists-section" class="hidden">
             <h3>Artists</h3>
-            <div id="artists-list">Loading...</div>
+            <div id="artists-list">Fetching all artists it may take some time, please wait...</div>
         </div>
 
         <div id="artist-albums-section" class="hidden">
@@ -93,7 +93,7 @@
             <h3>Albums</h3>
             <div class="prevnext">
             <label for="limit">Albums per Page:</label>
-            <input type="number" value=20 min=1 max=999 name="limit" id='limit' />
+            <input type="number" value=100 min=1 max=9999 name="limit" id='limit' />
             <button onclick="listAlbums()" class="next">
                 <svg viewBox="0 0 1024 1024" class="icon" role="img" aria-hidden="true">
                     <path d="M358 311q0 7-5 13L128 549l225 224q5 6 5 13t-5 13l-29 29q-6 6-13 6t-13-6L31 562q-5-6-5-13t5-14l267-266q5-6 13-6t13 6l29 29q5 5 5 13z">
@@ -110,7 +110,7 @@
                 </svg>
             </button>
             </div>
-            <div id="albums-list">Loading, it takes some time, please wait...</div>
+            <div id="albums-list">Fetching all albums it may take some time, please wait...</div>
         </div>
 
         <div id="search-section" class="hidden">
@@ -1166,7 +1166,7 @@
             hideAllSections();
             document.getElementById('list-section').classList.remove('hidden');
             const container = document.getElementById('all-songs-list');
-            container.innerHTML = 'Loading...';
+            container.innerHTML = 'Fetching all songs it may take some time, please wait...';
 
             fetch('/list_songs')
                 .then(r => r.json())
@@ -1215,7 +1215,7 @@
             hideAllSections();
             document.getElementById('artists-section').classList.remove('hidden');
             const container = document.getElementById('artists-list');
-            container.innerHTML = 'Loading...';
+            container.innerHTML = 'Fetching all artists it may take some time, please wait...';
 
             // Expected server response: [{ artist: "Artist Name" }, ... ]
             fetch('/list_artists')

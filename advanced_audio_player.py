@@ -5,10 +5,10 @@ from fuzzywuzzy import fuzz
 from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot, QMutex
 from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence, QKeyEvent
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QMainWindow, QPushButton, QLabel,
     QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
     QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar,
-    QMenu, QStatusBar,QProgressBar, QFrame, QCheckBox, QStyle)
+    QMenu, QToolBar, QStatusBar,QProgressBar, QFrame, QCheckBox, QStyle, QWidgetAction)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 import qdarkstyle
 import mutagen
@@ -31,9 +31,9 @@ import base64
 import webbrowser
 import wikipedia
 from qdarkstyle import DarkPalette, LightPalette
-
 from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
+from ecoserver import get_album_art
 
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
@@ -72,7 +72,8 @@ def get_settings():
                "transition_duration": 4,
                "gap_enabled": True,
                "silence_threshold_db": -46,
-               "silence_min_duration": 0.1
+               "silence_min_duration": 0.1,
+               "scan_for_lyrics": False
                }
     json_settings = load_json(SETTINGS_FILE, default=default)
     return json_settings
@@ -114,7 +115,17 @@ class ListItem:
         else:
             return QUrl.fromLocalFile(os.path.abspath(self.path))
 
-
+class CheckBoxAction(QWidgetAction):
+    def __init__(self, parent, text):
+        super(CheckBoxAction, self).__init__(parent)
+        layout = QHBoxLayout()
+        self.widget = QWidget()
+        label = QLabel(text)
+        label.setAlignment(Qt.AlignLeft)
+        layout.addWidget(QCheckBox())
+        layout.addWidget(label)
+        self.widget.setLayout(layout)
+        self.setDefaultWidget(self.widget)
 
 class AudioPlayer(QWidget):
     request_search = Signal(str, str)
@@ -141,7 +152,7 @@ class AudioPlayer(QWidget):
         # Mixing/transition config
         self.mix_method = settings["mix_method"]
         self.transition_duration = settings["transition_duration"]
-
+        self.scan_for_lyrics = settings["scan_for_lyrics"]
         self.gap_enabled = settings["gap_enabled"]
         self.silence_threshold_db = settings["silence_threshold_db"]
         self.silence_min_duration = settings["silence_min_duration"]
@@ -176,62 +187,67 @@ class AudioPlayer(QWidget):
         # ----- Menu bar -----
         menubar = QMenuBar(self)
 
+        # Toolbar
+        toolbar = QToolBar()
+        toolbar.setMovable(True)
+
+
         # File menu
         local_menu = QMenu("&Local", self)
         menubar.addMenu(local_menu)
 
-        self.open_action = QAction("&Open Playlist | Add Songs", self)
+        self.open_action = QAction(QIcon("icons/open.png"), "&Open Playlist | Add Songs", self)
         self.open_action.setShortcut(QKeySequence.Open)
-        self.open_action.setToolTip("Add Songs/folders and/or Playlists to playing cue")
+        self.open_action.setToolTip("Add Songs/folders and/or Playlists to playing queue")
         self.open_action.triggered.connect(self.show_playlist_menu)
         local_menu.addAction(self.open_action)
 
-        self.load_action = QAction("Load &Playlists", self)
+        self.load_action = QAction(QIcon("icons/edit-alignment.png"), "Load &Playlists", self)
         self.load_action.setShortcut(QKeySequence.Print)
         self.load_action.triggered.connect(self.get_local_playlists)
         local_menu.addAction(self.load_action)
 
-        self.load_action = QAction("List all &Songs", self)
-        self.load_action.setShortcut(QKeySequence("Ctrl+S"))
-        self.load_action.triggered.connect(self.get_local_songs)
-        local_menu.addAction(self.load_action)
+        self.list_songs_action = QAction(QIcon("icons/music-beam-16.png"), "List all &Songs", self)
+        self.list_songs_action.setShortcut(QKeySequence("Ctrl+S"))
+        self.list_songs_action.triggered.connect(self.get_local_songs)
+        local_menu.addAction(self.list_songs_action)
 
-        self.load_action = QAction("List all &Artists", self)
-        self.load_action.setShortcut(QKeySequence("Ctrl+A"))
-        self.load_action.triggered.connect(self.get_local_artists)
-        local_menu.addAction(self.load_action)
+        self.list_artists_action = QAction(QIcon("icons/violoncello.png"), "List all &Artists", self)
+        self.list_artists_action.setShortcut(QKeySequence("Ctrl+A"))
+        self.list_artists_action.triggered.connect(self.get_local_artists)
+        local_menu.addAction(self.list_artists_action)
 
-        self.load_action = QAction("List all Al&bums", self)
-        self.load_action.setShortcut(QKeySequence("Ctrl+B"))
-        self.load_action.triggered.connect(self.get_local_albums)
-        local_menu.addAction(self.load_action)
+        self.list_albums_action = QAction(QIcon("icons/vinil.png"), "List all Al&bums", self)
+        self.list_albums_action.setShortcut(QKeySequence("Ctrl+B"))
+        self.list_albums_action.triggered.connect(self.get_local_albums)
+        local_menu.addAction(self.list_albums_action)
 
-        self.scan_action = QAction("Scan &Library", self)
+        self.scan_action = QAction(QIcon("icons/database-insert.png"), "Scan &Library", self)
         self.scan_action.setShortcut(QKeySequence("Ctrl+L"))
         self.scan_action.triggered.connect(self.scan_library)
         local_menu.addAction(self.scan_action)
 
-        self.purge_action = QAction("P&urge Library", self)
+        self.purge_action = QAction(QIcon("icons/database-delete.png"), "P&urge Library", self)
         self.purge_action.setShortcut(QKeySequence("Ctrl+U"))
         self.purge_action.triggered.connect(self.purge_library)
         local_menu.addAction(self.purge_action)
 
-        self.save_action = QAction("&Save Current Queue", self)
+        self.save_action = QAction(QIcon("icons/save.png"), "&Save Current Queue", self)
         self.save_action.setShortcut(QKeySequence.Save)
         self.save_action.triggered.connect(self.save_current_playlist)
         local_menu.addAction(self.save_action)
 
-        self.clear_action = QAction("&Clear Playlist", self)
+        self.clear_action = QAction(QIcon("icons/eraser.png"), "&Clear Playlist", self)
         self.clear_action.setShortcut(QKeySequence.Delete)
         self.clear_action.triggered.connect(self.clear_playlist)
         local_menu.addAction(self.clear_action)
 
-        self.local_web_action = QAction("Launch &Web UI", self)
+        self.local_web_action = QAction(QIcon("icons/internet.png"), "Launch &Web UI", self)
         self.local_web_action.setShortcut(QKeySequence("Ctrl+W"))
         self.local_web_action.triggered.connect(self.local_web_ui)
         local_menu.addAction(self.local_web_action)
 
-        self.local_shutdown_action = QAction("Shutdown Lo&cal Server", self)
+        self.local_shutdown_action = QAction(QIcon("icons/power.png"), "Shutdown Lo&cal Server", self)
         self.local_shutdown_action.setShortcut(QKeySequence.Close)
         self.local_shutdown_action.triggered.connect(self.shutdown_local_server)
         local_menu.addAction(self.local_shutdown_action)
@@ -247,55 +263,55 @@ class AudioPlayer(QWidget):
         remote_menu = QMenu("&Remote", self)
         menubar.addMenu(remote_menu)
 
-        self.server_action = QAction("Connect to R&emote", self)
+        self.server_action = QAction(QIcon("icons/database-share.png"), "Connect to R&emote", self)
         self.server_action.setShortcut(QKeySequence("Ctrl+E"))
         self.server_action.triggered.connect(self.enter_server)
         remote_menu.addAction(self.server_action)
 
-        self.load_action = QAction("Load &Playlists", self)
-        self.load_action.setShortcut(QKeySequence.Print)
-        self.load_action.triggered.connect(self.get_playlists)
-        remote_menu.addAction(self.load_action)
+        self.load_remote_action = QAction(QIcon("icons/edit-alignment.png"), "Load &Playlists", self)
+        self.load_remote_action.setShortcut(QKeySequence.Print)
+        self.load_remote_action.triggered.connect(self.get_playlists)
+        remote_menu.addAction(self.load_remote_action)
 
-        self.load_action = QAction("List all &Songs", self)
-        self.load_action.setShortcut(QKeySequence("Ctrl+S"))
-        self.load_action.triggered.connect(self.get_songs)
-        remote_menu.addAction(self.load_action)
+        self.list_remote_songs_action = QAction(QIcon("icons/music-beam-16.png"), "List all &Songs", self)
+        self.list_remote_songs_action.setShortcut(QKeySequence("Ctrl+S"))
+        self.list_remote_songs_action.triggered.connect(self.get_songs)
+        remote_menu.addAction(self.list_remote_songs_action)
 
-        self.load_action = QAction("List all &Artists", self)
-        self.load_action.setShortcut(QKeySequence("Ctrl+A"))
-        self.load_action.triggered.connect(self.get_artists)
-        remote_menu.addAction(self.load_action)
+        self.list_remote_artists_action = QAction(QIcon("icons/violoncello.png"), "List all &Artists", self)
+        self.list_remote_artists_action.setShortcut(QKeySequence("Ctrl+A"))
+        self.list_remote_artists_action.triggered.connect(self.get_artists)
+        remote_menu.addAction(self.list_remote_artists_action)
 
-        self.load_action = QAction("List all Al&bums", self)
-        self.load_action.setShortcut(QKeySequence("Ctrl+B"))
-        self.load_action.triggered.connect(self.get_albums)
-        remote_menu.addAction(self.load_action)
+        self.list_remote_albums_action = QAction(QIcon("icons/vinil.png"), "List all Al&bums", self)
+        self.list_remote_albums_action.setShortcut(QKeySequence("Ctrl+B"))
+        self.list_remote_albums_action.triggered.connect(self.get_albums)
+        remote_menu.addAction(self.list_remote_albums_action)
 
-        self.scan_action = QAction("Scan &Library", self)
-        self.scan_action .setShortcut(QKeySequence("Ctrl+R"))
-        self.scan_action .triggered.connect(self.scan_remote_library)
-        remote_menu.addAction(self.scan_action )
+        self.scan_remote_action = QAction(QIcon("icons/database-insert.png"), "Scan &Library", self)
+        self.scan_remote_action.setShortcut(QKeySequence("Ctrl+R"))
+        self.scan_remote_action.triggered.connect(self.scan_remote_library)
+        remote_menu.addAction(self.scan_remote_action)
 
-        self.purge_action = QAction("P&urge Library", self)
-        self.purge_action.setShortcut(QKeySequence("Ctrl+U"))
-        self.purge_action.triggered.connect(self.purge_remote_library)
-        remote_menu.addAction(self.purge_action)
+        self.purge_remote_action = QAction(QIcon("icons/database-delete.png"), "P&urge Library", self)
+        self.purge_remote_action.setShortcut(QKeySequence("Ctrl+U"))
+        self.purge_remote_action.triggered.connect(self.purge_remote_library)
+        remote_menu.addAction(self.purge_remote_action)
 
-        self.web_action = QAction("Launch &Web UI", self)
-        self.web_action.setShortcut(QKeySequence("Ctrl+I"))
-        self.web_action.triggered.connect(self.remote_web_ui)
-        remote_menu.addAction(self.web_action)
+        self.remote_web_action = QAction(QIcon("icons/internet.png"), "Launch &Web UI", self)
+        self.remote_web_action.setShortcut(QKeySequence("Ctrl+I"))
+        self.remote_web_action.triggered.connect(self.remote_web_ui)
+        remote_menu.addAction(self.remote_web_action)
 
-        self.desktop_action = QAction("Launch &Desktop UI", self)
-        self.desktop_action.setShortcut(QKeySequence("Ctrl+D"))
-        self.desktop_action.triggered.connect(self.remote_desk_ui)
-        remote_menu.addAction(self.desktop_action)
+        self.remote_desktop_action = QAction(QIcon("icons/application-blue.png"), "Launch &Desktop UI", self)
+        self.remote_desktop_action.setShortcut(QKeySequence("Ctrl+D"))
+        self.remote_desktop_action.triggered.connect(self.remote_desk_ui)
+        remote_menu.addAction(self.remote_desktop_action)
 
-        self.shutdown_action = QAction("S&hutdown Server", self)
-        self.shutdown_action.setShortcut(QKeySequence("Ctrl+C"))
-        self.shutdown_action.triggered.connect(self.shutdown_server)
-        remote_menu.addAction(self.shutdown_action)
+        self.remote_shutdown_action = QAction(QIcon("icons/power.png"), "S&hutdown Server", self)
+        self.remote_shutdown_action.setShortcut(QKeySequence("Ctrl+C"))
+        self.remote_shutdown_action.triggered.connect(self.shutdown_server)
+        remote_menu.addAction(self.remote_shutdown_action)
 
         remote_menu.addSeparator()
 
@@ -304,33 +320,78 @@ class AudioPlayer(QWidget):
         self.exit_action.triggered.connect(self.quit)
         remote_menu.addAction(self.exit_action)
 
+        # Settings menu
+        settings_menu = QMenu("&Settings", self)
+        menubar.addMenu(settings_menu)
+
         # Style menu
         style_menu = QMenu("&Style", self)
-        menubar.addMenu(style_menu)
+        settings_menu.addMenu(style_menu)
 
-        self.dark_action = QAction("&Dark", self)
+        self.dark_action = QAction(QIcon("icons/moon.png"), "&Dark Mode", self)
         self.dark_action.triggered.connect(self.set_dark_style)
         style_menu.addAction(self.dark_action)
 
-        self.light_action = QAction("&Light", self)
+        self.light_action = QAction(QIcon("icons/dark-mode.png"), "&Light Mode", self)
         self.light_action.triggered.connect(self.set_light_style)
         style_menu.addAction(self.light_action)
 
-        self.normal_action = QAction("&Normal", self)
+        self.normal_action = QAction(QIcon("icons/normal-mode.png"), "&Default Mode", self)
         self.normal_action.triggered.connect(self.set_no_style)
         style_menu.addAction(self.normal_action)
+
+        # Lyrics Menu
+        lyrics_menu = QMenu("&Lyrics", self)
+        settings_menu.addMenu(lyrics_menu)
+        self.lyrics_action = CheckBoxAction(self, "Auto download Lyrics")
+      #  self.lyrics_action.triggered.connect(self.toggle_lyrics_scan)
+        lyrics_menu.addAction(self.lyrics_action)
+        self.checkbox = self.lyrics_action.widget.findChild(QCheckBox)
+        self.checkbox.stateChanged.connect(self.toggle_lyrics_scan)
 
         # Help menu
         help_menu = QMenu("&Help", self)
         menubar.addMenu(help_menu)
 
-        self.instructions_action = QAction("&Instructions", self)
+        self.instructions_action = QAction(QIcon("icons/user-guide.png"), "&Instructions", self)
         self.instructions_action.triggered.connect(self.show_instructions)
         help_menu.addAction(self.instructions_action)
 
-        self.about_action = QAction("&About", self)
+        self.about_action = QAction(QIcon("icons/user.png"), "&About", self)
         self.about_action.triggered.connect(self.show_about_dialog)
         help_menu.addAction(self.about_action)
+
+
+        # Add action to toolbar
+        toolbar.addAction(self.open_action)
+        toolbar.addAction(self.load_action)
+        toolbar.addAction(self.list_songs_action)
+        toolbar.addAction(self.list_artists_action)
+        toolbar.addAction(self.list_albums_action)
+        toolbar.addAction(self.scan_action)
+        toolbar.addAction(self.purge_action)
+        toolbar.addAction(self.save_action)
+        toolbar.addAction(self.clear_action)
+        toolbar.addAction(self.local_web_action)
+        toolbar.addAction(self.local_shutdown_action)
+        toolbar.addSeparator()
+        toolbar.addAction(self.dark_action)
+        toolbar.addAction(self.light_action)
+        toolbar.addAction(self.normal_action)
+      #  toolbar.addAction(self.lyrics_action)
+        toolbar.addSeparator()
+        toolbar.addAction(self.server_action)
+        toolbar.addAction(self.load_remote_action)
+        toolbar.addAction(self.list_remote_songs_action)
+        toolbar.addAction(self.list_remote_artists_action)
+        toolbar.addAction(self.list_remote_albums_action)
+        toolbar.addAction(self.scan_remote_action)
+        toolbar.addAction(self.purge_remote_action)
+        toolbar.addAction(self.remote_web_action)
+        toolbar.addAction(self.remote_desktop_action)
+        toolbar.addAction(self.remote_shutdown_action)
+        toolbar.addAction(self.instructions_action)
+        toolbar.addAction(self.about_action)
 
         # Audio/Player
         self.player = QMediaPlayer(self)
@@ -370,7 +431,7 @@ class AudioPlayer(QWidget):
             "border-width: 2px; "
             "border-style: inset;"
         )
-        self.playlist_label = QLabel("Cue:")
+        self.playlist_label = QLabel("Queue:")
         self.btn_shuffle = QPushButton("Shuffle")
         self.btn_shuffle.setFixedSize(QSize(60, 26))
         self.playlist_widget.setDragDropMode(QListWidget.InternalMove)
@@ -574,6 +635,7 @@ class AudioPlayer(QWidget):
         main_layout.addLayout(playlist_layout, 1)
         main_layout.addLayout(left_layout, 2)
         layout.addWidget(menubar)
+        layout.addWidget(toolbar)
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
         separator.setFrameShadow(QFrame.Sunken)
@@ -761,7 +823,14 @@ class AudioPlayer(QWidget):
                 self.style().standardIcon(QStyle.SP_MediaSkipForward))
         self.next_button.setFixedSize(QSize(50, 50))
 
-
+    def toggle_lyrics_scan(self):
+        """Toggle lyrics scanning option"""
+        if self.checkbox.isChecked():
+            self.scan_for_lyrics = True
+        else:
+            self.scan_for_lyrics = False
+        state = "enabled" if self.scan_for_lyrics else "disabled"
+        self.status_bar.showMessage(f"Lyrics scanning {state}")
 
     # Database initialization
     def init_database(self):
@@ -1016,7 +1085,8 @@ class AudioPlayer(QWidget):
                                       "transition_duration" : self.transition_duration,
                                       "gap_enabled"         : self.gap_enabled,
                                       "silence_threshold_db": self.silence_threshold_db,
-                                      "silence_min_duration": self.silence_min_duration
+                                      "silence_min_duration": self.silence_min_duration,
+                                      "scan_for_lyrics"     : self.scan_for_lyrics
                                       })
             self.setWindowTitle(
                 f"Ultimate Media Player. Current Server: {self.api_url}")
@@ -1359,31 +1429,50 @@ class AudioPlayer(QWidget):
         if not column or not query:
             QMessageBox.warning(self, "Error", "Missing search parameters")
             return
-        q = query.lower()
+        query = query.lower().replace('"', '""')
         if self.is_local:
             try:
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
-
                 # First try exact match
-                cursor.execute(
-                    f"SELECT id, artist, song_title, album, path, file_name FROM Songs WHERE {column} LIKE ?",
-                    (f'%{query}%',))
+                if column == 'song_title':
+                    # If searching by song, include album_artist in the query
+                    if " - " in query and len(query) > 3:
+                        self.status_bar.showMessage("Searching by song artist and title...")
+                        cursor.execute(f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE artist LIKE ? AND song_title LIKE ?",
+                        (f'%{query.split(" - ")[0]}%', f'%{query.split(" - ")[1]}%',))
+                    else:
+                        cursor.execute(f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE song_title LIKE ?",
+                        (f'%{query}%',))
+                elif column == 'album':
+                    # If searching by album, include album_artist in the query
+                    if " - " in query and len(query) > 3:
+                        self.status_bar.showMessage("Searching by album artist and album title...")
+                        cursor.execute(f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE album_artist LIKE ? AND album LIKE ?",
+                        (f'%{query.split(" - ")[0]}%', f'%{query.split(" - ")[1]}%',))
+                    else:
+                        cursor.execute(f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE album LIKE ?",
+                        (f'%{query}%',))
+                else:
+                    # column = artist
+                    cursor.execute(
+                        f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE artist LIKE ?",
+                        (f'%{query}%',))
                 results = cursor.fetchall()
 
                 # If no results, try fuzzy matching
                 if not results:
                     self.status_bar.showMessage("No exact matches, trying fuzzy search")
                     cursor.execute(
-                        f"SELECT id, artist, song_title, album, path, file_name, {column} FROM Songs")
+                        f"SELECT id, artist, song_title, album, path, file_name, album_artist, {column} FROM Songs")
                     all_songs = cursor.fetchall()
 
                     fuzzy_matches = []
                     for song in all_songs:
                         try:
-                            ratio = fuzz.ratio(query.lower(), song[6].lower())
+                            ratio = fuzz.ratio(query.lower(), song[7].lower())
                             if ratio > 60:  # Threshold for fuzzy matching
-                                fuzzy_matches.append((song[:6], ratio))
+                                fuzzy_matches.append((song[:7], ratio))
                         except Exception as e:
                             self.status_bar.showMessage(
                                 f"Error in fuzzy matching for song {song[0]}: {e}")
@@ -1400,37 +1489,52 @@ class AudioPlayer(QWidget):
                                      f"Database error searching songs: {str(e)}")
                 return
             try:
+                search_results = []
+                for r in results:
+                    search_result = {
+                        'id'       : r[0],
+                        'artist'   : r[1],
+                        'title'    : r[2],
+                        'album'    : r[3],
+                        'path'     : r[4],
+                        'filename' : r[5],
+                        'album_artist': r[6]
+                    }
+                    if search_result:
+                        search_results.append(search_result)
                 albums = []
-                new_results = []
-                for result in results:
-                    if not f'{result[1]} - {result[3]}' in albums:
-                        albums.append(result[3])
-                        album_art = self.get_album_art(result[4])
+                songs = {}
+                for s in search_results:
+                    album = s['album']
+                    album_artist = s['album_artist']
+                    if album not in albums:
+                        albums.append(album)
+                        songs[album] = []
+                    songs[album].append(s)
+                covers = {}
+                conn = sqlite3.connect(COVERS_DB_PATH)
+                cursor = conn.cursor()
+                for album in albums:
+                    album = album.replace('"', '""')
+                    cursor.execute(f'SELECT cover FROM Covers WHERE album = "{album}" AND album_artist = "{album_artist}"')
+                    album_art = cursor.fetchone()
+                    if album_art is None:
+                        album_art = get_album_art(r[4])
+                    elif isinstance(album_art, tuple):
+                        album_art = album_art[0]
                     else:
-                        album_art = None
-                    result_list = list(result)
-                    result_list.append(album_art)
-                    new_result = tuple(result_list)
-                    new_results.append(new_result)
-
-                search_result = [{
-                    'id'       : r[0],
-                    'artist'   : r[1],
-                    'title'    : r[2],
-                    'album'    : r[3],
-                    'path'     : r[4],
-                    'filename' : r[5],
-                    'album_art': r[6]
-                } for r in new_results]
-                self.on_search_completed({"search_result": search_result})
+                        print(album_art, r[4])
+                    covers[album] = album_art
+                conn.close()
+                self.on_search_completed({"search_result": (covers, songs)})
             except Exception as e:
                 QMessageBox.critical(self, "Error",f"Error searching songs: {str(e)}")
                 # Remove progress bar and clear status
             if self.progress:
                 self.status_bar.removeWidget(self.progress)
             self.status_bar.clearMessage()
-        else:
-            params = {"column":column, "query":q}
+        else: # Remote search
+            params = {"column":column, "query":query}
             url = f"{self.api_url}/search_songs"
 
             # Create and configure worker thread
@@ -1456,25 +1560,53 @@ class AudioPlayer(QWidget):
             QMessageBox.critical(self, "Error", data["error"])
             return
         if data:
-            songs = []
-            albums = {}
-            for track in data:
-                song = ListItem()
-                song.is_remote = is_remote
-                song.item_type = 'song_title' # or self.combo.currentText()
-                song.path = track["path"]
-                song.display_text =f"{track['artist']} - {track['title']} ({track['album']})"
-                songs.append(song)
-                if self.short_albums:
-                    album = track['album_art']
-                    if not track["album_art"] in albums.keys():
-                        albums[album] = []
-                    albums[album].append(song)
             self.clear_playlist()
-            if self.short_albums:
-                self.add_albums(albums)
+            if is_remote:
+                albums = []
+                songs = {}
+                for s in data:
+                    album = s['album']
+                    if album not in albums:
+                        albums.append(album)
+                        songs[album] = []
+                    songs[album].append(s)
             else:
-                self.add_files(songs)
+                covers = data[0]
+                songs = data[1]
+
+            for album in songs.keys():
+                if is_remote:
+                    album_art = songs[album][0]['album_art']
+                else:
+                    album_art = covers[album]
+                album_songs = songs[album]
+                album_artist = album_songs[0]['album_artist']
+                if self.short_albums:
+                    self.add_album(album_art, album_artist, album)
+                '''   self.playlist.append(album_art)
+                    item = QListWidgetItem(album_art)
+                    self.playlist_widget.addItem(item)'''
+                for track in album_songs:
+                    song = ListItem()
+                    song.is_remote = is_remote
+                    song.item_type = 'song_title' # or self.combo.currentText()
+                    song.path = track["path"]
+                    song.display_text =f"{track['artist']} - {track['title']} ({track['album']})"
+                    self.playlist.append(song)
+                    item = QListWidgetItem(song.display_text)
+                    self.playlist_widget.addItem(item)
+
+                '''if self.short_albums:
+                        album = track['album_art']
+                        if not track["album_art"] in albums.keys():
+                            albums[album] = []
+                        albums[album].append(song) 
+                        
+            
+            if self.short_albums:
+                self.add_albums(playlist)
+            else:
+                self.add_files(songs) '''
         else:
             col = self.combo.currentText()
             q = self.search.text().strip()
@@ -2087,7 +2219,7 @@ class AudioPlayer(QWidget):
 
 
 
-    def add_album(self, data):
+    def add_album(self, data, album_artist=None, album=None):
       #  if 0 > self.current_index >= len(self.playlist) - 1:
          #   return
         if not data:
@@ -2104,6 +2236,7 @@ class AudioPlayer(QWidget):
         self.playlist_widget.setItemWidget(item, self.album_only_art)
         cover = ListItem()
         cover.item_type = 'cover'
+        cover.display_text = f"{album_artist} - {album}"
         self.playlist.append(cover)
         try:
             if data != '':
@@ -2174,7 +2307,7 @@ class AudioPlayer(QWidget):
     def clear_playlist(self):
         self.playlist_widget.clear()
         self.playlist.clear()
-        self.playlist_label.setText('Cue:')
+        self.playlist_label.setText('Queue:')
       #  self.player.stop()
         self.current_index = -1
        # self.lyrics_display.clear()
@@ -2558,6 +2691,12 @@ class AudioPlayer(QWidget):
                             if key.lower() in ('lyrics', 'unsyncedlyrics',
                                                'lyric'):
                                 metadata['lyrics'] = audio_file[key][0]
+                    # MP4/AAC
+                    elif hasattr(audio_file, 'tags') and hasattr(
+                        audio_file.tags, 'get'):
+                        if audio_file.tags.get('\xa9lyr'):
+                            metadata['lyrics'] = \
+                            audio_file.tags['\xa9lyr'][0]
                         # MP3 (ID3)
                     elif hasattr(audio_file, 'tags') and audio_file.tags:
                         # USLT (unsynchronized lyrics) is the standard for ID3
@@ -2567,14 +2706,9 @@ class AudioPlayer(QWidget):
                             if k.lower() in ('lyrics', 'unsyncedlyrics',
                                              'lyric'):
                                 metadata['lyrics'] = str(audio_file.tags[k])
-                        # MP4/AAC
-                    elif hasattr(audio_file, 'tags') and hasattr(
-                            audio_file.tags, 'get'):
-                        if audio_file.tags.get('\xa9lyr'):
-                            metadata['lyrics'] = audio_file.tags['\xa9lyr'][0]
                     else:
                         metadata['lyrics'] = "--"
-                if metadata['lyrics'] == "":
+                if metadata['lyrics'] == "" and self.scan_for_lyrics:
                     try:
                         lyr = LyricsPlugin()
                         metadata['lyrics'] = lyr.get_lyrics(metadata['artist'], metadata['title'],
@@ -2736,15 +2870,11 @@ class AudioPlayer(QWidget):
       #  self.reveal_label.setText(self.meta_data["title"])
 
     def get_info(self):
-        meta = self.player.metaData()
-        if not meta.data:
+        if not self.meta_data:
             return
-        title = meta.stringValue(QMediaMetaData.Title) or None
-       # index = self.playlist_widget.currentRow()
-       # path = self.playlist[index]
+        title = self.meta_data.get('song_title', None)
         artist = self.meta_data.get('artist', None)
         album = self.meta_data.get('album', None)
-      #  album_artist = meta.stringValue(QMediaMetaData.AlbumArtist) or meta.stringValue(QMediaMetaData.Author) or None
         summ = self.get_wiki_summary(artist)
         self.text.clear()
         self.text.append(summ)
@@ -3025,7 +3155,7 @@ class AudioPlayer(QWidget):
             conn.commit()
             conn.close()
             if covers_to_delete:
-                conn = sqlite3.connect('Covers.db')
+                conn = sqlite3.connect(COVERS_DB_PATH)
                 cursor = conn.cursor()
                 cursor.execute(
                     f"DELETE FROM Covers WHERE album IN ({covers_to_delete})")
@@ -3285,17 +3415,16 @@ class AudioPlayer(QWidget):
                 self.status_bar.showMessage(
                     f"Retrieved {len(results)} {query}s. Creating {query} list.")
             else:
-                conn = sqlite3.connect('Covers.db')
+                conn = sqlite3.connect(COVERS_DB_PATH)
                 cursor = conn.cursor()
                 cursor.execute(
-                    f"SELECT album, cover FROM Covers ORDER BY album")
+                    f"SELECT album, album_artist, cover FROM Covers ORDER BY album")
                 covers = cursor.fetchall()
                 conn.close()
                 for c in covers:
-
                     album_art = QListWidgetItem()
-                    if c[1] is not None:
-                        img_bytes = base64.b64decode(c[1])
+                    if c[2] is not None:
+                        img_bytes = base64.b64decode(c[2])
                         img = QImage.fromData(img_bytes)
                         pix = QPixmap.fromImage(img)
                         album_art.setIcon(QIcon(pix))
@@ -3308,7 +3437,7 @@ class AudioPlayer(QWidget):
                     album = ListItem()
                     album.item_type = 'cover'
                     album.is_remote = False
-                    album.display_text = c[0]
+                    album.display_text = f'{c[1]} - {c[0]}'
                     album_item = QListWidgetItem(album.display_text)
                     self.playlist_widget.addItem(album_art)
                     self.playlist_widget.addItem(album_item)
@@ -3772,7 +3901,8 @@ class AudioPlayer(QWidget):
                                   "transition_duration": self.transition_duration,
                                   "gap_enabled"         : self.gap_enabled,
                                   "silence_threshold_db": self.silence_threshold_db,
-                                  "silence_min_duration": self.silence_min_duration
+                                  "silence_min_duration": self.silence_min_duration,
+                                  "scan_for_lyrics": self.scan_for_lyrics
                                   })
         self.close()
 
@@ -4124,7 +4254,7 @@ class TextEdit(QWidget):
 "It is the desktop application from which the server is managed, as well as the selection and playback of music.\n"
 "\n"
 "The interface:\n"
-"On the left side of the application interface, is the Cue display. It displays the songs cued to play, or the playlists, or the search results, or the lists of all the songs in the music library, or artists or albums. On this Cue display, we can drop songs and/or playlists by drag'n'drop or by choosing them via the menus of the application.  Once the Cue display is filled with songs, it starts playing them immediately. If it displays the list of the music library Playlists, clicking a Playlist it then shows the songs in the playlist and starts playing them immediately. If it displays an artist list, clicking on any artist's name displays all of the artist's songs, sorted by album.\n"
+"On the left side of the application interface, is the Queue display. It displays the songs queued to play, or the playlists, or the search results, or the lists of all the songs in the music library, or artists or albums. On this Queue display, we can drop songs and/or playlists by drag'n'drop or by choosing them via the menus of the application.  Once the Queue display is filled with songs, it starts playing them immediately. If it displays the list of the music library Playlists, clicking a Playlist it then shows the songs in the playlist and starts playing them immediately. If it displays an artist list, clicking on any artist's name displays all of the artist's songs, sorted by album.\n"
 "By clicking on any song in any list, it starts playing.\n"
 "At the top right of the list is the Shuffle button to shuffle the songs in the list.\n"
 "\n"
@@ -4143,8 +4273,8 @@ class TextEdit(QWidget):
 "•	List all Albums: Displays all albums in the local computer's library\n"
 "•	Scan Library: Displays the folder selection dialog, to select a folder which (its subfolders included) it scans and adds to the local library the audio files and playlists it finds.\n"
 "•	Purge Library: Opens the folder selection dialog, to select a folder which (its subfolders included) checks and removes any physical deleted audio and playlist files from the local library.\n"
-"•	Save current Cue: Saves the Cue list to a file\n"
-"•	Clear Playlist: Clears the Cue list\n"
+"•	Save current Queue: Saves the Queue list to a file\n"
+"•	Clear Playlist: Clears the Queue list\n"
 "•	Launch Web UI. Opens the program's website on the local computer, from which the server is managed, as well as the music is selected and played.\n"
 "•	Shutdown Local Server: Shuts down the local server.\n"
 "•	Exit: Terminates the operation of the application\n"
