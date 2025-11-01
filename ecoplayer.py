@@ -226,7 +226,7 @@ class WelcomeWizard(QDialog):
             self.label.setText(text_4)
             self._add_button("Cancel", self.reject)
             self._add_button("Connect to Remote", self._connect_remote)
-            self._add_button("End Wizard", self.finish_wizard, default=True)
+            self._add_button("Next", self.next_step, default=True)
 
         elif self.step == 5:
             self.label.setText("Placeholder for Text 5")
@@ -554,6 +554,10 @@ class AudioPlayer(QWidget):
         toolbar.addAction(self.light_action)
         toolbar.addAction(self.normal_action)
       #  toolbar.addAction(self.lyrics_action)
+        toolbar.addSeparator()
+      # Spacer
+        spacer = QSpacerItem(10, 0, QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding)
+        layout.addItem(spacer)
         toolbar.addSeparator()
         toolbar.addAction(self.server_action)
         toolbar.addAction(self.load_remote_action)
@@ -1191,7 +1195,7 @@ class AudioPlayer(QWidget):
             conn.commit()
             conn.close()
 
-            QMessageBox.warning(self, "Scan Error", f"Successfully added {added_songs} songs and {added_covers} covers to database")
+            QMessageBox.warning(self, "Success!", f"Successfully added {added_songs} songs and {added_covers} covers to database")
             if errors > 0:
                 QMessageBox.warning(self, "Scan Error", f"Encountered {errors} errors while adding songs")
 
@@ -2765,11 +2769,11 @@ class AudioPlayer(QWidget):
                 return None
 
             metadata = {
-                'artist'  : '',
-                'album_artist': '',
-                'title'   : '',
-                'album'   : '',
-                'year'    : '',
+                'artist'  : 'Unknown Artist',
+                'album_artist': 'Unknown Album Artist',
+                'title'   : 'Unknown Title',
+                'album'   : 'Unknown Album',
+                'year'    : 'Unknown Year',
                 'duration': 0,
                 'lyrics'  : '',
                 'codec'   : '',
@@ -2818,6 +2822,9 @@ class AudioPlayer(QWidget):
                     metadata['title'] = str(audio_file['TITLE'][0])
                 elif '©nam' in audio_file:
                     metadata['title'] = str(audio_file['©nam'][0])
+                else:
+                    metadata['title'] = os.path.splitext(
+                        os.path.basename(file_path))[0]
             except Exception as e:
                 self.status_bar.showMessage(
                     f"Error reading title metadata from {file_path}: {str(e)}")
