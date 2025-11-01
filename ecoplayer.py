@@ -8,7 +8,9 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QMainWindow, QPushButton, QLabel,
     QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
     QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar,
-    QMenu, QToolBar, QStatusBar,QProgressBar, QFrame, QCheckBox, QStyle, QWidgetAction)  # , QSpacerItem, QSizePolicy
+    QMenu, QToolBar, QStatusBar,QProgressBar, QFrame, QCheckBox, QStyle, QWidgetAction, QSpacerItem, QSizePolicy,
+    QDialog, QDialogButtonBox
+)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 import qdarkstyle
 import mutagen
@@ -73,9 +75,14 @@ def get_settings():
                "gap_enabled": True,
                "silence_threshold_db": -46,
                "silence_min_duration": 0.1,
-               "scan_for_lyrics": False
+               "scan_for_lyrics": False,
+               "show_welcome": True
                }
     json_settings = load_json(SETTINGS_FILE, default=default)
+    # Ensure keys exist
+    for k, v in default.items():
+        if k not in json_settings:
+            json_settings[k] = v
     return json_settings
 
 
@@ -127,12 +134,173 @@ class CheckBoxAction(QWidgetAction):
         self.widget.setLayout(layout)
         self.setDefaultWidget(self.widget)
 
+# --- Welcome Wizard Implementation ---
+class WelcomeWizard(QDialog):
+    """
+    Simple multi-step welcome wizard.
+
+    Steps:
+      1. "Placeholder for Text 1" - Cancel / Next
+      2. "Placeholder for Text 2" - Cancel / Scan / Next
+      3. "Placeholder for Text 3" - Cancel / Next
+      4. "Placeholder for Text 4" - Cancel / Connect to Remote / End Wizard
+      5. "Placeholder for Text 5" - End (and a 'Don't show again' checkbox)
+
+    The wizard will call AudioPlayer.scan_library and AudioPlayer.enter_server as requested.
+    """
+
+    def __init__(self, audio_player: 'AudioPlayer'):
+        super().__init__(audio_player)
+        self.setWindowTitle("Welcome")
+        self.setModal(True)
+        self.audio = audio_player
+        self.step = 1
+        self.resize(500, 200)
+
+        self.layout = QVBoxLayout(self)
+
+        self.label = QLabel("", self)
+        self.label.setWordWrap(True)
+        self.layout.addWidget(self.label)
+
+        # Buttons container
+        self.button_box = QHBoxLayout()
+        self.layout.addLayout(self.button_box)
+
+        # For final step option
+        self.dont_show_checkbox = QCheckBox("Don't show this again", self)
+
+        self._build_step_ui()
+        self.update_step()
+
+    def _clear_buttons(self):
+        # Remove widgets from button box
+        while self.button_box.count():
+            item = self.button_box.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def _add_button(self, text, callback, default=False):
+        btn = QPushButton(text, self)
+        if default:
+            btn.setDefault(True)
+        btn.clicked.connect(callback)
+        self.button_box.addWidget(btn)
+        return btn
+
+    def _build_step_ui(self):
+        # Buttons are created dynamically per step in update_step
+        pass
+
+    def update_step(self):
+        self._clear_buttons()
+        # Remove checkbox if previously added
+        try:
+            self.layout.removeWidget(self.dont_show_checkbox)
+            self.dont_show_checkbox.setParent(None)
+        except Exception:
+            pass
+
+        if self.step == 1:
+            self.label.setText("Placeholder for Text 1")
+            self._add_button("Cancel", self.reject)
+            self._add_button("Next", self.next_step, default=True)
+
+        elif self.step == 2:
+            self.label.setText("Placeholder for Text 2")
+            self._add_button("Cancel", self.reject)
+            # Scan should invoke scan_library asynchronously (scheduled) so it doesn't block this UI call chain
+            self._add_button("Scan", self._scan_async)
+            self._add_button("Next", self.next_step, default=True)
+
+        elif self.step == 3:
+            self.label.setText("Placeholder for Text 3")
+            self._add_button("Cancel", self.reject)
+            self._add_button("Next", self.next_step, default=True)
+
+        elif self.step == 4:
+            self.label.setText("Placeholder for Text 4")
+            self._add_button("Cancel", self.reject)
+            self._add_button("Connect to Remote", self._connect_remote)
+            self._add_button("End Wizard", self.finish_wizard, default=True)
+
+        elif self.step == 5:
+            self.label.setText("Placeholder for Text 5")
+            # Add the "Don't show again" checkbox
+            self.layout.addWidget(self.dont_show_checkbox)
+            self._add_button("End", self.finish_wizard, default=True)
+
+    def next_step(self):
+        if self.step < 5:
+            self.step += 1
+            self.update_step()
+        else:
+            self.finish_wizard()
+
+    def _scan_async(self):
+        """
+        Schedule scan_library to be called soon on the main event loop.
+        scan_library uses GUI dialogs, so it must run on the main thread.
+        We schedule it and continue (wizard remains open).
+        """
+        try:
+            QTimer.singleShot(0, lambda: self.audio.scan_library())
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to start library scan: {e}")
+
+    def _connect_remote(self):
+        """
+        Trigger connect to remote server flow.
+        This will open the server dialog on the main event loop.
+        """
+        try:
+            QTimer.singleShot(0, lambda: self.audio.enter_server())
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to open Connect to Remote: {e}")
+
+    def finish_wizard(self):
+        # Persist "don't show again" option if checked
+        try:
+            settings = load_json(SETTINGS_FILE, default={})
+            if not isinstance(settings, dict):
+                settings = {}
+            settings['show_welcome'] = not self.dont_show_checkbox.isChecked()
+            # Ensure other known settings remain (merge defaults)
+            defaults = get_settings()
+            for k, v in defaults.items():
+                if k not in settings:
+                    settings[k] = v
+            save_json(SETTINGS_FILE, settings)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not save settings: {e}")
+        self.accept()
+
+# --- End of Welcome Wizard Implementation ---
+
+
+class CheckBoxAction(QWidgetAction):
+    def __init__(self, parent, text):
+        super(CheckBoxAction, self).__init__(parent)
+        layout = QHBoxLayout()
+        self.widget = QWidget()
+        label = QLabel(text)
+        label.setAlignment(Qt.AlignLeft)
+        layout.addWidget(QCheckBox())
+        layout.addWidget(label)
+        self.widget.setLayout(layout)
+        self.setDefaultWidget(self.widget)
+
 class AudioPlayer(QWidget):
     request_search = Signal(str, str)
     request_reveal = Signal(ListItem)
 
     def __init__(self, settings):
         super().__init__()
+
+        # store full settings dict for use with wizard persistence
+        self.settings = settings
 
         # data
         self.purge_worker = None
@@ -688,7 +856,13 @@ class AudioPlayer(QWidget):
         for item in self.playlists:
             self.playlist_widget.addItem(item['name'])
 
-
+        # Launch welcome wizard automatically if enabled in settings
+        try:
+            if self.settings.get('show_welcome', True):
+                wizard = WelcomeWizard(self)
+                wizard.exec()
+        except Exception:
+            pass
 
     def split_image(self, image_path, tile_width, tile_height):
         image = QImage(image_path)
@@ -3322,8 +3496,6 @@ class AudioPlayer(QWidget):
         self.playlists_worker.start()
         self.playlists_worker.mutex.lock()
 
-
-
     @Slot(dict)
     def receive_playlists(self, data: dict):
         """Handle successful playlist retrieval completion"""
@@ -3402,10 +3574,10 @@ class AudioPlayer(QWidget):
                 cursor = conn.cursor()
                 if query == "song_title":
                     selection = "SELECT id, artist, song_title, album, path, file_name FROM Songs ORDER BY artist ASC"
-                else: # query == "artist":
+                else:  # query == "artist":
                     selection = f"SELECT DISTINCT artist FROM Songs ORDER BY artist ASC"
                 # else:
-                    # selection = f"SELECT DISTINCT album, album_artist FROM Songs ORDER BY album ASC"
+                # selection = f"SELECT DISTINCT album, album_artist FROM Songs ORDER BY album ASC"
                 cursor.execute(selection)
                 results = cursor.fetchall()
                 conn.close()
@@ -3442,14 +3614,15 @@ class AudioPlayer(QWidget):
                     self.playlist.append(album_art)
                     self.playlist.append(album)
 
-                self.status_bar.showMessage(f"Retrieved {len(covers)} {query}s. Creating {query} list.")
+                self.status_bar.showMessage(
+                    f"Retrieved {len(covers)} {query}s. Creating {query} list.")
 
             if query != "album":
                 for r in results:
                     song = ListItem()
-                 #   self.get_audio_metadata(r[4])
+                    #   self.get_audio_metadata(r[4])
                     if query == 'song_title':
-                        song.display_text = f"{ r[1]} - {r[2]} ({ r[3]})"
+                        song.display_text = f"{r[1]} - {r[2]} ({r[3]})"
                         song.path = r[4]
                     elif query == "artist":
                         song.display_text = r[0]
@@ -3459,9 +3632,11 @@ class AudioPlayer(QWidget):
             self.playlist_label.setText(f'{query} List: ')
 
         except sqlite3.Error as e:
-            QMessageBox.critical(self, "Error",f"Database error getting query: {str(e)}")
+            QMessageBox.critical(self, "Error",
+                                 f"Database error getting query: {str(e)}")
         except Exception as e:
-            QMessageBox.critical(self, "Error",f"Error getting query: {str(e)}")
+            QMessageBox.critical(self, "Error",
+                                 f"Error getting query: {str(e)}")
 
         # Remove progress bar and clear status
         if self.progress:
@@ -3472,12 +3647,11 @@ class AudioPlayer(QWidget):
         if files:
             self.add_files(files)
 
-
-
     def get_list(self, query):
         self.is_local = False
         self.remote_base = self.api_url
-        self.playlist_label.setText(f'Getting {query} list from Server. Please Wait...')
+        self.playlist_label.setText(
+            f'Getting {query} list from Server. Please Wait...')
         self.status_bar.showMessage(
             f'Getting {query} list from Server. Please Wait, it might take '
             'some time...')
@@ -3497,8 +3671,6 @@ class AudioPlayer(QWidget):
         # Start the async operation
         self.songs_worker.start()
         self.songs_worker.mutex.lock()
-
-
 
     @Slot(dict)
     def receive_list(self, retrieved: dict):
@@ -3527,7 +3699,7 @@ class AudioPlayer(QWidget):
                     files.append(song)
                 self.playlist_label.setText('Songs List: ')
             elif "artist" in data[0].keys():
-              #  files = list(itertools.repeat("artist", len(self.songs)))
+                #  files = list(itertools.repeat("artist", len(self.songs)))
                 for file in data:
                     song = ListItem()
                     song.is_remote = not self.is_local
@@ -3537,17 +3709,17 @@ class AudioPlayer(QWidget):
                     files.append(song)
                 self.playlist_label.setText('Artists List: ')
             elif "album" in data[0].keys():
-              #  files = list(itertools.repeat("album", len(self.songs)))
-              for file in data:
-                  song = ListItem()
-                  song.is_remote = not self.is_local
-                  song.item_type = 'album'
-                  song.path = ''
-                  song.display_text = f"{file['album'][1]} - {file['album'][0]}"
-                  files.append(song)
-              self.playlist_label.setText('Album List: ')
+                #  files = list(itertools.repeat("album", len(self.songs)))
+                for file in data:
+                    song = ListItem()
+                    song.is_remote = not self.is_local
+                    song.item_type = 'album'
+                    song.path = ''
+                    song.display_text = f"{file['album'][1]} - {file['album'][0]}"
+                    files.append(song)
+                self.playlist_label.setText('Album List: ')
 
-          #  self.playlist_label.setText('Songs List: ')
+            #  self.playlist_label.setText('Songs List: ')
             self.status_bar.clearMessage()
 
             self.add_files(files)
@@ -3564,7 +3736,6 @@ class AudioPlayer(QWidget):
             error_message = f'Remote Server not responding.\nMake sure the Server is Up and Connected'
         QMessageBox.critical(self, "Error", error_message)
         self.status_bar.repaint()
-
 
     def cleanup_songs(self):
         """Clean up after scan completion"""
@@ -3615,7 +3786,6 @@ class AudioPlayer(QWidget):
         QMessageBox.critical(self, "Error", error_message)
         self.status_bar.repaint()
 
-
     def cleanup_pl(self):
         """Clean up after scan completion"""
         if self.progress:
@@ -3634,7 +3804,8 @@ class AudioPlayer(QWidget):
             self.status_bar.showMessage(f"Parsing playlist: {playlist_path}")
 
             if not os.path.exists(playlist_path):
-                QMessageBox.critical(self,'error', f"Playlist file does not exist: {playlist_path}")
+                QMessageBox.critical(self, 'error',
+                                     f"Playlist file does not exist: {playlist_path}")
                 return []
 
             playlist = []
@@ -3657,7 +3828,7 @@ class AudioPlayer(QWidget):
                                   encoding=result.encoding) as f:
                             lines = f.readlines()
                     except Exception as e:
-                        QMessageBox.critical(self,"error", str(e))
+                        QMessageBox.critical(self, "error", str(e))
                         return playlist
 
             for line in lines:
@@ -3674,24 +3845,24 @@ class AudioPlayer(QWidget):
 
                         if os.path.exists(line):
                             playlist.append(line)
-                            self.status_bar.showMessage(f"Added to playlist: {line}")
+                            self.status_bar.showMessage(
+                                f"Added to playlist: {line}")
                         else:
-                            QMessageBox.critical(self,"warning",
-                                f"File not found in playlist (line {line_count}): {line}")
+                            QMessageBox.critical(self, "warning",
+                                                 f"File not found in playlist (line {line_count}): {line}")
 
                 except Exception as e:
-                    QMessageBox.critical(self,"warning",
-                        f"Error processing playlist line {line_count}: {e}")
+                    QMessageBox.critical(self, "warning",
+                                         f"Error processing playlist line {line_count}: {e}")
 
             self.status_bar.showMessage(
                 f"Parsed playlist with {len(playlist)} valid files")
             return playlist
 
         except Exception as e:
-            QMessageBox.critical(self,"error",
+            QMessageBox.critical(self, "error",
                                  f"Error parsing playlist {playlist_path}: {e}")
             return []
-
 
     def play_selected_playlist(self):
         idx = self.playlist_widget.currentRow()
@@ -3713,7 +3884,7 @@ class AudioPlayer(QWidget):
             self.search_tracks('artist', file.display_text)
         elif file.item_type == 'album':
             dash = file.display_text.find(' - ')
-            self.search_tracks('album', file.display_text[dash+3:])
+            self.search_tracks('album', file.display_text[dash + 3:])
             return
         elif file.item_type == 'song_title':
             self.play_selected_track(item)
@@ -3730,8 +3901,8 @@ class AudioPlayer(QWidget):
                     conn.close()
 
                     if not playlist_data:
-                        QMessageBox.critical(self,'error',
-                            f"Playlist not found: {playlist_id}")
+                        QMessageBox.critical(self, 'error',
+                                             f"Playlist not found: {playlist_id}")
                         return
 
                     playlist_path, playlist_name = playlist_data
@@ -3746,12 +3917,12 @@ class AudioPlayer(QWidget):
                     }
 
                 except sqlite3.Error as e:
-                    QMessageBox.critical(self,'error',
-                        f"Database error loading playlist {playlist_id}: {e}")
+                    QMessageBox.critical(self, 'error',
+                                         f"Database error loading playlist {playlist_id}: {e}")
                     return
                 except Exception as e:
                     QMessageBox.critical(self, 'error',
-                        f"Error loading playlist {playlist_id}: {e}")
+                                         f"Error loading playlist {playlist_id}: {e}")
                     return
 
                 if data:
@@ -3786,7 +3957,8 @@ class AudioPlayer(QWidget):
                     'Loading Playlist from Server. Please Wait, it might take some time...')
 
                 # Create and configure worker thread
-                self.pl_worker = Worker('pl', f"{self.api_url}/load_playlist/{playlist_id}")
+                self.pl_worker = Worker('pl',
+                                        f"{self.api_url}/load_playlist/{playlist_id}")
                 self.pl_worker.work_completed.connect(self.on_pl_completed)
                 self.pl_worker.work_error.connect(self.on_pl_error)
                 self.pl_worker.finished.connect(self.cleanup_pl)
@@ -3807,18 +3979,16 @@ class AudioPlayer(QWidget):
     def remote_web_ui(self):
         try:
             r = requests.post(f"{self.api_url}/web_ui")
-            QMessageBox.information(self,'info', r.text)
+            QMessageBox.information(self, 'info', r.text)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
     def remote_desk_ui(self):
         try:
             r = requests.post(f"{self.api_url}/desk_ui")
-            QMessageBox.information(self,'info', r.text)
+            QMessageBox.information(self, 'info', r.text)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
-
-
 
     @Slot()
     def on_start_completed(self, result):
@@ -3833,13 +4003,10 @@ class AudioPlayer(QWidget):
             QMessageBox.information(self, 'Info:',
                                     result["answer"])
 
-
-
     def on_start_error(self, error_message):
         """Handle error"""
         QMessageBox.critical(self, "Error", error_message)
         self.status_bar.repaint()
-
 
     def cleanup_start(self):
         """Clean up after completion"""
@@ -3891,15 +4058,14 @@ class AudioPlayer(QWidget):
             else:
                 os.system(f'xdg-open "{os.path.dirname(song.path)}"')
 
-
     def quit(self):
-        save_json(SETTINGS_FILE, {"server"   : self.server,
-                                  "mix_method": self.mix_method,
-                                  "transition_duration": self.transition_duration,
+        save_json(SETTINGS_FILE, {"server"              : self.server,
+                                  "mix_method"          : self.mix_method,
+                                  "transition_duration" : self.transition_duration,
                                   "gap_enabled"         : self.gap_enabled,
                                   "silence_threshold_db": self.silence_threshold_db,
                                   "silence_min_duration": self.silence_min_duration,
-                                  "scan_for_lyrics": self.scan_for_lyrics
+                                  "scan_for_lyrics"     : self.scan_for_lyrics
                                   })
         self.close()
 
@@ -3951,7 +4117,8 @@ class Worker(QThread):
             if self.api_url.endswith('scan_library'):
                 result = loop.run_until_complete(self.scan_library_async())
             elif self.api_url.endswith('start'):
-                result = loop.run_until_complete(self.reveal_remote_song_async())
+                result = loop.run_until_complete(
+                    self.reveal_remote_song_async())
             elif self.folder_path is None:
                 result = loop.run_until_complete(self.get_playlists_async())
             elif isinstance(self.folder_path, dict):
@@ -3967,7 +4134,8 @@ class Worker(QThread):
             elif self.folder_path == 'server':
                 result = loop.run_until_complete(self.check_server_async())
             else:
-                raise ValueError(f"Unknown folder_path value: {self.folder_path}")
+                raise ValueError(
+                    f"Unknown folder_path value: {self.folder_path}")
 
             # Emit success signal
             self.work_completed.emit(result)
@@ -3996,7 +4164,6 @@ class Worker(QThread):
                 else:
                     raise Exception(f"Scan failed: {response.status}")
 
-
     async def purge_library_async(self):
         """
         Asynchronous function to purge the library. Uses aiohttp to interact
@@ -4011,7 +4178,6 @@ class Worker(QThread):
                     return await response.json()
                 else:
                     raise Exception(f"Purge failed: {response.status}")
-
 
     async def search_async(self):
         """
@@ -4028,7 +4194,6 @@ class Worker(QThread):
                 else:
                     raise Exception(f"Search failed: {response.status}")
 
-
     async def get_playlists_async(self):
         """
         Asynchronous function to retrieve playlists from the server. Uses aiohttp
@@ -4039,7 +4204,7 @@ class Worker(QThread):
                     f"{self.api_url}/get_playlists", timeout=5
             ) as response:
                 if response.status == 200:
-                    retrieved_playlists =await response.json()
+                    retrieved_playlists = await response.json()
                     result = {'retrieved_playlists': retrieved_playlists}
                     return result
                 else:
@@ -4052,13 +4217,15 @@ class Worker(QThread):
         to interact with the API endpoint for fetching songs.
         """
         async with aiohttp.ClientSession() as session:
-            async with session.get(self.api_url, params={"query": self.folder_path}) as response:
+            async with session.get(self.api_url, params={
+                "query": self.folder_path}) as response:
                 if response.status == 200:
-                    retrieved =await response.json()
+                    retrieved = await response.json()
                     result = {'retrieved': retrieved}
                     return result
                 else:
-                    raise Exception(f"Failed to fetch songs: {response.status}")
+                    raise Exception(
+                        f"Failed to fetch songs: {response.status}")
 
     async def get_pl_async(self):
         """
@@ -4068,11 +4235,12 @@ class Worker(QThread):
         async with aiohttp.ClientSession() as session:
             async with session.get(self.api_url) as response:
                 if response.status == 200:
-                    retrieved_playlist =await response.json()
+                    retrieved_playlist = await response.json()
                     result = {'pl': retrieved_playlist}
                     return result
                 else:
-                    raise Exception(f"Failed to fetch playlist: {response.status}")
+                    raise Exception(
+                        f"Failed to fetch playlist: {response.status}")
 
     async def get_metadata_async(self):
         """
@@ -4086,20 +4254,19 @@ class Worker(QThread):
                     result = {'retrieved_metadata': retrieved_metadata}
                     return result
                 elif response.status == 404:
-                    retrieved_metadata = {'album': '',
-                                          'artist': '',
-                                          'codec': 'audio/flac 44.1kHz/16bits  860kbps',
+                    retrieved_metadata = {'album'   : '',
+                                          'artist'  : '',
+                                          'codec'   : 'audio/flac 44.1kHz/16bits  860kbps',
                                           'duration': 0,
-                                          'lyrics': '',
-                                          'picture': None,
-                                          'title': 'Not Found',
-                                          'year': ''}
+                                          'lyrics'  : '',
+                                          'picture' : None,
+                                          'title'   : 'Not Found',
+                                          'year'    : ''}
                     result = {'retrieved_metadata': retrieved_metadata}
                     return result
                 else:
-                    raise Exception(f"Failed to fetch metadata: {response.status}")
-
-
+                    raise Exception(
+                        f"Failed to fetch metadata: {response.status}")
 
     async def check_server_async(self):
         """
@@ -4107,13 +4274,13 @@ class Worker(QThread):
         Uses aiohttp to interact with the API endpoint for server validation.
         """
         async with aiohttp.ClientSession() as session:
-            async with session.get(f'http://{self.api_url}:5000', timeout=3) as response:
+            async with session.get(f'http://{self.api_url}:5000',
+                                   timeout=3) as response:
                 if response.status == 200:
                     status = response.status
                     return {'status': status, 'API_URL': self.api_url}
                 else:
                     raise Exception(f"Server check failed: {response.status}")
-
 
     async def reveal_remote_song_async(self):
         """
@@ -4129,7 +4296,8 @@ class Worker(QThread):
                     result = {'answer': answer}
                     return result
                 else:
-                    raise Exception(f"Failed to fetch songs: {response.status}")
+                    raise Exception(
+                        f"Failed to fetch songs: {response.status}")
 
 
 class SynchronizedLyrics:
@@ -4141,7 +4309,7 @@ class SynchronizedLyrics:
         try:
             if w.meta_data and 'lyrics' in w.meta_data and w.meta_data[
                 'lyrics']:
-         #       data = r.json()
+                #       data = r.json()
                 self.raw_lyrics = w.meta_data['lyrics']
             else:
                 self.raw_lyrics = "--"
@@ -4149,7 +4317,6 @@ class SynchronizedLyrics:
             w.status_bar.showMessage("Remote lyrics fetch error:" + str(e))
 
         self.parse_lyrics(self.raw_lyrics)
-
 
     def parse_lyrics(self, lyrics_text):
         time_tag = re.compile(r"\[(\d+):(\d+)(?:\.(\d+))?\]")
@@ -4161,7 +4328,8 @@ class SynchronizedLyrics:
                 lyric = time_tag.sub('', line).strip()
                 for m in matches:
                     min, sec, ms = m.groups()
-                    total_ms = int(min) * 60 * 1000 + int(sec) * 1000 + int(ms or 0)
+                    total_ms = int(min) * 60 * 1000 + int(sec) * 1000 + int(
+                        ms or 0)
                     self.times.append(total_ms)
                     self.lines.append(lyric)
             elif line.strip():
@@ -4171,19 +4339,21 @@ class SynchronizedLyrics:
     def get_current_line(self, pos_ms):
         for i, t in enumerate(self.times):
             if pos_ms < t:
-                return max(0, i-1)
-        return len(self.lines)-1 if self.lines else -1
+                return max(0, i - 1)
+        return len(self.lines) - 1 if self.lines else -1
 
     def is_synchronized(self):
         """Return True if lyrics are synchronized (have time tags)."""
         # Synchronized if any time tag is nonzero
         return any(t > 0 for t in self.times)
 
+
 class LyricsDisplay(QTextEdit):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setReadOnly(True)
-        self.setStyleSheet("font-size: 18px; background: #E0F0FF; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+        self.setStyleSheet(
+            "font-size: 18px; background: #E0F0FF; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
         self.current_line_idx = -1
         self.lines = []
         self.is_synchronized = False
@@ -4223,7 +4393,6 @@ class LyricsDisplay(QTextEdit):
                 self.update_display(-1)
 
 
-
 class TextEdit(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -4236,57 +4405,57 @@ class TextEdit(QWidget):
         layout.addWidget(self.instructions_edit)
         self.setLayout(layout)
         self.instructions_edit.setPlainText("Use Instructions\n\n"
-"1. Installation\n"
-"The program is Portable. You just unzip the file Web-Media-Server-and-Player.zip\n\n"
-"2. Startup\n"
-"In the folder you unzipped the program, you run “ecoserver.exe” to start the server and the “advanced_audio_player.exe” to start the player/client.\n"
-"You can have any server-player/client combination on any computer on your network, e.g. you can run the ecoserver.exe only on the computer that your music files rely and the Player/client on your HTPC. If you have any music files on more than one computer, you can run the ecoserver.exe on each one of them. The same goes for the “advanced_audio_player.exe”.  You can run it on any computer you use to listen to music.\n\n"
-"3. Ecoserver\n"
-"Starting the server adds an icon to the hidden icons of the system tray, (a square, black on the outside, white on the inside). By right-clicking on the icon, a mini-menu appears with the following options:\n"
-"•  Open in Browser: Opens the program's website, from which the server is managed, as well as the selection and playback of the music is taking place.\n"
-"•  Open Desktop Player: Launches “advanced_audio_player.exe”, the desktop application from which the server is managed, as well as the music is selected and played.\n"
-"•  Autostart on system boot: Starts the server when the system boots\n"
-"•  Quit: Shuts down the server\n"
-"4. Audio Player / Client\n"
-"It is the desktop application from which the server is managed, as well as the selection and playback of music.\n"
-"\n"
-"The interface:\n"
-"On the left side of the application interface, is the Queue display. It displays the songs queued to play, or the playlists, or the search results, or the lists of all the songs in the music library, or artists or albums. On this Queue display, we can drop songs and/or playlists by drag'n'drop or by choosing them via the menus of the application.  Once the Queue display is filled with songs, it starts playing them immediately. If it displays the list of the music library Playlists, clicking a Playlist it then shows the songs in the playlist and starts playing them immediately. If it displays an artist list, clicking on any artist's name displays all of the artist's songs, sorted by album.\n"
-"By clicking on any song in any list, it starts playing.\n"
-"At the top right of the list is the Shuffle button to shuffle the songs in the list.\n"
-"\n"
-"On the right side of the interface, on top there is the search bar. On the left side is a drop-down menu to select the type of search, while on the right there are two buttons, one to search the database of the local computer (the one on which the desktop application is running) and one to search on a remote server on the network. With enter, the search is done on the local computer.\n"
-"Below the search bar, the cover art and basic elements of the song that is playing are displayed, while to the right of it, all the metadata. Above the metadata window is the “Push for Artist and Song Info” button. By tapping on it, information about the artist and the song playing is displayed. Below the song's cover and key elements, there's the timer, the playbar, and just below them the play buttons. By clicking on the timer the indicator changes from elapsed time to time remaining for each song. By drag'n'dropping the playbar we proceed the playback forward or backward. Using the three play buttons, we go to the previous or next song, or we pause (and restart) the playback. Below the play buttons appear the lyrics of the song playing, (if embedded or in a .lrc file), which may or may not be synchronized, depending on the lyrics file.\n"
-"Below the lyrics there are the options for mixing the songs, through the “Mix Method” menu and the setting of the transition time, as well as the settings of the Gap killer, (which is still in the experimental stage). Finally, at the bottom right is the Reveal button, which displays the song that is playing in File Explorer.\n"
-""
-"The menus:\n\n"
-" There are 3 main menus: Local, Remote and Help.\n"
-"Local manages the program's operations on the local computer, while Remote manages the program's operations on a remote server.\n"
-"The Local menu options are:\n"
-"•	Open Playlist|Load Songs: Displays the open file dialog, to select songs or playlists to play.\n"
-"•	Load Playlists: Displays all Playlists in the local computer's library\n"
-"•	List all Songs: Displays all songs in the local computer's library\n"
-"•	List all Artists: Displays all artists in the local computer's library\n"
-"•	List all Albums: Displays all albums in the local computer's library\n"
-"•	Scan Library: Displays the folder selection dialog, to select a folder which (its subfolders included) it scans and adds to the local library the audio files and playlists it finds.\n"
-"•	Purge Library: Opens the folder selection dialog, to select a folder which (its subfolders included) checks and removes any physical deleted audio and playlist files from the local library.\n"
-"•	Save current Queue: Saves the Queue list to a file\n"
-"•	Clear Playlist: Clears the Queue list\n"
-"•	Launch Web UI. Opens the program's website on the local computer, from which the server is managed, as well as the music is selected and played.\n"
-"•	Shutdown Local Server: Shuts down the local server.\n"
-"•	Exit: Terminates the operation of the application\n"
-"The Remote menu options are:\n"
-"•	Connect to Remote: Asks for the name or IP address of a remote computer on which the ecoserver is running and connects to that remote server.\n"
-"•	Load Playlists: Displays all Playlists in the remote server's library\n"
-"•	List all Songs: Displays all songs in the remote server's library\n"
-"•	List all Artists: Displays all artists in the remote server's library\n"
-"•	List all Albums: Displays all albums in the remote server's library\n"
-"•	Scan Library: Opens the folder selection dialog, to select a remote server's folder which (its subfolders included) it scans and adds to the remote server's library the audio files and playlists it finds.\n"
-"•	Purge Library: Opens the folder selection dialog, to select a remote server's folder which (its subfolders included) checks and removes any deleted audio and playlist files from the remote server's library.\n"
-"•	Launch Web UI. It opens the program's website on the remote computer, from which the server is managed, as well as the music is selected and played.\n"
-"•	Launch Desktop UI: Launches the “advanced_audio_player.exe” on the remote computer, (the desktop application from which the server is managed, as well as the music is selected and played).\n"
-"•	Shutdown Local Server: Shuts down the remote server.\n"
-"•	Exit: Terminates the operation of the program\n")
+                                            "1. Installation\n"
+                                            "The program is Portable. You just unzip the file Web-Media-Server-and-Player.zip\n\n"
+                                            "2. Startup\n"
+                                            "In the folder you unzipped the program, you run “ecoserver.exe” to start the server and the “advanced_audio_player.exe” to start the player/client.\n"
+                                            "You can have any server-player/client combination on any computer on your network, e.g. you can run the ecoserver.exe only on the computer that your music files rely and the Player/client on your HTPC. If you have any music files on more than one computer, you can run the ecoserver.exe on each one of them. The same goes for the “advanced_audio_player.exe”.  You can run it on any computer you use to listen to music.\n\n"
+                                            "3. Ecoserver\n"
+                                            "Starting the server adds an icon to the hidden icons of the system tray, (a square, black on the outside, white on the inside). By right-clicking on the icon, a mini-menu appears with the following options:\n"
+                                            "•  Open in Browser: Opens the program's website, from which the server is managed, as well as the selection and playback of the music is taking place.\n"
+                                            "•  Open Desktop Player: Launches “advanced_audio_player.exe”, the desktop application from which the server is managed, as well as the music is selected and played.\n"
+                                            "•  Autostart on system boot: Starts the server when the system boots\n"
+                                            "•  Quit: Shuts down the server\n"
+                                            "4. Audio Player / Client\n"
+                                            "It is the desktop application from which the server is managed, as well as the selection and playback of music.\n"
+                                            "\n"
+                                            "The interface:\n"
+                                            "On the left side of the application interface, is the Queue display. It displays the songs queued to play, or the playlists, or the search results, or the lists of all the songs in the music library, or artists or albums. On this Queue display, we can drop songs and/or playlists by drag'n'drop or by choosing them via the menus of the application.  Once the Queue display is filled with songs, it starts playing them immediately. If it displays the list of the music library Playlists, clicking a Playlist it then shows the songs in the playlist and starts playing them immediately. If it displays an artist list, clicking on any artist's name displays all of the artist's songs, sorted by album.\n"
+                                            "By clicking on any song in any list, it starts playing.\n"
+                                            "At the top right of the list is the Shuffle button to shuffle the songs in the list.\n"
+                                            "\n"
+                                            "On the right side of the interface, on top there is the search bar. On the left side is a drop-down menu to select the type of search, while on the right there are two buttons, one to search the database of the local computer (the one on which the desktop application is running) and one to search on a remote server on the network. With enter, the search is done on the local computer.\n"
+                                            "Below the search bar, the cover art and basic elements of the song that is playing are displayed, while to the right of it, all the metadata. Above the metadata window is the “Push for Artist and Song Info” button. By tapping on it, information about the artist and the song playing is displayed. Below the song's cover and key elements, there's the timer, the playbar, and just below them the play buttons. By clicking on the timer the indicator changes from elapsed time to time remaining for each song. By drag'n'dropping the playbar we proceed the playback forward or backward. Using the three play buttons, we go to the previous or next song, or we pause (and restart) the playback. Below the play buttons appear the lyrics of the song playing, (if embedded or in a .lrc file), which may or may not be synchronized, depending on the lyrics file.\n"
+                                            "Below the lyrics there are the options for mixing the songs, through the “Mix Method” menu and the setting of the transition time, as well as the settings of the Gap killer, (which is still in the experimental stage). Finally, at the bottom right is the Reveal button, which displays the song that is playing in File Explorer.\n"
+                                            ""
+                                            "The menus:\n\n"
+                                            " There are 3 main menus: Local, Remote and Help.\n"
+                                            "Local manages the program's operations on the local computer, while Remote manages the program's operations on a remote server.\n"
+                                            "The Local menu options are:\n"
+                                            "•	Open Playlist|Load Songs: Displays the open file dialog, to select songs or playlists to play.\n"
+                                            "•	Load Playlists: Displays all Playlists in the local computer's library\n"
+                                            "•	List all Songs: Displays all songs in the local computer's library\n"
+                                            "•	List all Artists: Displays all artists in the local computer's library\n"
+                                            "•	List all Albums: Displays all albums in the local computer's library\n"
+                                            "•	Scan Library: Displays the folder selection dialog, to select a folder which (its subfolders included) it scans and adds to the local library the audio files and playlists it finds.\n"
+                                            "•	Purge Library: Opens the folder selection dialog, to select a folder which (its subfolders included) checks and removes any physical deleted audio and playlist files from the local library.\n"
+                                            "•	Save current Queue: Saves the Queue list to a file\n"
+                                            "•	Clear Playlist: Clears the Queue list\n"
+                                            "•	Launch Web UI. Opens the program's website on the local computer, from which the server is managed, as well as the music is selected and played.\n"
+                                            "•	Shutdown Local Server: Shuts down the local server.\n"
+                                            "•	Exit: Terminates the operation of the application\n"
+                                            "The Remote menu options are:\n"
+                                            "•	Connect to Remote: Asks for the name or IP address of a remote computer on which the ecoserver is running and connects to that remote server.\n"
+                                            "•	Load Playlists: Displays all Playlists in the remote server's library\n"
+                                            "•	List all Songs: Displays all songs in the remote server's library\n"
+                                            "•	List all Artists: Displays all artists in the remote server's library\n"
+                                            "•	List all Albums: Displays all albums in the remote server's library\n"
+                                            "•	Scan Library: Opens the folder selection dialog, to select a remote server's folder which (its subfolders included) it scans and adds to the remote server's library the audio files and playlists it finds.\n"
+                                            "•	Purge Library: Opens the folder selection dialog, to select a remote server's folder which (its subfolders included) checks and removes any deleted audio and playlist files from the remote server's library.\n"
+                                            "•	Launch Web UI. It opens the program's website on the remote computer, from which the server is managed, as well as the music is selected and played.\n"
+                                            "•	Launch Desktop UI: Launches the “advanced_audio_player.exe” on the remote computer, (the desktop application from which the server is managed, as well as the music is selected and played).\n"
+                                            "•	Shutdown Local Server: Shuts down the remote server.\n"
+                                            "•	Exit: Terminates the operation of the program\n")
 
 
 if __name__ == "__main__":
