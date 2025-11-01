@@ -528,7 +528,12 @@ class AudioPlayer(QWidget):
         help_menu = QMenu("&Help", self)
         menubar.addMenu(help_menu)
 
-        self.instructions_action = QAction(QIcon("icons/user-guide.png"), "&Instructions", self)
+        self.wizard_action = QAction(QIcon("icons/wizard.png"), "Set Up &Wizard", self)
+        self.wizard_action.triggered.connect(self.wizard)
+        help_menu.addAction(self.wizard_action)
+
+        self.instructions_action = QAction(QIcon("icons/user-guide.png"),
+                                           "&Instructions", self)
         self.instructions_action.triggered.connect(self.show_instructions)
         help_menu.addAction(self.instructions_action)
 
@@ -538,6 +543,7 @@ class AudioPlayer(QWidget):
 
 
         # Add action to toolbar
+        toolbar.addSeparator()
         toolbar.addAction(self.open_action)
         toolbar.addAction(self.load_action)
         toolbar.addAction(self.list_songs_action)
@@ -550,14 +556,20 @@ class AudioPlayer(QWidget):
         toolbar.addAction(self.local_web_action)
         toolbar.addAction(self.local_shutdown_action)
         toolbar.addSeparator()
+      # Spacer
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        toolbar.addWidget(spacer)
+        toolbar.addSeparator()
         toolbar.addAction(self.dark_action)
         toolbar.addAction(self.light_action)
         toolbar.addAction(self.normal_action)
       #  toolbar.addAction(self.lyrics_action)
         toolbar.addSeparator()
       # Spacer
-        spacer = QSpacerItem(10, 0, QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding)
-        layout.addItem(spacer)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        toolbar.addWidget(spacer)
         toolbar.addSeparator()
         toolbar.addAction(self.server_action)
         toolbar.addAction(self.load_remote_action)
@@ -569,8 +581,15 @@ class AudioPlayer(QWidget):
         toolbar.addAction(self.remote_web_action)
         toolbar.addAction(self.remote_desktop_action)
         toolbar.addAction(self.remote_shutdown_action)
+        toolbar.addSeparator()
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        toolbar.addWidget(spacer)
+        toolbar.addSeparator()
+        toolbar.addAction(self.wizard_action)
         toolbar.addAction(self.instructions_action)
         toolbar.addAction(self.about_action)
+        toolbar.addSeparator()
 
         # Audio/Player
         self.player = QMediaPlayer(self)
@@ -1019,6 +1038,15 @@ class AudioPlayer(QWidget):
             self.scan_for_lyrics = False
         state = "enabled" if self.scan_for_lyrics else "disabled"
         self.status_bar.showMessage(f"Lyrics scanning {state}")
+
+
+    def wizard(self):
+        """Launch the welcome/setup wizard"""
+        try:
+            wizard = WelcomeWizard(self)
+            wizard.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to launch wizard: {e}")
 
     # Database initialization
     def init_database(self):
@@ -1553,6 +1581,11 @@ class AudioPlayer(QWidget):
             "<h3>Ultimate Audio Player</h3>"
             "<p>HiRes Audio Player / API Client</p>"
             "<p>Created with ❤️ by EcoG</p>"
+            "<br><br>"
+            "<font size=1>Icons by <a href='https://www.flaticon.com/authors/freepik' "
+            "style='text-decoration: none; color: #0000FF;'>Freepik</a> "
+            "from <a href='https://www.flaticon.com/' "
+            "style='text-decoration: none; color: #0000FF;'>www.flaticon.com</a></font>"
         )
 
 
