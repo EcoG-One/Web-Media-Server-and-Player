@@ -36,6 +36,7 @@ from qdarkstyle import DarkPalette, LightPalette
 from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
 from ecoserver import get_album_art
+from text import text_1, text_2, text_3, text_4, text_5
 
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
@@ -140,27 +141,28 @@ class WelcomeWizard(QDialog):
     Simple multi-step welcome wizard.
 
     Steps:
-      1. "Placeholder for Text 1" - Cancel / Next
-      2. "Placeholder for Text 2" - Cancel / Scan / Next
-      3. "Placeholder for Text 3" - Cancel / Next
-      4. "Placeholder for Text 4" - Cancel / Connect to Remote / End Wizard
+      1. "Welcome" - Cancel / Next
+      2. "Scanning" - Cancel / Scan / Next
+      3. "Ready" - Cancel / Next
+      4. "Connect to Another Computer" - Cancel / Connect to Remote / End Wizard
       5. "Placeholder for Text 5" - End (and a 'Don't show again' checkbox)
 
     The wizard will call AudioPlayer.scan_library and AudioPlayer.enter_server as requested.
     """
-
     def __init__(self, audio_player: 'AudioPlayer'):
         super().__init__(audio_player)
         self.setWindowTitle("Welcome")
         self.setModal(True)
         self.audio = audio_player
         self.step = 1
-        self.resize(500, 200)
+        self.resize(500, 220)
 
         self.layout = QVBoxLayout(self)
 
         self.label = QLabel("", self)
         self.label.setWordWrap(True)
+        self.label.setStyleSheet(
+            "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
         self.layout.addWidget(self.label)
 
         # Buttons container
@@ -204,24 +206,24 @@ class WelcomeWizard(QDialog):
             pass
 
         if self.step == 1:
-            self.label.setText("Placeholder for Text 1")
+            self.label.setText(text_1)
             self._add_button("Cancel", self.reject)
             self._add_button("Next", self.next_step, default=True)
 
         elif self.step == 2:
-            self.label.setText("Placeholder for Text 2")
+            self.label.setText(text_2)
             self._add_button("Cancel", self.reject)
             # Scan should invoke scan_library asynchronously (scheduled) so it doesn't block this UI call chain
             self._add_button("Scan", self._scan_async)
             self._add_button("Next", self.next_step, default=True)
 
         elif self.step == 3:
-            self.label.setText("Placeholder for Text 3")
+            self.label.setText(text_3)
             self._add_button("Cancel", self.reject)
             self._add_button("Next", self.next_step, default=True)
 
         elif self.step == 4:
-            self.label.setText("Placeholder for Text 4")
+            self.label.setText(text_4)
             self._add_button("Cancel", self.reject)
             self._add_button("Connect to Remote", self._connect_remote)
             self._add_button("End Wizard", self.finish_wizard, default=True)
@@ -4400,63 +4402,12 @@ class TextEdit(QWidget):
         self.resize(1180, 780)
 
         self.instructions_edit = QTextEdit(readOnly=True)
-
+        self.instructions_edit.setStyleSheet(
+            "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
         layout = QVBoxLayout()
         layout.addWidget(self.instructions_edit)
         self.setLayout(layout)
-        self.instructions_edit.setPlainText("Use Instructions\n\n"
-                                            "1. Installation\n"
-                                            "The program is Portable. You just unzip the file Web-Media-Server-and-Player.zip\n\n"
-                                            "2. Startup\n"
-                                            "In the folder you unzipped the program, you run “ecoserver.exe” to start the server and the “advanced_audio_player.exe” to start the player/client.\n"
-                                            "You can have any server-player/client combination on any computer on your network, e.g. you can run the ecoserver.exe only on the computer that your music files rely and the Player/client on your HTPC. If you have any music files on more than one computer, you can run the ecoserver.exe on each one of them. The same goes for the “advanced_audio_player.exe”.  You can run it on any computer you use to listen to music.\n\n"
-                                            "3. Ecoserver\n"
-                                            "Starting the server adds an icon to the hidden icons of the system tray, (a square, black on the outside, white on the inside). By right-clicking on the icon, a mini-menu appears with the following options:\n"
-                                            "•  Open in Browser: Opens the program's website, from which the server is managed, as well as the selection and playback of the music is taking place.\n"
-                                            "•  Open Desktop Player: Launches “advanced_audio_player.exe”, the desktop application from which the server is managed, as well as the music is selected and played.\n"
-                                            "•  Autostart on system boot: Starts the server when the system boots\n"
-                                            "•  Quit: Shuts down the server\n"
-                                            "4. Audio Player / Client\n"
-                                            "It is the desktop application from which the server is managed, as well as the selection and playback of music.\n"
-                                            "\n"
-                                            "The interface:\n"
-                                            "On the left side of the application interface, is the Queue display. It displays the songs queued to play, or the playlists, or the search results, or the lists of all the songs in the music library, or artists or albums. On this Queue display, we can drop songs and/or playlists by drag'n'drop or by choosing them via the menus of the application.  Once the Queue display is filled with songs, it starts playing them immediately. If it displays the list of the music library Playlists, clicking a Playlist it then shows the songs in the playlist and starts playing them immediately. If it displays an artist list, clicking on any artist's name displays all of the artist's songs, sorted by album.\n"
-                                            "By clicking on any song in any list, it starts playing.\n"
-                                            "At the top right of the list is the Shuffle button to shuffle the songs in the list.\n"
-                                            "\n"
-                                            "On the right side of the interface, on top there is the search bar. On the left side is a drop-down menu to select the type of search, while on the right there are two buttons, one to search the database of the local computer (the one on which the desktop application is running) and one to search on a remote server on the network. With enter, the search is done on the local computer.\n"
-                                            "Below the search bar, the cover art and basic elements of the song that is playing are displayed, while to the right of it, all the metadata. Above the metadata window is the “Push for Artist and Song Info” button. By tapping on it, information about the artist and the song playing is displayed. Below the song's cover and key elements, there's the timer, the playbar, and just below them the play buttons. By clicking on the timer the indicator changes from elapsed time to time remaining for each song. By drag'n'dropping the playbar we proceed the playback forward or backward. Using the three play buttons, we go to the previous or next song, or we pause (and restart) the playback. Below the play buttons appear the lyrics of the song playing, (if embedded or in a .lrc file), which may or may not be synchronized, depending on the lyrics file.\n"
-                                            "Below the lyrics there are the options for mixing the songs, through the “Mix Method” menu and the setting of the transition time, as well as the settings of the Gap killer, (which is still in the experimental stage). Finally, at the bottom right is the Reveal button, which displays the song that is playing in File Explorer.\n"
-                                            ""
-                                            "The menus:\n\n"
-                                            " There are 3 main menus: Local, Remote and Help.\n"
-                                            "Local manages the program's operations on the local computer, while Remote manages the program's operations on a remote server.\n"
-                                            "The Local menu options are:\n"
-                                            "•	Open Playlist|Load Songs: Displays the open file dialog, to select songs or playlists to play.\n"
-                                            "•	Load Playlists: Displays all Playlists in the local computer's library\n"
-                                            "•	List all Songs: Displays all songs in the local computer's library\n"
-                                            "•	List all Artists: Displays all artists in the local computer's library\n"
-                                            "•	List all Albums: Displays all albums in the local computer's library\n"
-                                            "•	Scan Library: Displays the folder selection dialog, to select a folder which (its subfolders included) it scans and adds to the local library the audio files and playlists it finds.\n"
-                                            "•	Purge Library: Opens the folder selection dialog, to select a folder which (its subfolders included) checks and removes any physical deleted audio and playlist files from the local library.\n"
-                                            "•	Save current Queue: Saves the Queue list to a file\n"
-                                            "•	Clear Playlist: Clears the Queue list\n"
-                                            "•	Launch Web UI. Opens the program's website on the local computer, from which the server is managed, as well as the music is selected and played.\n"
-                                            "•	Shutdown Local Server: Shuts down the local server.\n"
-                                            "•	Exit: Terminates the operation of the application\n"
-                                            "The Remote menu options are:\n"
-                                            "•	Connect to Remote: Asks for the name or IP address of a remote computer on which the ecoserver is running and connects to that remote server.\n"
-                                            "•	Load Playlists: Displays all Playlists in the remote server's library\n"
-                                            "•	List all Songs: Displays all songs in the remote server's library\n"
-                                            "•	List all Artists: Displays all artists in the remote server's library\n"
-                                            "•	List all Albums: Displays all albums in the remote server's library\n"
-                                            "•	Scan Library: Opens the folder selection dialog, to select a remote server's folder which (its subfolders included) it scans and adds to the remote server's library the audio files and playlists it finds.\n"
-                                            "•	Purge Library: Opens the folder selection dialog, to select a remote server's folder which (its subfolders included) checks and removes any deleted audio and playlist files from the remote server's library.\n"
-                                            "•	Launch Web UI. It opens the program's website on the remote computer, from which the server is managed, as well as the music is selected and played.\n"
-                                            "•	Launch Desktop UI: Launches the “advanced_audio_player.exe” on the remote computer, (the desktop application from which the server is managed, as well as the music is selected and played).\n"
-                                            "•	Shutdown Local Server: Shuts down the remote server.\n"
-                                            "•	Exit: Terminates the operation of the program\n")
-
+        self.instructions_edit.setText(text_5)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
