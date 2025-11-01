@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QMainWindow, QPushButton, QLabel,
     QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
     QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar,
-    QMenu, QToolBar, QStatusBar,QProgressBar, QFrame, QCheckBox, QStyle, QWidgetAction)
+    QMenu, QToolBar, QStatusBar,QProgressBar, QFrame, QCheckBox, QStyle, QWidgetAction, QSpacerItem, QSizePolicy)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 import qdarkstyle
 import mutagen
@@ -191,6 +191,11 @@ class AudioPlayer(QWidget):
         toolbar = QToolBar()
         toolbar.setMovable(True)
 
+        # Create a thin horizontal line (separator)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setFixedHeight(2)  # Adjust thickness if desired
 
         # File menu
         local_menu = QMenu("&Local", self)
@@ -481,7 +486,9 @@ class AudioPlayer(QWidget):
         # StatusBar
         self.status_bar = QStatusBar()
         self.status_bar.showMessage(
-            "Welcome! Drag-and-drop Playlists or/and Songs to Playlist pane to start the music.")
+            "Welcome!☺️ Drag-and-drop Playlists or/and Songs to Playlist queue to start the music 🎵.")
+       # self.wc_label = QLabel("To start the music, Drag-and-drop Playlists or/and Songs to Queue pane.")
+       # self.status_bar.addPermanentWidget(self.wc_label)
 
         image_path = 'static/images/buttons.jpg'
         tile_width = 1650
@@ -635,6 +642,7 @@ class AudioPlayer(QWidget):
         main_layout.addLayout(playlist_layout, 1)
         main_layout.addLayout(left_layout, 2)
         layout.addWidget(menubar)
+        layout.addWidget(separator)
         layout.addWidget(toolbar)
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
@@ -836,7 +844,7 @@ class AudioPlayer(QWidget):
     def init_database(self):
         """Initialize the database with proper error handling"""
         try:
-            self.status_bar.showMessage("Initializing database...")
+           # self.status_bar.showMessage("Initializing database...")
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
 
@@ -881,7 +889,7 @@ class AudioPlayer(QWidget):
 
             conn.commit()
             conn.close()
-            self.status_bar.showMessage("Databases initialized successfully")
+         #   self.status_bar.showMessage("Databases initialized successfully", 4000)
 
         except sqlite3.Error as e:
             QMessageBox.critical(self, "Database Error",f"Database initialization failed: {str(e)}")
@@ -1514,21 +1522,25 @@ class AudioPlayer(QWidget):
                 covers = {}
                 conn = sqlite3.connect(COVERS_DB_PATH)
                 cursor = conn.cursor()
-                for album in albums:
-                    album = album.replace('"', '""')
-                    cursor.execute(f'SELECT cover FROM Covers WHERE album = "{album}" AND album_artist = "{album_artist}"')
-                    album_art = cursor.fetchone()
-                    if album_art is None:
-                        album_art = get_album_art(r[4])
-                    elif isinstance(album_art, tuple):
-                        album_art = album_art[0]
+                for album in enumerate(albums):
+                    album_artist = songs[album[1]][0]['album_artist']
+                    path = songs[album[1]][0]['path']
+                    if album[1].find('"') != -1:
+                        album_art = get_album_art(path)
                     else:
-                        print(album_art, r[4])
-                    covers[album] = album_art
+                        cursor.execute(f'SELECT cover FROM Covers WHERE album = "{album[1]}" AND album_artist = "{album_artist}"')
+                        album_art = cursor.fetchone()
+                        if album_art is None:
+                            album_art = get_album_art(path)
+                        elif isinstance(album_art, tuple):
+                            album_art = album_art[0]
+                        else:
+                            print(album_art, r[4])
+                    covers[album[1]] = album_art
                 conn.close()
                 self.on_search_completed({"search_result": (covers, songs)})
             except Exception as e:
-                QMessageBox.critical(self, "Error",f"Error searching songs: {str(e)}")
+                QMessageBox.critical(self, "Error",f"Search Error: {str(e)}")
                 # Remove progress bar and clear status
             if self.progress:
                 self.status_bar.removeWidget(self.progress)
@@ -1583,9 +1595,6 @@ class AudioPlayer(QWidget):
                 album_artist = album_songs[0]['album_artist']
                 if self.short_albums:
                     self.add_album(album_art, album_artist, album)
-                '''   self.playlist.append(album_art)
-                    item = QListWidgetItem(album_art)
-                    self.playlist_widget.addItem(item)'''
                 for track in album_songs:
                     song = ListItem()
                     song.is_remote = is_remote
@@ -1595,18 +1604,6 @@ class AudioPlayer(QWidget):
                     self.playlist.append(song)
                     item = QListWidgetItem(song.display_text)
                     self.playlist_widget.addItem(item)
-
-                '''if self.short_albums:
-                        album = track['album_art']
-                        if not track["album_art"] in albums.keys():
-                            albums[album] = []
-                        albums[album].append(song) 
-                        
-            
-            if self.short_albums:
-                self.add_albums(playlist)
-            else:
-                self.add_files(songs) '''
         else:
             col = self.combo.currentText()
             q = self.search.text().strip()
@@ -2767,7 +2764,7 @@ class AudioPlayer(QWidget):
                     f"Error detecting transition duration from {file_path}: {str(e)}")
 
 
-            self.status_bar.showMessage(f"Successfully extracted metadata from: {file_path}")
+            self.status_bar.showMessage(f"Successfully extracted metadata from: {file_path}", 3000)
             return metadata
 
         except Exception as e:

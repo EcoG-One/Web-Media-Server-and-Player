@@ -8,20 +8,20 @@ from pathlib import Path
 from flask import Flask, render_template, request, jsonify, redirect, url_for, \
     send_file, abort
 from mutagen import File
-from PIL import Image
 from io import BytesIO
 import base64
 from threading import Thread
-from pystray import Icon, MenuItem, Menu
 from PIL import Image, ImageDraw
 from fuzzywuzzy import fuzz
 import webbrowser
 import signal
 import librosa
 import numpy as np
-from plyer import notification
 from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
+if '--no-tray' not in sys.argv:
+    from pystray import Icon, MenuItem, Menu
+    from plyer import notification
 
 app = Flask(__name__)
 
@@ -33,7 +33,7 @@ APP_DIR.mkdir(exist_ok=True)
 SETTINGS_FILE = APP_DIR / "settings.json"
 DB_PATH = APP_DIR / 'music.db'
 COVERS_DB_PATH = APP_DIR / 'covers.db'
-MUSIC_DIR = ''
+MUSIC_DIR = '/share/CACHEDEV1_DATA'  # Use only on NAS systems
 size = 256, 256
 results = None
 
@@ -41,8 +41,9 @@ results = None
 def run_flask():
     try:
         init_database()
-        # Ensure the Songs table has an album_artist column and populate it
-        # migrate_add_album_artist()
+        if len(sys.argv) > 1 and '--migrate' in sys.argv:
+            # Ensure the Songs table has an album_artist column and populate it
+            migrate_add_album_artist()
         logger.info(f"Starting Flask server on port 5000")
         app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
     except Exception as e:
@@ -52,6 +53,9 @@ def run_flask():
 
 
 def show_notification(title, message):
+    """Show desktop notification"""
+    if '--no-tray' in sys.argv:
+        pass
     notification.notify(
         title=title,
         message=message,
@@ -1432,6 +1436,8 @@ def search_songs():
 @app.route('/get_song_metadata/<path:file_path>')
 def get_song_metadata(file_path):
     try:
+        if '--NAS' in sys.argv:
+            file_path = file_path.replace("share", "/share/CACHEDEV1_DATA")
         logger.info(f"Getting metadata for: {file_path}")
 
         metadata = get_audio_metadata(file_path)
@@ -1459,6 +1465,8 @@ def get_song_metadata(file_path):
 @app.route('/serve_audio/<path:file_path>')
 def serve_audio(file_path):
     try:
+        if '--NAS' in sys.argv:
+            file_path = file_path.replace("share", "/share/CACHEDEV1_DATA")
         logger.info(f"Serving audio file: {file_path}")
 
         if not os.path.exists(file_path):
@@ -1624,7 +1632,8 @@ def create_image():
 
 
 def on_quit(icon, item):
-    icon.stop()
+    if '--no-tray' not in sys.argv:
+        icon.stop()
     sys.exit()
 
 
@@ -1642,8 +1651,10 @@ def setup_tray():
 if __name__ == '__main__':
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
+    if '--no-tray' in sys.argv:
+        print("Starting Ecoserver without system tray icon...")
+    else:
+        show_notification("Ecoserver",
+                          "Ecoserver is now running in the background.")
 
-    show_notification("Ecoserver",
-                      "Ecoserver is now running in the background.")
-
-    setup_tray()
+        setup_tray()
