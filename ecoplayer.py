@@ -5,12 +5,11 @@ from fuzzywuzzy import fuzz
 from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot, QMutex
 from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence, QKeyEvent
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QMainWindow, QPushButton, QLabel,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
     QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar,
-    QMenu, QToolBar, QStatusBar,QProgressBar, QFrame, QCheckBox, QStyle, QWidgetAction, QSpacerItem, QSizePolicy,
-    QDialog, QDialogButtonBox
-)
+    QMenu, QToolBar, QStatusBar,QProgressBar, QFrame, QCheckBox, QStyle, QWidgetAction, QSizePolicy,
+    QDialog) # QMainWindow,
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 import qdarkstyle
 import mutagen
@@ -21,22 +20,20 @@ from random import shuffle
 import librosa
 import numpy as np
 import re
-import math
 from enum import Enum
 import json
 import asyncio
 import aiohttp
 import requests
-from PIL import Image
-from io import BytesIO
 import base64
 import webbrowser
 import wikipedia
 from qdarkstyle import DarkPalette, LightPalette
 from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
-from ecoserver import get_album_art
-from text import text_1, text_2, text_3, text_4, text_5
+from scanworker import ScanWorker
+from wizard import WelcomeWizard
+from text import text_5
 
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
@@ -57,8 +54,8 @@ def load_json(path: Path, default):
     try:
         if path.exists():
             return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        pass
+    except Exception as e:
+        QMessageBox.warning(w, "Error!", str(e))
     return default
 
 
@@ -77,7 +74,8 @@ def get_settings():
                "silence_threshold_db": -46,
                "silence_min_duration": 0.1,
                "scan_for_lyrics": False,
-               "show_welcome": True
+               "show_welcome": True,
+               "style": "default"
                }
     json_settings = load_json(SETTINGS_FILE, default=default)
     # Ensure keys exist
@@ -135,152 +133,6 @@ class CheckBoxAction(QWidgetAction):
         self.widget.setLayout(layout)
         self.setDefaultWidget(self.widget)
 
-# --- Welcome Wizard Implementation ---
-class WelcomeWizard(QDialog):
-    """
-    Simple multi-step welcome wizard.
-
-    Steps:
-      1. "Welcome" - Cancel / Next
-      2. "Scanning" - Cancel / Scan / Next
-      3. "Ready" - Cancel / Next
-      4. "Connect to Another Computer" - Cancel / Connect to Remote / End Wizard
-      5. "Placeholder for Text 5" - End (and a 'Don't show again' checkbox)
-
-    The wizard will call AudioPlayer.scan_library and AudioPlayer.enter_server as requested.
-    """
-    def __init__(self, audio_player: 'AudioPlayer'):
-        super().__init__(audio_player)
-        self.setWindowTitle("Welcome")
-        self.setModal(True)
-        self.audio = audio_player
-        self.step = 1
-        self.resize(500, 220)
-
-        self.layout = QVBoxLayout(self)
-
-        self.label = QLabel("", self)
-        self.label.setWordWrap(True)
-        self.label.setStyleSheet(
-            "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
-        self.layout.addWidget(self.label)
-
-        # Buttons container
-        self.button_box = QHBoxLayout()
-        self.layout.addLayout(self.button_box)
-
-        # For final step option
-        self.dont_show_checkbox = QCheckBox("Don't show this again", self)
-
-        self._build_step_ui()
-        self.update_step()
-
-    def _clear_buttons(self):
-        # Remove widgets from button box
-        while self.button_box.count():
-            item = self.button_box.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.setParent(None)
-                widget.deleteLater()
-
-    def _add_button(self, text, callback, default=False):
-        btn = QPushButton(text, self)
-        if default:
-            btn.setDefault(True)
-        btn.clicked.connect(callback)
-        self.button_box.addWidget(btn)
-        return btn
-
-    def _build_step_ui(self):
-        # Buttons are created dynamically per step in update_step
-        pass
-
-    def update_step(self):
-        self._clear_buttons()
-        # Remove checkbox if previously added
-        try:
-            self.layout.removeWidget(self.dont_show_checkbox)
-            self.dont_show_checkbox.setParent(None)
-        except Exception:
-            pass
-
-        if self.step == 1:
-            self.label.setText(text_1)
-            self._add_button("Cancel", self.reject)
-            self._add_button("Next", self.next_step, default=True)
-
-        elif self.step == 2:
-            self.label.setText(text_2)
-            self._add_button("Cancel", self.reject)
-            # Scan should invoke scan_library asynchronously (scheduled) so it doesn't block this UI call chain
-            self._add_button("Scan", self._scan_async)
-            self._add_button("Next", self.next_step, default=True)
-
-        elif self.step == 3:
-            self.label.setText(text_3)
-            self._add_button("Cancel", self.reject)
-            self._add_button("Next", self.next_step, default=True)
-
-        elif self.step == 4:
-            self.label.setText(text_4)
-            self._add_button("Cancel", self.reject)
-            self._add_button("Connect to Remote", self._connect_remote)
-            self._add_button("Next", self.next_step, default=True)
-
-        elif self.step == 5:
-            self.label.setText("Placeholder for Text 5")
-            # Add the "Don't show again" checkbox
-            self.layout.addWidget(self.dont_show_checkbox)
-            self._add_button("End", self.finish_wizard, default=True)
-
-    def next_step(self):
-        if self.step < 5:
-            self.step += 1
-            self.update_step()
-        else:
-            self.finish_wizard()
-
-    def _scan_async(self):
-        """
-        Schedule scan_library to be called soon on the main event loop.
-        scan_library uses GUI dialogs, so it must run on the main thread.
-        We schedule it and continue (wizard remains open).
-        """
-        try:
-            QTimer.singleShot(0, lambda: self.audio.scan_library())
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to start library scan: {e}")
-
-    def _connect_remote(self):
-        """
-        Trigger connect to remote server flow.
-        This will open the server dialog on the main event loop.
-        """
-        try:
-            QTimer.singleShot(0, lambda: self.audio.enter_server())
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to open Connect to Remote: {e}")
-
-    def finish_wizard(self):
-        # Persist "don't show again" option if checked
-        try:
-            settings = load_json(SETTINGS_FILE, default={})
-            if not isinstance(settings, dict):
-                settings = {}
-            settings['show_welcome'] = not self.dont_show_checkbox.isChecked()
-            # Ensure other known settings remain (merge defaults)
-            defaults = get_settings()
-            for k, v in defaults.items():
-                if k not in settings:
-                    settings[k] = v
-            save_json(SETTINGS_FILE, settings)
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Could not save settings: {e}")
-        self.accept()
-
-# --- End of Welcome Wizard Implementation ---
-
 
 class CheckBoxAction(QWidgetAction):
     def __init__(self, parent, text):
@@ -318,14 +170,15 @@ class AudioPlayer(QWidget):
         self.server = settings["server"]
         self.api_url = self.remote_base = rf'http://{self.server}:5000'
         self.playlists = []
+        self.dark_style = settings.get("style", "default")
 
         # Mixing/transition config
-        self.mix_method = settings["mix_method"]
-        self.transition_duration = settings["transition_duration"]
-        self.scan_for_lyrics = settings["scan_for_lyrics"]
-        self.gap_enabled = settings["gap_enabled"]
-        self.silence_threshold_db = settings["silence_threshold_db"]
-        self.silence_min_duration = settings["silence_min_duration"]
+        self.mix_method = settings.get("mix_method", "Auto")
+        self.transition_duration = settings.get("transition_duration", 4)
+        self.scan_for_lyrics = settings.get("scan_for_lyrics", False)
+        self.gap_enabled = settings.get("gap_enabled", False)
+        self.silence_threshold_db = settings.get("silence_threshold_db", -40) # in dB
+        self.silence_min_duration = settings.get("silence_min_duration", 0.1) # in seconds
         self._silence_ms = 0
         self._fade_step = None
         self.fade_timer = None
@@ -878,6 +731,13 @@ class AudioPlayer(QWidget):
         self.init_database()
         self.update_play_button()
         self.show()
+        if self.dark_style == "dark":
+            self.set_dark_style()
+        elif self.dark_style == "light":
+            self.set_light_style()
+        else:
+            self.set_no_style()
+
         for item in self.playlists:
             self.playlist_widget.addItem(item['name'])
 
@@ -885,6 +745,12 @@ class AudioPlayer(QWidget):
         try:
             if self.settings.get('show_welcome', True):
                 wizard = WelcomeWizard(self)
+                if self.dark_style == "dark":
+                    wizard.label.setStyleSheet(
+                        "font-size: 12px; color: white; background: 19232D; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+                else:
+                    wizard.label.setStyleSheet(
+                        "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
                 wizard.exec()
         except Exception:
             pass
@@ -909,6 +775,7 @@ class AudioPlayer(QWidget):
 
 
     def set_dark_style(self):
+        self.dark_style = "dark"
         # setup stylesheet
         app.setStyleSheet(qdarkstyle.load_stylesheet(palette=DarkPalette))
         self.lyrics_display.setStyleSheet(
@@ -951,6 +818,7 @@ class AudioPlayer(QWidget):
 
 
     def set_light_style(self):
+        self.dark_style = "light"
         # setup stylesheet
         app.setStyleSheet(qdarkstyle.load_stylesheet(palette=LightPalette))
         self.playlist_widget.setStyleSheet(
@@ -988,6 +856,7 @@ class AudioPlayer(QWidget):
 
 
     def set_no_style(self):
+        self.dark_style = "default"
         # setup stylesheet
         app.setStyleSheet("")
         self.playlist_widget.setStyleSheet(
@@ -1044,6 +913,12 @@ class AudioPlayer(QWidget):
         """Launch the welcome/setup wizard"""
         try:
             wizard = WelcomeWizard(self)
+            if self.dark_style == "dark":
+                wizard.label.setStyleSheet(
+                    "font-size: 12px; color: white; background: 19232D; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+            else:
+                wizard.label.setStyleSheet(
+                    "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
             wizard.exec()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to launch wizard: {e}")
@@ -1107,182 +982,59 @@ class AudioPlayer(QWidget):
                 f"Unexpected error during database initialization: {e}")
             raise
 
-    def scan_for_audio_files(self, directory):
-        """Scan directory for audio files and playlists with error handling"""
-        try:
-            self.status_bar.showMessage(f"Scanning directory: {directory}")
 
-            if not os.path.exists(directory):
-                QMessageBox.critical(self, "Error", f"Directory does not exist: {directory}")
-                return
-
-            if not os.path.isdir(directory):
-                QMessageBox.critical(self, "Error", f"Path is not a directory: {directory}")
-                return
-
-            audio_files = []
-            playlist_files = []
-            scan_errors = 0
-
-            for root, dirs, files in os.walk(directory):
-                self.status_bar.showMessage(f"Scanning folder: {root}")
-
-                for file in files:
-                    try:
-                        file_path = os.path.join(root, file)
-                        file_ext = Path(file).suffix.lower()
-
-                        if file_ext in audio_extensions:
-                            audio_files.append(file_path)
-                        elif file_ext in playlist_extensions:
-                            playlist_files.append(file_path)
-
-                    except Exception as e:
-                        QMessageBox.warning(self, "Scan Error", f"Error processing file {file}: {e}")
-                        scan_errors += 1
-
-            self.status_bar.showMessage(f"Scan complete. Found {len(audio_files)} audio files and {len(playlist_files)} playlists")
-            if scan_errors > 0:
-                QMessageBox.warning(self, "Scan Error",f"Encountered {scan_errors} errors during scanning")
-
-            return audio_files, playlist_files
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error scanning directory {directory}: {e}")
-            return
-
-    def add_songs_to_database(self, audio_files):
-        """Add audio files to database with error handling"""
-        try:
-            self.status_bar.showMessage(f"Adding {len(audio_files)} audio files to database")
-
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            added_songs = 0
-            added_covers = 0
-            errors = 0
-            size = 256, 256
-            cursor.execute(f'ATTACH DATABASE "{COVERS_DB_PATH}" AS Covers')
-
-            for file_path in audio_files:
-                try:
-                    # Check if file already exists
-                    cursor.execute("SELECT id FROM Songs WHERE path = ?", (file_path,))
-                    if cursor.fetchone():
-                        self.status_bar.showMessage(f"File already in database: {file_path}")
-                        continue
-
-                    metadata = self.get_audio_metadata(file_path)
-                    if metadata:
-                        file_name = os.path.basename(file_path)
-                        cursor.execute('''
-                            INSERT INTO Songs (path, file_name, artist, album_artist, song_title, duration, album, year)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (
-                            file_path,
-                            file_name,
-                            metadata['artist'],
-                            metadata['album_artist'],
-                            metadata['title'],
-                            metadata['duration'],
-                            metadata['album'],
-                            metadata['year']
-                        ))
-                        added_songs += 1
-                        self.status_bar.showMessage(f"Added song: {metadata['artist']} - {metadata['title']}")
-                        cursor.execute("SELECT Covers.album FROM Covers WHERE Covers.album = ?",
-                                       (metadata['album'],))
-                        if cursor.fetchone():
-                            self.status_bar.showMessage(
-                                f"Cover already in database: {metadata['album']}")
-                            continue
-                        img = self.get_album_art(file_path)
-                        if img is None:
-                            cover = None
-                        else:
-                            im = Image.open(BytesIO(base64.b64decode(img)))
-                            im.thumbnail(size)
-                            im_file = BytesIO()
-                            im.save(im_file, format="JPEG")
-                            im_bytes = im_file.getvalue()  # im_bytes: image in binary format.
-                            cover = base64.b64encode(im_bytes).decode('utf-8')
-                        cursor.execute('''INSERT INTO Covers (album, album_artist, cover) VALUES (?, ?, ?)''',
-                                       (metadata['album'], metadata['album_artist'], cover))
-                        added_covers += 1
-                    else:
-                        QMessageBox.warning(self, "Scan Error", f"Could not extract metadata from: {file_path}")
-                        errors += 1
-
-                except sqlite3.Error as e:
-                    QMessageBox.critical(self, "Error",f"Database error adding song {file_path}: {e}")
-                    errors += 1
-                except Exception as e:
-                    QMessageBox.critical(self, "Error",f"Unexpected error adding song {file_path}: {e}")
-                    errors += 1
-
-            conn.commit()
-            conn.close()
-
-            QMessageBox.warning(self, "Success!", f"Successfully added {added_songs} songs and {added_covers} covers to database")
-            if errors > 0:
-                QMessageBox.warning(self, "Scan Error", f"Encountered {errors} errors while adding songs")
-
-            return added_songs, added_covers
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error",f"Error adding songs to database: {str(e)}")
+    def on_finished(self, added_songs, added_playlists, scan_errors):
+        if self.progress:
+            self.status_bar.removeWidget(self.progress)
+        self.status_bar.showMessage(
+            f"Scan complete. Found {added_songs} audio files, {added_playlists} "
+            f"playlists and encountered {scan_errors} errors.", 8000)
+        self.scan_worker.mutex.unlock()
+        self.scan_thread.quit()
+        self.scan_thread.wait()
+        self.scan_worker.deleteLater()
+        self.scan_thread.deleteLater()
+        self.scan_thread.deleteLater()
 
 
-    def add_playlists_to_database(self, playlist_files):
-        """Add playlist files to database with error handling"""
-        try:
-            self.status_bar.showMessage(f"Adding {len(playlist_files)} playlists to database")
+    def start_scan(self, directory):
+        # audio_extensions and playlist_extensions are assumed available in the class scope
+        self.progress = QProgressBar()
+        self.progress.setStyleSheet(
+            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+        self.progress.setRange(0, 0)  # Indeterminate progress
+        self.status_bar.addPermanentWidget(self.progress)
+        self.status_bar.update()
+        self.scan_thread = QThread()
+        self.scan_worker = ScanWorker(directory)
+        self.scan_worker.moveToThread(self.scan_thread)
+        # Connect signals
+        self.scan_thread.started.connect(self.scan_worker.run)
+        self.scan_worker.started.connect(
+            lambda d: self.status_bar.showMessage(f"Scanning directory: {d}"))
+        self.scan_worker.folder_scanned.connect(
+            lambda folder: self.status_bar.showMessage(
+                f"Scanning folder: {folder}"))
+        self.scan_worker.warning.connect(
+            lambda msg: self.status_bar.showMessage(msg))
+        self.scan_worker.status.connect(
+            lambda msg: self.status_bar.showMessage(msg))
+        self.scan_worker.error.connect(
+            lambda msg: QMessageBox.critical(self, "Error", msg))
 
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            added_playlists = 0
-            errors = 0
+        self.scan_worker.finished.connect(self.on_finished)
 
-            for file_path in playlist_files:
-                try:
-                    # Check if playlist already exists
-                    cursor.execute("SELECT id FROM Playlists WHERE path = ?",
-                                   (file_path,))
-                    if cursor.fetchone():
-                        self.status_bar.showMessage(
-                            f"Playlist already in database: {file_path}")
-                        continue
+        # Start
+        self.scan_thread.start()
+        self.scan_worker.mutex.lock()
 
-                    pl_name = os.path.basename(file_path)
-                    cursor.execute('''
-                        INSERT INTO Playlists (path, PL_name)
-                        VALUES (?, ?)
-                    ''', (file_path, pl_name))
-                    added_playlists += 1
-                    self.status_bar.showMessage(f"Added playlist: {pl_name}")
+    def stop_scan(self):
+        """Stop the ongoing scan operation"""
+        if hasattr(self, 'scan_worker') and self.scan_worker is not None:
+            self.scan_worker.stop()
+            self.status_bar.showMessage("Scan operation stopped by user", 4000)
 
-                except sqlite3.Error as e:
-                    QMessageBox.warning(self, 'error',
-                        f"Database error adding playlist {file_path}: {str(e)}")
-                    errors += 1
-                except Exception as e:
-                    QMessageBox.critical(self, 'error',
-                        f"Unexpected error adding playlist {file_path}: {str(e)}")
-                    errors += 1
 
-            conn.commit()
-            conn.close()
-
-            QMessageBox.information(self, 'success',
-                f"Successfully added {added_playlists} playlists to database")
-            if errors > 0:
-                QMessageBox.warning(self, 'error',
-                    f"Encountered {errors} errors while adding playlists")
-
-            return added_playlists
-
-        except Exception as e:
-            QMessageBox.warning(self, 'error', f"Error adding playlists to database: {str(e)}")
 
     @Slot(dict)
     def on_server_reply(self, data: dict):
@@ -1570,6 +1322,12 @@ class AudioPlayer(QWidget):
 
     def show_instructions(self):
         self.instructions = TextEdit()
+        if self.dark_style == "dark":
+            self.instructions.setStyleSheet(
+                "font-size: 12px; color: white; background: #19232D; color: white; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+        else:
+            self.instructions.setStyleSheet(
+                "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
         self.instructions.show()
 
 
@@ -1739,12 +1497,12 @@ class AudioPlayer(QWidget):
                     album_artist = songs[album[1]][0]['album_artist']
                     path = songs[album[1]][0]['path']
                     if album[1].find('"') != -1:
-                        album_art = get_album_art(path)
+                        album_art = self.get_album_art(path)
                     else:
                         cursor.execute(f'SELECT cover FROM Covers WHERE album = "{album[1]}" AND album_artist = "{album_artist}"')
                         album_art = cursor.fetchone()
                         if album_art is None:
-                            album_art = get_album_art(path)
+                            album_art = self.get_album_art(path)
                         elif isinstance(album_art, tuple):
                             album_art = album_art[0]
                         else:
@@ -2099,19 +1857,6 @@ class AudioPlayer(QWidget):
             self.lyrics_display.clear()
             self.lyrics_timer.stop()
        # self.update_play_button()
-
-    def skip_leading_silence(self):
-        """A very basic silence-skip: jump forward if amplitude is zero
-        (needs real audio analysis for best results)."""
-        # QMediaPlayer does NOT support sample-level analysis.
-        # A real solution would use something like pydub or ffmpeg to find silence start/end.
-        # Here, we just jump ahead 1s, up to 4 times, if still at start.
-        max_tries = 4
-        for i in range(max_tries):
-            if self.player.position() < 1500:
-                self.player.setPosition(self.player.position() + 1000)
-            else:
-                break
 
     # Drag-and-drop support
     def dragEnterEvent(self, event):
@@ -3033,8 +2778,6 @@ class AudioPlayer(QWidget):
             self.move_to_top()
 
 
-
-
     def set_metadata_label(self):
         '''Sets metadata labels, splitting them in multiple lines if necessary'''
         if not self.meta_data or "error" in self.meta_data:
@@ -3189,99 +2932,6 @@ class AudioPlayer(QWidget):
             else:
                 return codec + ' ' + str(sample_rate/1000) + 'kHz/' + str(round(bits)) + 'bits  ' + str(round(bitrate/1000)) + 'kbps'
 
-        # --- Gap Killer (experimental)
-
-    def on_buffer(self, audio_buffer):
-        """
-        Called when a buffer of audio data is available.
-        Probes the buffer for silence at the end of the track and loads the next track if detected.
-        """
-        buf_bytes = audio_buffer.data()
-        if self._probe_buffer(buf_bytes):
-            self.next_track()
-
-
-    def _probe_buffer(self, buf, silence_threshold=0.001, min_silence_ms=1000):
-        """
-        Checks if the buffer contains a period of silence at the end of the track.
-        Returns True if silence is detected, False otherwise.
-        """
-        import numpy as np
-
-        # Convert buffer to numpy array (assuming 16-bit PCM)
-        audio_data = np.frombuffer(buf, dtype=np.int16)
-        # Normalize to [-1, 1]
-        audio_data = audio_data / 32768.0
-
-        # Check last N ms for silence
-        sample_rate = 44100  # Adjust if needed
-        samples_to_check = int((min_silence_ms / 1000) * sample_rate)
-        if len(audio_data) < samples_to_check:
-            return False
-
-        tail = audio_data[-samples_to_check:]
-        if np.max(np.abs(tail)) < silence_threshold:
-            return True
-        return False
-
-    def _probe_buffer_old(self, buffer):
-        if not self.skip_silence:
-            self._silence_ms = 0
-            return
-        try:
-            fmt = buffer.format()
-            if fmt.sampleFormat() not in (fmt.Int16, fmt.Int8, fmt.Int32,
-                                          fmt.Float):
-                return
-            frames = buffer.frameCount()
-            if frames <= 0:
-                return
-            data = buffer.data()
-            import array, struct
-            if fmt.sampleFormat() == fmt.Float:
-                floats = [abs(struct.unpack_from('f', data, i)[0]) for i in
-                          range(0, len(data), 4)]
-                if not floats: return
-                rms = math.sqrt(sum(x * x for x in floats) / len(floats))
-            elif fmt.sampleFormat() == fmt.Int16:
-                arr = array.array('h')
-                arr.frombytes(data[:len(data) // 2 * 2])
-                if not arr: return
-                norm = [abs(x) / 32768.0 for x in arr]
-                rms = math.sqrt(sum(x * x for x in norm) / len(norm))
-            elif fmt.sampleFormat() == fmt.Int8:
-                arr = array.array('b')
-                arr.frombytes(data)
-                if not arr: return
-                norm = [abs(x) / 128.0 for x in arr]
-                rms = math.sqrt(sum(x * x for x in norm) / len(norm))
-            else:
-                arr = array.array('i')
-                arr.frombytes(data[:len(data) // 4 * 4])
-                if not arr: return
-                norm = [abs(x) / 2147483648.0 for x in arr]
-                rms = math.sqrt(sum(x * x for x in norm) / len(norm))
-
-            db = 20 * math.log10(rms) if rms > 0 else -120
-            if db < self.silence_threshold_db:
-                self._silence_ms += buffer.duration() / 1000.0
-                self.gap_status.setText(
-                    f"Silent {self._silence_ms:.1f}ms @ {db:.1f}dB")
-                if self._silence_ms >= self.silence_min_duration * 1000.0:
-                    self._silence_ms = 0
-                    p = self.current_player()
-                    if p.duration() - p.position() < 12_000:
-                        self.next_track()
-                    else:
-                        p.setPosition(
-                            min(p.position() + 10_000, p.duration() - 1000))
-                        self.gap_status.setText("Skipped silence")
-            else:
-                self._silence_ms = 0
-                self.gap_status.setText("Monitoring")
-        except Exception:
-            pass
-
 
     def selectDirectoryDialog(self):
         file_dialog = QFileDialog(self)
@@ -3302,14 +2952,7 @@ class AudioPlayer(QWidget):
             'Scanning your Music Library. Please Wait, it might take some time depending on the library size'
         )
 
-        audio_files, playlist_files = self.scan_for_audio_files(folder_path)
-        # Add to database
-        added_songs, added_covers = self.add_songs_to_database(audio_files)
-        added_playlists = self.add_playlists_to_database(playlist_files)
-
-        success_msg = f'Successfully added {added_songs} songs, {added_playlists} playlists and {added_covers} albums to the database.'
-        self.status_bar.showMessage(success_msg, 8)
-        QMessageBox.information(self,'info', success_msg)
+        self.start_scan(folder_path)
 
 
 
@@ -3538,6 +3181,7 @@ class AudioPlayer(QWidget):
         self.playlists_worker.start()
         self.playlists_worker.mutex.lock()
 
+
     @Slot(dict)
     def receive_playlists(self, data: dict):
         """Handle successful playlist retrieval completion"""
@@ -3566,6 +3210,7 @@ class AudioPlayer(QWidget):
             self.status_bar.clearMessage()
             QMessageBox.critical(self, "Error",
                                  "Server Search error: Make sure the Server is Up and Connected")
+
 
     def on_playlists_error(self, error_message):
         """Handle error"""
@@ -4107,10 +3752,80 @@ class AudioPlayer(QWidget):
                                   "gap_enabled"         : self.gap_enabled,
                                   "silence_threshold_db": self.silence_threshold_db,
                                   "silence_min_duration": self.silence_min_duration,
-                                  "scan_for_lyrics"     : self.scan_for_lyrics
-                                  })
+                                  "scan_for_lyrics"     : self.scan_for_lyrics,
+                                  "style"               : self.dark_style                                     })
         self.close()
+'''
+class ScanWorker(QObject):
+    started = Signal(str)  # directory
+    folder_scanned = Signal(str)  # root folder path
+    finished = Signal(list, list,
+                          int)  # audio_files, playlist_files, scan_errors
+    error = Signal(str)  # error message
+    warning = Signal(str)  # warning message
 
+    def __init__(self, directory, audio_extensions, playlist_extensions):
+        super().__init__()
+        self.directory = directory
+        self.audio_extensions = set(audio_extensions)
+        self.playlist_extensions = set(playlist_extensions)
+        self._stopped = False
+        self.mutex = QMutex()
+
+    def stop(self):
+        self._stopped = True
+
+    def run(self):
+        try:
+            self.started.emit(self.directory)
+
+            if not os.path.exists(self.directory):
+                self.error.emit(
+                    f"Directory does not exist: {self.directory}")
+                self.finished.emit([], [], 0)
+                return
+
+            if not os.path.isdir(self.directory):
+                self.error.emit(
+                    f"Path is not a directory: {self.directory}")
+                self.finished.emit([], [], 0)
+                return
+
+            audio_files = []
+            playlist_files = []
+            scan_errors = 0
+
+            for root, dirs, files in os.walk(self.directory):
+                if self._stopped:
+                    break
+                # emit progress update
+                self.folder_scanned.emit(root)
+
+                for file in files:
+                    if self._stopped:
+                        break
+                    try:
+                        file_path = os.path.join(root, file)
+                        file_ext = Path(file).suffix.lower()
+
+                        if file_ext in self.audio_extensions:
+                            audio_files.append(file_path)
+                        elif file_ext in self.playlist_extensions:
+                            playlist_files.append(file_path)
+
+                    except Exception as e:
+                        scan_errors += 1
+                        # non-blocking warning signal
+                        self.warning.emit(
+                            f"Error processing file {file}: {e}")
+
+            self.finished.emit(audio_files, playlist_files, scan_errors)
+
+        except Exception as e:
+            self.error.emit(
+                f"Error scanning directory {self.directory}: {e}")
+            self.finished.emit([], [], 1)
+'''
 
 class Worker(QThread):
     """
@@ -4442,8 +4157,8 @@ class TextEdit(QWidget):
         self.resize(1180, 780)
 
         self.instructions_edit = QTextEdit(readOnly=True)
-        self.instructions_edit.setStyleSheet(
-            "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+     #   self.instructions_edit.setStyleSheet(
+       #     "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
         layout = QVBoxLayout()
         layout.addWidget(self.instructions_edit)
         self.setLayout(layout)
