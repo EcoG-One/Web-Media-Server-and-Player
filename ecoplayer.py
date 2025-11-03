@@ -32,8 +32,7 @@ from qdarkstyle import DarkPalette, LightPalette
 from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
 from scanworker import ScanWorker
-from wizard import WelcomeWizard
-from text import text_5
+from text import text_1, text_2, text_3, text_4, text_5, text_6, text_7, text_8
 
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
@@ -132,6 +131,186 @@ class CheckBoxAction(QWidgetAction):
         layout.addWidget(label)
         self.widget.setLayout(layout)
         self.setDefaultWidget(self.widget)
+
+# --- Welcome Wizard Implementation ---
+class WelcomeWizard(QDialog):
+    """
+    Simple multi-step welcome wizard.
+
+    Steps:
+      1. "Welcome" - Cancel / Next
+      2. "Scanning" - Cancel / Scan / Next
+      3. "Ready" - Cancel / Next
+      4. "Connect to Another Computer" - Cancel / Connect to Remote / End Wizard
+      5. "Placeholder for Text 5" - End (and a 'Don't show again' checkbox)
+
+    The wizard will call AudioPlayer.scan_library and AudioPlayer.enter_server as requested.
+    """
+    def __init__(self, audio_player: 'AudioPlayer'):
+        super().__init__(audio_player)
+        self.setWindowTitle("Welcome")
+        self.setModal(True)
+        self.audio = audio_player
+        self.step = 1
+        self.resize(500, 220)
+
+        self.layout = QVBoxLayout(self)
+
+        self.label = QLabel("", self)
+        self.label.setWordWrap(True)
+        self.label.setStyleSheet(
+            "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+        self.layout.addWidget(self.label)
+
+        # Buttons container
+        self.button_box = QHBoxLayout()
+        self.layout.addLayout(self.button_box)
+
+        # For final step option
+        self.dont_show_checkbox = QCheckBox("Don't show this again", self)
+
+        self._build_step_ui()
+        self.update_step()
+
+    def _clear_buttons(self):
+        # Remove widgets from button box
+        while self.button_box.count():
+            item = self.button_box.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def _add_button(self, text, callback, default=False):
+        btn = QPushButton(text, self)
+        if default:
+            btn.setDefault(True)
+        btn.clicked.connect(callback)
+        self.button_box.addWidget(btn)
+        return btn
+
+    def _build_step_ui(self):
+        # Buttons are created dynamically per step in update_step
+        pass
+
+    def update_step(self):
+        self._clear_buttons()
+        # Remove checkbox if previously added
+        try:
+            self.layout.removeWidget(self.dont_show_checkbox)
+            self.dont_show_checkbox.setParent(None)
+        except Exception:
+            pass
+
+        if self.step == 1:
+            self.label.setText(text_1)
+            self._add_button("Cancel", self.reject)
+            self._add_button("Next", self.next_step, default=True)
+
+        elif self.step == 2:
+            self.label.setText(text_2)
+            self._add_button("Cancel", self.reject)
+            self._add_button("Back", self.back_step)
+            self._add_button("Scan", self._scan_async)
+            self._add_button("Next", self.next_step, default=True)
+
+        elif self.step == 3:
+            self.label.setText(text_3)
+            self._add_button("Cancel", self.reject)
+            self._add_button("Back", self.back_step)
+            self._add_button("Next", self.next_step, default=True)
+
+        elif self.step == 4:
+            self.label.setText(text_4)
+            self._add_button("Cancel", self.reject)
+            self._add_button("Back", self.back_step)
+            self._add_button("Connect", self._connect_remote)
+            self._add_button("Next", self.next_step, default=True)
+
+        elif self.step == 5:
+            self.label.setText(text_5)
+            self._add_button("Cancel", self.reject)
+            self._add_button("Back", self.back_step)
+            self._add_button("Scan", self._scan_remote)
+            self._add_button("Next", self.next_step, default=True)
+
+        elif self.step == 6:
+            self.label.setText(text_6)
+            self._add_button("Cancel", self.reject)
+            self._add_button("Back", self.back_step)
+            self._add_button("Next", self.next_step, default=True)
+
+
+        elif self.step == 7:
+            self.label.setText(text_7)
+            # Add the "Don't show again" checkbox
+            self.layout.addWidget(self.dont_show_checkbox)
+            self._add_button("Back", self.back_step)
+            self._add_button("End", self.finish_wizard, default=True)
+
+    def next_step(self):
+        if self.step < 7:
+            self.step += 1
+            self.update_step()
+        else:
+            self.finish_wizard()
+
+    def back_step(self):
+        if self.step > 1:
+            self.step -= 1
+            self.update_step()
+
+    def _scan_async(self):
+        """
+        Schedule scan_library to be called soon on the main event loop.
+        scan_library uses GUI dialogs, so it must run on the main thread.
+        We schedule it and continue (wizard remains open).
+        """
+        try:
+            QTimer.singleShot(0, lambda: self.audio.scan_library())
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to start library scan: {e}")
+
+    def _connect_remote(self):
+        """
+        Trigger connect to remote server flow.
+        This will open the server dialog on the main event loop.
+        """
+        try:
+            QTimer.singleShot(0, lambda: self.audio.enter_server())
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to open Connect to Remote: {e}")
+
+
+    def _scan_remote(self):
+        """
+        Schedule scan_remote_library to be called soon on the main event loop.
+        scan_library uses GUI dialogs, so it must run on the main thread.
+        We schedule it and continue (wizard remains open).
+        """
+        try:
+            QTimer.singleShot(0, lambda: self.audio.scan_remote_library())
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to start remote library scan: {e}")
+
+    def finish_wizard(self):
+        # Persist "don't show again" option if checked
+        try:
+            settings = load_json(SETTINGS_FILE, default={})
+            if not isinstance(settings, dict):
+                settings = {}
+            settings['show_welcome'] = not self.dont_show_checkbox.isChecked()
+            # Ensure other known settings remain (merge defaults)
+            defaults = get_settings()
+            for k, v in defaults.items():
+                if k not in settings:
+                    settings[k] = v
+            save_json(SETTINGS_FILE, settings)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not save settings: {e}")
+        self.accept()
+
+# --- End of Welcome Wizard Implementation ---
 
 
 class CheckBoxAction(QWidgetAction):
@@ -4155,14 +4334,11 @@ class TextEdit(QWidget):
         super().__init__(parent)
         self.setWindowTitle("Instructions")
         self.resize(1180, 780)
-
         self.instructions_edit = QTextEdit(readOnly=True)
-     #   self.instructions_edit.setStyleSheet(
-       #     "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
         layout = QVBoxLayout()
         layout.addWidget(self.instructions_edit)
         self.setLayout(layout)
-        self.instructions_edit.setText(text_5)
+        self.instructions_edit.setText(text_8)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

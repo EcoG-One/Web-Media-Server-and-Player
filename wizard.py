@@ -3,7 +3,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import ( QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QMessageBox,
     QCheckBox, QDialog)
 from pathlib import Path
-from ecoplayer import get_settings, load_json, save_json
+import json
 from ecoplayer import AudioPlayer
 from text import text_1, text_2, text_3, text_4, text_5
 
@@ -89,7 +89,6 @@ class WelcomeWizard(QDialog):
         elif self.step == 2:
             self.label.setText(text_2)
             self._add_button("Cancel", self.reject)
-            # Scan should invoke scan_library asynchronously (scheduled) so it doesn't block this UI call chain
             self._add_button("Scan", self._scan_async)
             self._add_button("Next", self.next_step, default=True)
 
@@ -138,21 +137,57 @@ class WelcomeWizard(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to open Connect to Remote: {e}")
 
+    def load_json(self, path: Path, default):
+        try:
+            if path.exists():
+                return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            QMessageBox.warning(self, "Error!", str(e))
+        return default
+
+    def save_json(self, path: Path, obj):
+        try:
+            path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+        except Exception as e:
+            QMessageBox.warning(self, "Error!", str(e))
+
+    def get_settings(self):
+        default = {"server"              : "localhost",
+                   "mix_method"          : "Auto",
+                   "transition_duration" : 4,
+                   "gap_enabled"         : True,
+                   "silence_threshold_db": -46,
+                   "silence_min_duration": 0.1,
+                   "scan_for_lyrics"     : False,
+                   "show_welcome"        : True,
+                   "style"               : "default"
+                   }
+        json_settings = self.load_json(SETTINGS_FILE, default=default)
+        # Ensure keys exist
+        for k, v in default.items():
+            if k not in json_settings:
+                json_settings[k] = v
+        return json_settings
+
+
     def finish_wizard(self):
         # Persist "don't show again" option if checked
         try:
-            settings = load_json(SETTINGS_FILE, default={})
+            settings = self.load_json(SETTINGS_FILE, default={})
             if not isinstance(settings, dict):
                 settings = {}
             settings['show_welcome'] = not self.dont_show_checkbox.isChecked()
             # Ensure other known settings remain (merge defaults)
-            defaults = get_settings()
+            defaults = self.get_settings()
             for k, v in defaults.items():
                 if k not in settings:
                     settings[k] = v
-            save_json(SETTINGS_FILE, settings)
+            self.save_json(SETTINGS_FILE, settings)
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Could not save settings: {e}")
         self.accept()
+
+
+
 
 # --- End of Welcome Wizard Implementation ---
