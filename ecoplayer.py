@@ -15,6 +15,8 @@ import qdarkstyle
 import mutagen
 from mutagen import File
 from mutagen.flac import FLAC
+from mediafile import MediaFile
+import datetime
 from pathlib import Path
 from random import shuffle
 import librosa
@@ -29,7 +31,7 @@ import base64
 import webbrowser
 import wikipedia
 from qdarkstyle import DarkPalette, LightPalette
-from get_lyrics import LyricsPlugin
+#from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
 from scanworker import ScanWorker
 from text import text_1, text_2, text_3, text_4, text_5, text_6, text_7, text_8
@@ -69,10 +71,9 @@ def get_settings():
     default = {"server": "localhost",
                "mix_method": "Auto",
                "transition_duration": 4,
-               "gap_enabled": True,
                "silence_threshold_db": -46,
                "silence_min_duration": 0.1,
-               "scan_for_lyrics": False,
+               "scan_for_lyrics": True,
                "show_welcome": True,
                "style": "default"
                }
@@ -333,9 +334,12 @@ class AudioPlayer(QWidget):
         super().__init__()
 
         # store full settings dict for use with wizard persistence
+        self.scan_thread = None
         self.settings = settings
 
         # data
+        self.scan_thread = None
+        self.scan_worker = None
         self.purge_worker = None
         self.is_local = None
         self.server_worker = None
@@ -354,14 +358,12 @@ class AudioPlayer(QWidget):
         # Mixing/transition config
         self.mix_method = settings.get("mix_method", "Auto")
         self.transition_duration = settings.get("transition_duration", 4)
-        self.scan_for_lyrics = settings.get("scan_for_lyrics", False)
-        self.gap_enabled = settings.get("gap_enabled", False)
+        self.scan_for_lyrics = settings.get("scan_for_lyrics", True)
         self.silence_threshold_db = settings.get("silence_threshold_db", -40) # in dB
         self.silence_min_duration = settings.get("silence_min_duration", 0.1) # in seconds
         self._silence_ms = 0
         self._fade_step = None
         self.fade_timer = None
-        self.scan_worker = None
         self.progress = None
         self.setWindowTitle(f"Ultimate Media Player. Current Server: {self.api_url}")
         self.resize(1200, 800)
@@ -624,8 +626,8 @@ class AudioPlayer(QWidget):
         toolbar.addSeparator()
 
         # Audio/Player
-        self.player = QMediaPlayer(self)
-        self.audio_output = QAudioOutput(self)
+        self.player = QMediaPlayer()
+        self.audio_output = QAudioOutput()
         self.audio_output.setVolume(1.0)  # or any value between 0.0 (mute) to 1.0 (full volume)
         self.player.setAudioOutput(self.audio_output)
      #   self.buffer = QAudioBufferOutput(self)
@@ -770,16 +772,6 @@ class AudioPlayer(QWidget):
         self.transition_spin.setValue(self.transition_duration)
         self.transition_spin.setSuffix(" s")
         self.transition_spin.valueChanged.connect(self.set_transition_duration)
-
-
-
-       # self.silence_check = QPushButton("Skip Silence")
-       # self.silence_check.setCheckable(True)
-       # self.silence_check.setChecked(self.skip_silence)
-       # self.silence_check.toggled.connect(self.set_skip_silence)
-
-
-
         mix_form = QFormLayout()
         mix_form.addRow("Mix Method:", self.mix_method_combo)
         mix_form.addRow("Transition:", self.transition_spin)
@@ -788,7 +780,7 @@ class AudioPlayer(QWidget):
         mix_group.setFixedSize(QSize(180, 80))
         mix_group.setLayout(mix_form)
 
-        gap_killer_group = QGroupBox("Gap Killer")
+        gap_killer_group = QGroupBox("Auto Mix")
      #   gap_killer_group.setFixedSize(QSize(180, 80))
         gap_box = QHBoxLayout()
         self.chk_gap = QCheckBox("ON")
@@ -894,7 +886,6 @@ class AudioPlayer(QWidget):
         self.slider.sliderPressed.connect(lambda: self.player.pause())
         self.slider.sliderReleased.connect(lambda: self.player.play())
         self.player.metaDataChanged.connect(self.on_metadata_changed)
-        self.chk_gap.toggled.connect(lambda v: setattr(self, "gap_enabled", v))
         self.silence_db.valueChanged.connect(
             lambda v: setattr(self, "silence_threshold_db", v))
         self.silence_dur.valueChanged.connect(
@@ -1163,31 +1154,51 @@ class AudioPlayer(QWidget):
 
 
     def on_finished(self, added_songs, added_playlists, scan_errors):
+        '''UI cleanup and a short status message.'''
         if self.progress:
             self.status_bar.removeWidget(self.progress)
+            self.progress = None
+
+        # Ensure any worker-side flag is cleared (worker already finished)
+        try:
+            if self.scan_worker:
+                # worker.stop() not needed here because run() has completed and emitted finished
+                pass
+        except Exception:
+            pass
+
+        # Give higher-level cleanup to the connected deleteLater handlers.
+        # Update the status message:
         self.status_bar.showMessage(
             f"Scan complete. Found {added_songs} audio files, {added_playlists} "
             f"playlists and encountered {scan_errors} errors.", 8000)
-        self.scan_worker.mutex.unlock()
-        self.scan_thread.quit()
-        self.scan_thread.wait()
-        self.scan_worker.deleteLater()
-        self.scan_thread.deleteLater()
-        self.scan_thread.deleteLater()
+
+        # Clear references so GC can collect after deleteLater runs
+        self.scan_worker = None
+        self.scan_thread = None
 
 
     def start_scan(self, directory):
-        # audio_extensions and playlist_extensions are assumed available in the class scope
+        # audio_extensions and playlist_extensions are available in the class scope
         self.progress = QProgressBar()
         self.progress.setStyleSheet(
             "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
         self.progress.setRange(0, 0)  # Indeterminate progress
         self.status_bar.addPermanentWidget(self.progress)
         self.status_bar.update()
-        self.scan_thread = QThread()
+        # Create thread and worker
+        self.scan_thread = QThread(parent=None)
         self.scan_worker = ScanWorker(directory)
         self.scan_worker.moveToThread(self.scan_thread)
-        # Connect signals
+
+        # Lifecycle wiring: ensure the thread is quit and objects are scheduled for deletion
+        # Connect quit and deleteBefore on finished BEFORE connecting the UI slot so those
+        # actions run first (queued calls preserve connection order).
+        self.scan_worker.finished.connect(self.scan_thread.quit)
+        self.scan_worker.finished.connect(self.scan_worker.deleteLater)
+        self.scan_thread.finished.connect(self.scan_thread.deleteLater)
+
+        # Worker started/updates -> UI
         self.scan_thread.started.connect(self.scan_worker.run)
         self.scan_worker.started.connect(
             lambda d: self.status_bar.showMessage(f"Scanning directory: {d}"))
@@ -1201,17 +1212,36 @@ class AudioPlayer(QWidget):
         self.scan_worker.error.connect(
             lambda msg: QMessageBox.critical(self, "Error", msg))
 
+        # Keep the UI-handling slot connected (runs in main thread)
         self.scan_worker.finished.connect(self.on_finished)
 
-        # Start
+        # Start the thread (this will execute ScanWorker.run() inside the thread)
         self.scan_thread.start()
-        self.scan_worker.mutex.lock()
 
     def stop_scan(self):
         """Stop the ongoing scan operation"""
-        if hasattr(self, 'scan_worker') and self.scan_worker is not None:
-            self.scan_worker.stop()
-            self.status_bar.showMessage("Scan operation stopped by user", 4000)
+        if self.scan_worker is None or self.scan_thread is None:
+            return
+        # Ask the worker to stop
+        try:
+            self.scan_worker.stop()  # sets internal _stopped flag
+        except Exception:
+            pass
+
+        # Tell the thread to quit and wait for it to finish to avoid races.
+        try:
+            self.scan_thread.quit()
+        except Exception:
+            pass
+        try:
+            self.scan_thread.wait(timeout=5000)  # wait up to 5s (or call without timeout)
+        except Exception:
+            try:
+                self.scan_thread.wait()
+            except Exception:
+                pass
+
+        self.status_bar.showMessage("Scan operation stopped by user", 4000)
 
 
 
@@ -1230,7 +1260,6 @@ class AudioPlayer(QWidget):
             save_json(SETTINGS_FILE, {"server"              : self.server,
                                       "mix_method"          : self.mix_method,
                                       "transition_duration" : self.transition_duration,
-                                      "gap_enabled"         : self.gap_enabled,
                                       "silence_threshold_db": self.silence_threshold_db,
                                       "silence_min_duration": self.silence_min_duration,
                                       "scan_for_lyrics"     : self.scan_for_lyrics
@@ -1888,8 +1917,8 @@ class AudioPlayer(QWidget):
         if next_song.is_remote:
             next_song.route = 'serve_audio'
 
-        self.next_player = QMediaPlayer(self)
-        self.next_output = QAudioOutput(self)
+        self.next_player = QMediaPlayer()
+        self.next_output = QAudioOutput()
         self.next_player.setAudioOutput(self.next_output)
         self.next_player.setSource(next_song.absolute_path())
 #        self.next_player.setSource(QUrl.fromLocalFile(next_path))
@@ -1899,12 +1928,13 @@ class AudioPlayer(QWidget):
        # self.load_lyrics(next_path)
         self.lyrics_timer.start()
         self.playlist_widget.setCurrentRow(next_idx)
-        self.fade_timer = QTimer(self)
+        self.fade_timer = QTimer()
         self.fade_timer.setInterval(100)
-        fade_steps = int(self.transition_duration * 1000 / 100)
+        fade_steps = max(1, int(self.transition_duration * 1000 / 100))
         self._fade_step = 0
 
         def fade():
+            global old_player
             self._fade_step += 1
          #   print(self._fade_step, fade_steps)
             frac = self._fade_step / fade_steps
@@ -1944,30 +1974,98 @@ class AudioPlayer(QWidget):
                 self.next_output.setVolume(1.0)
 
             if self._fade_step >= fade_steps:
-             #   print("Fade complete, switching tracks")
+             #  Fade complete, switching tracks
                 self.fade_timer.stop()
-                self.audio_output.setVolume(1.0)
-                self.player.stop()
-                # Switch to next player
-                self.player = self.next_player
-                self.audio_output = self.next_output
-                self.update_metadata(next_idx)
-                self.current_index = next_idx
+             #  Ensure old player is stopped and safely deleted
+                old_player = getattr(self, 'player', None)
+                old_output = getattr(self, 'audio_output', None)
 
-                self.player.positionChanged.connect(self.update_slider)
-                self.player.durationChanged.connect(self.update_duration)
-                self.player.mediaStatusChanged.connect(self.media_status_changed)
-                self.player.playbackStateChanged.connect(self.update_play_button)
-                self.player.metaDataChanged.connect(self.on_metadata_changed)
-                self.player.errorOccurred.connect(self.handle_error)
-                self.player.positionChanged.connect(self.check_for_mix_transition)
+                # Stop the old player from main thread (safe)
+                if old_player is not None:
+                    try:
+                        old_player.stop()
+                    except Exception:
+                        pass
+               # self.audio_output.setVolume(1.0)
+               # self.player.stop()
+                if old_player is not None:
+                    try:
+                        old_player.positionChanged.disconnect(self.update_slider)
+                    except Exception:
+                        pass
+                    try:
+                        old_player.durationChanged.disconnect(self.update_duration)
+                    except Exception:
+                        pass
+                    try:
+                        old_player.mediaStatusChanged.disconnect(
+                            self.media_status_changed)
+                    except Exception:
+                        pass
+                    try:
+                        old_player.playbackStateChanged.disconnect(
+                            self.update_play_button)
+                    except Exception:
+                        pass
+                    try:
+                        old_player.metaDataChanged.disconnect(
+                            self.on_metadata_changed)
+                    except Exception:
+                        pass
+                    try:
+                        old_player.errorOccurred.disconnect(self.handle_error)
+                    except Exception:
+                        pass
+                    try:
+                        old_player.positionChanged.disconnect(
+                            self.check_for_mix_transition)
+                    except Exception:
+                        pass
+                  # Switch to next player
+                    self.player = self.next_player
+                    self.audio_output = self.next_output
+                  # self.update_metadata(next_idx)
+                  # self.current_index = next_idx
+
+                self.player.positionChanged.connect(self.update_slider,
+                                                    type=Qt.AutoConnection)
+                self.player.durationChanged.connect(self.update_duration,
+                                                    type=Qt.AutoConnection)
+                self.player.mediaStatusChanged.connect(
+                    self.media_status_changed, type=Qt.AutoConnection)
+                self.player.playbackStateChanged.connect(
+                    self.update_play_button, type=Qt.AutoConnection)
+                self.player.metaDataChanged.connect(self.on_metadata_changed,
+                                                    type=Qt.AutoConnection)
+                self.player.errorOccurred.connect(self.handle_error,
+                                                  type=Qt.AutoConnection)
+                self.player.positionChanged.connect(
+                    self.check_for_mix_transition, type=Qt.AutoConnection)
+
+                if old_player is not None:
+                    # make sure deletion runs in the object's thread (main thread) using deleteLater()
+                    try:
+                        old_player.deleteLater()
+                    except Exception:
+                        pass
+                if old_output is not None:
+                    try:
+                        old_output.deleteLater()
+                    except Exception:
+                        pass
+
+                # Clear the temporary next references
                 self.next_player = None
                 self.next_output = None
                 self._mixing_next = False
+
+                self.update_metadata(next_idx)
+                self.current_index = next_idx
                 self.update_play_button()
                 self.playlist_widget.setCurrentRow(self.current_index)
 
-        self.fade_timer.timeout.connect(fade)
+        # connect and start the timer in main thread
+        self.fade_timer.timeout.connect(fade, type=Qt.AutoConnection)
         self.fade_timer.start()
 
     def cue_next_track(self):
@@ -2454,58 +2552,34 @@ class AudioPlayer(QWidget):
         """
         Sets album art using metadata JSON if provided (remote), otherwise falls back to local extraction.
         """
-        if self.is_remote_file(file):
-            if self.meta_data and 'picture' in self.meta_data and self.meta_data[
+        if self.meta_data and 'picture' in self.meta_data and self.meta_data[
                 'picture']:
-                try:
-                    img_bytes = base64.b64decode(self.meta_data['picture'])
-                    img = QImage.fromData(img_bytes)
-                    pix = QPixmap.fromImage(img)
-                    self.album_art.setPixmap(
-                        pix.scaled(self.album_art.size(), Qt.KeepAspectRatio,
-                                   Qt.SmoothTransformation)
-                    )
-                    return
-                except Exception as e:
-                    self.album_art.setPixmap(
-                        QPixmap(
-                            "static/images/default_album_art.png") if os.path.exists(
-                            "static/images/default_album_art.png") else QPixmap())
-                    self.status_bar.showMessage("Base64 album art decode error:" + str(e))
+            if self.is_remote_file(file):
+                img_bytes = base64.b64decode(self.meta_data['picture'])
             else:
-                # Fallback image
-                self.album_art.setPixmap(
-                    QPixmap(
-                        "static/images/default_album_art.png") if os.path.exists(
-                        "static/images/default_album_art.png") else QPixmap())
-            return
-        # fallback below if fetch fails
-        img_data = None
-        try:
-            audio = File(file.path)
-            if audio is not None and hasattr(audio, 'tags'):
-                tags = audio.tags
-                if 'APIC:' in tags:
-                    img_data = tags['APIC:'].data
-                elif hasattr(tags, 'get') and tags.get('covr'):
-                    img_data = tags['covr'][0]
-                elif hasattr(audio, 'pictures') and audio.pictures:
-                    img_data = audio.pictures[0].data
-            if img_data:
-                img = QImage.fromData(img_data)
+                img_bytes = self.meta_data['picture']
+            try:
+                img = QImage.fromData(img_bytes)
                 pix = QPixmap.fromImage(img)
                 self.album_art.setPixmap(
                     pix.scaled(self.album_art.size(), Qt.KeepAspectRatio,
                                Qt.SmoothTransformation)
                 )
                 return
-        except Exception as e:
-            self.status_bar.showMessage("Artwork extraction error:" + str(e))
-        # Fallback image
-        self.album_art.setPixmap(
-            QPixmap("static/images/default_album_art.png") if os.path.exists(
-"static/images/default_album_art.png") else QPixmap())
-
+            except Exception as e:
+                self.album_art.setPixmap(
+                    QPixmap(
+                        "static/images/default_album_art.png") if os.path.exists(
+                        "static/images/default_album_art.png") else QPixmap())
+                self.status_bar.showMessage(
+                    "Base64 album art decode error:" + str(e))
+        else:
+            # Fallback image
+            self.album_art.setPixmap(
+                QPixmap(
+                    "static/images/default_album_art.png") if os.path.exists(
+                    "static/images/default_album_art.png") else QPixmap())
+        return
 
     def load_lyrics(self, file):
         self.lyrics = SynchronizedLyrics(file)
@@ -2712,204 +2786,67 @@ class AudioPlayer(QWidget):
             self.meta_worker = None
 
     def get_audio_metadata(self, file_path):
-        """Extract metadata from audio file with comprehensive error handling"""
+        """Extract metadata from audio file with comprehensive error handling
+        file = MediaFile(file_path)
+        title = file.title
+        artist = file.artist
+        album = file.album
+        albumartist = file.albumartist
+        art = file.art
+        bitdepth = file.bitdepth
+        bitrate = file.bitrate
+        channels = file.channels
+        composer = file.composer
+        date = datetime.date(file.date)
+        encoder_info = file.encoder_info
+        encoder_settings = file.encoder_settings
+        codec = file.format
+        genre = file.genre
+        length = file.length
+        lyrics = file.lyrics
+        original_date = file.original_date
+        original_year = file.original_year
+        r128_album_gain = file.r128_album_gain
+        r128_track_gain = file.r128_track_gain
+        samplerate = file.samplerate
+        track = file.track
+        year = file.year """
+
         try:
-            self.status_bar.showMessage(f"Extracting metadata from: {file_path}")
-
-            if not os.path.exists(file_path):
-                self.status_bar.showMessage(f"File does not exist: {file_path}")
-                return None
-
-            audio_file = File(file_path)
-            if audio_file is None:
-                self.status_bar.showMessage(f"Could not read audio file: {file_path}. Make sure the file exists.")
-                return None
-
+            file = MediaFile(file_path)
+            transition_duration = self.detect_low_intensity_segments(
+                file_path, threshold_db=self.silence_threshold_db,
+                frame_duration=0.1)
             metadata = {
-                'artist'  : 'Unknown Artist',
-                'album_artist': 'Unknown Album Artist',
-                'title'   : 'Unknown Title',
-                'album'   : 'Unknown Album',
-                'year'    : 'Unknown Year',
-                'duration': 0,
-                'lyrics'  : '',
-                'codec'   : '',
-                'picture' : None,
-                'transition_duration' : 5.0
+                'artist'             : file.artist,
+                'album_artist'       : file.albumartist,
+                'title'              : file.title,
+                'album'              : file.album,
+                'year'               : file.year,
+                'duration'           : file.length,
+                'lyrics'             : file.lyrics,
+                'codec'              : file.format,
+                'picture'            : file.art,
+                'transition_duration': transition_duration
             }
-
-            # Get basic metadata
-            try:
-                if 'TPE1' in audio_file:  # Artist
-                    metadata['artist'] = str(audio_file['TPE1'])
-                elif 'ARTIST' in audio_file:
-                    metadata['artist'] = str(audio_file['ARTIST'][0])
-                elif '©ART' in audio_file:
-                    metadata['artist'] = str(audio_file['©ART'][0])
-            except Exception as e:
-                self.status_bar.showMessage(
-                    f"Error reading artist metadata from {file_path}: {str(e)}")
-
-            try:
-                if 'TPE2' in audio_file:  # Album artist (ID3)
-                    metadata['album_artist'] = str(audio_file['TPE2'])
-                elif 'ALBUMARTIST' in audio_file:
-                    metadata['album_artist'] = str(
-                        audio_file['ALBUMARTIST'][0])
-                elif 'albumartist' in audio_file:
-                    metadata['album_artist'] = str(
-                        audio_file['albumartist'][0])
-                elif 'aART' in audio_file:  # MP4 atom for album artist
-                    metadata['album_artist'] = str(audio_file['aART'][0])
-                else:
-                    # fallback: use artist if album artist not present
-                    if metadata['artist']:
-                        metadata['album_artist'] = metadata['artist']
-            except Exception as e:
-                self.status_bar.showMessage(
-                    f"Error reading album artist metadata from {file_path}: {str(e)}")
-                # fallback to artist
-                if metadata['artist']:
-                    metadata['album_artist'] = metadata['artist']
-
-            try:
-                if 'TIT2' in audio_file:  # Title
-                    metadata['title'] = str(audio_file['TIT2'])
-                elif 'TITLE' in audio_file:
-                    metadata['title'] = str(audio_file['TITLE'][0])
-                elif '©nam' in audio_file:
-                    metadata['title'] = str(audio_file['©nam'][0])
-                else:
-                    metadata['title'] = os.path.splitext(
-                        os.path.basename(file_path))[0]
-            except Exception as e:
-                self.status_bar.showMessage(
-                    f"Error reading title metadata from {file_path}: {str(e)}")
-
-            try:
-                if 'TALB' in audio_file:  # Album
-                    metadata['album'] = str(audio_file['TALB'])
-                elif 'ALBUM' in audio_file:
-                    metadata['album'] = str(audio_file['ALBUM'][0])
-                elif '©alb' in audio_file:
-                    metadata['album'] = str(audio_file['©alb'][0])
-            except Exception as e:
-                self.status_bar.showMessage(
-                    f"Error reading album metadata from {file_path}: {str(e)}")
-
-            try:
-                if 'TDRC' in audio_file:  # Year
-                    metadata['year'] = str(audio_file['TDRC'])
-                elif 'DATE' in audio_file:
-                    metadata['year'] = str(audio_file['DATE'][0])
-                elif '©day' in audio_file:
-                    metadata['year'] = str(audio_file['©day'][0])
-            except Exception as e:
-                self.status_bar.showMessage(
-                    f"Error reading year metadata from {file_path}: {str(e)}")
-
-            # Duration
-            try:
-                if audio_file.info:
-                    metadata['duration'] = int(audio_file.info.length)
-            except Exception as e:
-                self.status_bar.showMessage(f"Error reading duration from {file_path}: {str(e)}")
-
-            # Lyrics
-            try:
-                lrc_path = os.path.splitext(file_path)[0] + ".lrc"
-                if os.path.exists(lrc_path):
-                    with open(lrc_path, encoding='utf-8-sig') as f:
-                        metadata['lyrics'] = f.read()
-                else:
-                    # FLAC/Vorbis
-                    if audio_file.__class__.__name__ == 'FLAC':
-                        for key in audio_file:
-                            if key.lower() in ('lyrics', 'unsyncedlyrics',
-                                               'lyric'):
-                                metadata['lyrics'] = audio_file[key][0]
-                    # MP4/AAC
-                    elif hasattr(audio_file, 'tags') and hasattr(
-                        audio_file.tags, 'get'):
-                        if audio_file.tags.get('\xa9lyr'):
-                            metadata['lyrics'] = \
-                            audio_file.tags['\xa9lyr'][0]
-                        # MP3 (ID3)
-                    elif hasattr(audio_file, 'tags') and audio_file.tags:
-                        # USLT (unsynchronized lyrics) is the standard for ID3
-                        for k in audio_file.tags.keys():
-                            if k.startswith('USLT') or k.startswith('SYLT'):
-                                metadata['lyrics'] = str(audio_file.tags[k])
-                            if k.lower() in ('lyrics', 'unsyncedlyrics',
-                                             'lyric'):
-                                metadata['lyrics'] = str(audio_file.tags[k])
-                    else:
-                        metadata['lyrics'] = "--"
-                if metadata['lyrics'] == "" and self.scan_for_lyrics:
-                    try:
-                        lyr = LyricsPlugin()
-                        metadata['lyrics'] = lyr.get_lyrics(metadata['artist'], metadata['title'],
-                                             metadata['album'], metadata['duration'])
-                        if metadata['lyrics'] != "":
-                            lrc_path = os.path.splitext(file_path)[0] + ".lrc"
-                            with open(lrc_path, "w", encoding='utf-8-sig') as f:
-                                f.write(metadata['lyrics'])
-                    except Exception as e:
-                        self.status_bar.showMessage(
-                            f"Error reading lyrics from {file_path}: {str(e)}")
-                        metadata['lyrics'] = "--"
-            except Exception as e:
-                self.status_bar.showMessage(f"Error reading lyrics from {file_path}: {str(e)}")
-
-            # Codec
-            try:
-                codec = audio_file.mime[0] if hasattr(audio_file,
-                                                      'mime') and audio_file.mime else audio_file.__class__.__name__
-
-                # Sample rate and bitrate
-                sample_rate = getattr(audio_file.info, 'sample_rate', None)
-                bits = getattr(audio_file.info, 'bits_per_sample', None)
-                bitrate = getattr(audio_file.info, 'bitrate', None)
-                if codec == 'audio/mp3':
-                    metadata['codec'] = codec + ' ' + str(
-                        sample_rate / 1000) + 'kHz ' + str(
-                        round(bitrate / 1000)) + 'kbps'
-                else:
-                    metadata['codec'] = codec + ' ' + str(
-                        sample_rate / 1000) + 'kHz/' + str(
-                        round(bits)) + 'bits  ' + str(
-                        round(bitrate / 1000)) + 'kbps'
-            except Exception as e:
-                self.status_bar.showMessage(f"Error reading codec from {file_path}: {str(e)}")
-
-            # Album art
-            try:
-                if 'APIC:' in audio_file:
-                    metadata['picture'] = audio_file['APIC:'].data
-                elif hasattr(audio_file, 'pictures') and audio_file.pictures:
-                    metadata['picture'] = audio_file.pictures[0].data
-                elif 'covr' in audio_file:
-                    metadata['picture'] = audio_file['covr'][0]
-            except Exception as e:
-                self.status_bar.showMessage(
-                    f"Error reading album art from {file_path}: {str(e)}")
-
-            # Transition Duration
-            try:
-                metadata["transition_duration"] = self.detect_low_intensity_segments(
-                    file_path, threshold_db=self.silence_threshold_db,
-                                    frame_duration=0.1)
-            except Exception as e:
-                self.status_bar.showMessage(
-                    f"Error detecting transition duration from {file_path}: {str(e)}")
-
-
-            self.status_bar.showMessage(f"Successfully extracted metadata from: {file_path}", 3000)
-            return metadata
-
         except Exception as e:
-            self.status_bar.showMessage( f"Error extracting metadata from {file_path}: {str(e)}")
-            return None
+            self.status_bar.showMessage(
+                 f"Error extracting metadata from {file_path}: {str(e)}")
+            metadata = {
+                'artist'             : 'Unknown Artist',
+                'album_artist'       : 'Unknown Album Artist',
+                'title'              : 'Unknown Title',
+                'album'              : 'Unknown Album',
+                'year'               : 'Unknown Year',
+                'duration'           : 0,
+                'lyrics'             : '---',
+                'codec'              : '',
+                'picture'            : None,
+                'transition_duration': 5.0
+            }
+        self.status_bar.showMessage(
+            f"Successfully extracted metadata from: {file_path}", 3000)
+        return metadata
 
     def update_metadata(self, index):
         self.text.clear()
@@ -2929,21 +2866,18 @@ class AudioPlayer(QWidget):
             self.meta_worker.mutex.lock()
         else:
             # local fallback
-            self.meta_data = None
+          #  self.meta_data = None
             self.meta_data = self.get_audio_metadata(file.path)
-            if self.mix_method == "Auto":
-                self.transition_duration = self.meta_data.get(
-                    'transition_duration', 5)
             self.set_metadata_label()
-            if self.meta_data['year'] is None:
+            if self.meta_data['year'] == 'Unknown Year':
                 self.year_label.setText('Year: ---')
             else:
-                self.year_label.setText('Year: ' + self.meta_data['year'])
+                self.year_label.setText('Year: ' + str(self.meta_data['year']))
             codec = self.meta_data['codec']
             self.codec_label.setText(codec.replace('audio/', ''))
             self.load_lyrics(file)
             self.set_album_art(file)
-            meta_list = mutagen.File(file.path).pprint().split('=')
+            meta_list = mutagen.File(file.path).pprint().split("=")
             new_meta_list = [meta_list[0]]
             for m in range(len(meta_list) - 1):
                 if ((not 'LYRICS' in meta_list[m]) and (not 'lyrics' in meta_list[m])
@@ -3928,83 +3862,11 @@ class AudioPlayer(QWidget):
         save_json(SETTINGS_FILE, {"server"              : self.server,
                                   "mix_method"          : self.mix_method,
                                   "transition_duration" : self.transition_duration,
-                                  "gap_enabled"         : self.gap_enabled,
                                   "silence_threshold_db": self.silence_threshold_db,
                                   "silence_min_duration": self.silence_min_duration,
                                   "scan_for_lyrics"     : self.scan_for_lyrics,
                                   "style"               : self.dark_style                                     })
         self.close()
-'''
-class ScanWorker(QObject):
-    started = Signal(str)  # directory
-    folder_scanned = Signal(str)  # root folder path
-    finished = Signal(list, list,
-                          int)  # audio_files, playlist_files, scan_errors
-    error = Signal(str)  # error message
-    warning = Signal(str)  # warning message
-
-    def __init__(self, directory, audio_extensions, playlist_extensions):
-        super().__init__()
-        self.directory = directory
-        self.audio_extensions = set(audio_extensions)
-        self.playlist_extensions = set(playlist_extensions)
-        self._stopped = False
-        self.mutex = QMutex()
-
-    def stop(self):
-        self._stopped = True
-
-    def run(self):
-        try:
-            self.started.emit(self.directory)
-
-            if not os.path.exists(self.directory):
-                self.error.emit(
-                    f"Directory does not exist: {self.directory}")
-                self.finished.emit([], [], 0)
-                return
-
-            if not os.path.isdir(self.directory):
-                self.error.emit(
-                    f"Path is not a directory: {self.directory}")
-                self.finished.emit([], [], 0)
-                return
-
-            audio_files = []
-            playlist_files = []
-            scan_errors = 0
-
-            for root, dirs, files in os.walk(self.directory):
-                if self._stopped:
-                    break
-                # emit progress update
-                self.folder_scanned.emit(root)
-
-                for file in files:
-                    if self._stopped:
-                        break
-                    try:
-                        file_path = os.path.join(root, file)
-                        file_ext = Path(file).suffix.lower()
-
-                        if file_ext in self.audio_extensions:
-                            audio_files.append(file_path)
-                        elif file_ext in self.playlist_extensions:
-                            playlist_files.append(file_path)
-
-                    except Exception as e:
-                        scan_errors += 1
-                        # non-blocking warning signal
-                        self.warning.emit(
-                            f"Error processing file {file}: {e}")
-
-            self.finished.emit(audio_files, playlist_files, scan_errors)
-
-        except Exception as e:
-            self.error.emit(
-                f"Error scanning directory {self.directory}: {e}")
-            self.finished.emit([], [], 1)
-'''
 
 class Worker(QThread):
     """

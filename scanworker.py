@@ -1,4 +1,3 @@
-
 import os
 import sqlite3
 from PySide6.QtCore import QMutex, QObject, Signal
@@ -19,7 +18,7 @@ playlist_extensions = {'.m3u', '.m3u8', '.cue', '.json'}
 class ScanWorker(QObject):
     started = Signal(str)  # directory
     folder_scanned = Signal(str)  # root folder path
-    finished = Signal(list, list, int)  # audio_files, playlist_files, scan_errors
+    finished = Signal(int, int, int)  # audio_files, playlist_files, scan_errors
     error = Signal(str)  # error message
     warning = Signal(str)  # warning message
     status = Signal(str)  # status message
@@ -30,7 +29,6 @@ class ScanWorker(QObject):
         self.audio_extensions = set(audio_extensions)
         self.playlist_extensions = set(playlist_extensions)
         self._stopped = False
-        self.mutex = QMutex()
 
     def stop(self):
         self._stopped = True
@@ -273,7 +271,7 @@ class ScanWorker(QObject):
             # Transition Duration removed for brevity
 
 
-            self.status.emit(f"Successfully extracted metadata from: {file_path}", 3000)
+            self.status.emit(f"Successfully extracted metadata from: {file_path}")
             return metadata
 
         except Exception as e:
