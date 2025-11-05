@@ -2,7 +2,7 @@ import sys
 import os
 import sqlite3
 from fuzzywuzzy import fuzz
-from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot, QMutex
+from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot, QMutex, qInstallMessageHandler
 from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -35,6 +35,7 @@ from qdarkstyle import DarkPalette, LightPalette
 from dotenv import load_dotenv
 from scanworker import ScanWorker
 from text import text_1, text_2, text_3, text_4, text_5, text_6, text_7, text_8
+import threading, traceback
 
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
@@ -49,6 +50,50 @@ MUSIC_DIR = ''
 wikipedia.set_lang("en")
 audio_extensions = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.wma'}
 playlist_extensions = {'.m3u', '.m3u8', '.cue', '.json'}
+
+
+def qt_message_handler(msg_type, context, message):
+    # Print Qt message text & context
+    print("=== Qt message ===")
+    print("type:", msg_type)
+    try:
+        print("message:", message)
+    except Exception:
+        print("message: <unprintable>")
+    # Python-level thread info
+    print("Python threading.current_thread():", threading.current_thread().name)
+    try:
+        print("QThread.currentThread():", QThread.currentThread())
+    except Exception:
+        pass
+    # Print Python stack for wherever we are in Python - useful to see what Python code
+    # was running when Qt emitted its message.
+    print("--- Python traceback (most recent call last) ---")
+    traceback.print_stack(file=sys.stdout)
+    print("=== end Qt message ===\n", flush=True)
+
+
+def log_player_action(action, player=None):
+    print(f"[PLAYER] action={action}")
+    print("  Python thread:", threading.current_thread().name)
+    if player is not None:
+        try:
+            print("  player.thread():", player.thread())
+        except Exception:
+            pass
+
+def log_worker_action(action, worker=None):
+    print(f"[WORKER] action={action}")
+    print("  Python thread:", threading.current_thread().name)
+    try:
+        print("  QThread.currentThread():", QThread.currentThread())
+    except Exception:
+        pass
+    if worker is not None:
+        try:
+            print("  worker.thread():", worker.thread())
+        except Exception:
+            pass
 
 
 def load_json(path: Path, default):
@@ -1177,46 +1222,73 @@ class AudioPlayer(QWidget):
         self.scan_worker = None
         self.scan_thread = None
 
+    # Replace the lambda signal connections in start_scan with explicit @Slot methods
+    # and connect using Qt.QueuedConnection so UI code always runs in the main thread.
+
+    from PySide6.QtCore import QThread, Qt, Slot
+    from PySide6.QtWidgets import QMessageBox, QProgressBar
 
     def start_scan(self, directory):
-        # audio_extensions and playlist_extensions are available in the class scope
-        self.progress = QProgressBar()
-        self.progress.setStyleSheet(
-            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
-        self.progress.setRange(0, 0)  # Indeterminate progress
-        self.status_bar.addPermanentWidget(self.progress)
-        self.status_bar.update()
-        # Create thread and worker
+        # ...
         self.scan_thread = QThread(parent=None)
-        self.scan_worker = ScanWorker(directory)
+        self.scan_worker = ScanWorker(directory)  # IMPORTANT: no parent
         self.scan_worker.moveToThread(self.scan_thread)
 
-        # Lifecycle wiring: ensure the thread is quit and objects are scheduled for deletion
-        # Connect quit and deleteBefore on finished BEFORE connecting the UI slot so those
-        # actions run first (queued calls preserve connection order).
-        self.scan_worker.finished.connect(self.scan_thread.quit)
-        self.scan_worker.finished.connect(self.scan_worker.deleteLater)
-        self.scan_thread.finished.connect(self.scan_thread.deleteLater)
+        # Lifecycle wiring
+        self.scan_worker.finished.connect(self.scan_thread.quit,
+                                          type=Qt.QueuedConnection)
+        self.scan_worker.finished.connect(self.scan_worker.deleteLater,
+                                          type=Qt.QueuedConnection)
+        self.scan_thread.finished.connect(self.scan_thread.deleteLater,
+                                          type=Qt.QueuedConnection)
 
-        # Worker started/updates -> UI
-        self.scan_thread.started.connect(self.scan_worker.run)
-        self.scan_worker.started.connect(
-            lambda d: self.status_bar.showMessage(f"Scanning directory: {d}"))
-        self.scan_worker.folder_scanned.connect(
-            lambda folder: self.status_bar.showMessage(
-                f"Scanning folder: {folder}"))
-        self.scan_worker.warning.connect(
-            lambda msg: self.status_bar.showMessage(msg))
-        self.scan_worker.status.connect(
-            lambda msg: self.status_bar.showMessage(msg))
-        self.scan_worker.error.connect(
-            lambda msg: QMessageBox.critical(self, "Error", msg))
+        self.scan_thread.started.connect(self.scan_worker.run,
+                                         type=Qt.QueuedConnection)
 
-        # Keep the UI-handling slot connected (runs in main thread)
-        self.scan_worker.finished.connect(self.on_finished)
+        # Connect worker signals -> main-thread slots (explicit slots below)
+        self.scan_worker.started.connect(self.on_scan_started,
+                                         type=Qt.QueuedConnection)
+        self.scan_worker.folder_scanned.connect(self.on_folder_scanned,
+                                                type=Qt.QueuedConnection)
+        self.scan_worker.warning.connect(self.on_worker_warning,
+                                         type=Qt.QueuedConnection)
+        self.scan_worker.status.connect(self.on_worker_status,
+                                        type=Qt.QueuedConnection)
+        self.scan_worker.error.connect(self.on_worker_error,
+                                       type=Qt.QueuedConnection)
 
-        # Start the thread (this will execute ScanWorker.run() inside the thread)
+        # Keep the UI-handling finished slot
+        self.scan_worker.finished.connect(self.on_finished,
+                                          type=Qt.QueuedConnection)
+
         self.scan_thread.start()
+
+    # New slot methods (add these to your main window/controller class)
+    @Slot(str)
+    def on_scan_started(self, directory):
+        # Always runs in main thread (QueuedConnection)
+        self.status_bar.showMessage(f"Scanning directory: {directory}")
+
+    @Slot(str)
+    def on_folder_scanned(self, folder):
+        # Always runs in main thread (QueuedConnection)
+        self.status_bar.showMessage(f"Scanning folder: {folder}")
+
+    @Slot(str)
+    def on_worker_warning(self, msg):
+        # Always runs in main thread (QueuedConnection)
+        self.status_bar.showMessage(msg)
+
+    @Slot(str)
+    def on_worker_status(self, msg):
+        # Always runs in main thread (QueuedConnection)
+        self.status_bar.showMessage(msg)
+
+    @Slot(str)
+    def on_worker_error(self, msg):
+        # Always runs in main thread (QueuedConnection)
+        QMessageBox.critical(self, "Error", msg)
+
 
     def stop_scan(self):
         """Stop the ongoing scan operation"""
@@ -1225,6 +1297,7 @@ class AudioPlayer(QWidget):
         # Ask the worker to stop
         try:
             self.scan_worker.stop()  # sets internal _stopped flag
+           # log_worker_action("stop")
         except Exception:
             pass
 
@@ -1924,6 +1997,7 @@ class AudioPlayer(QWidget):
 #        self.next_player.setSource(QUrl.fromLocalFile(next_path))
         self.next_output.setVolume(0)
         self.slider.setValue(0)
+     #   log_player_action("play", self.player)
         self.next_player.play()
        # self.load_lyrics(next_path)
         self.lyrics_timer.start()
@@ -1984,6 +2058,7 @@ class AudioPlayer(QWidget):
                 if old_player is not None:
                     try:
                         old_player.stop()
+                     #   log_player_action("stop", self.player)
                     except Exception:
                         pass
                # self.audio_output.setVolume(1.0)
@@ -2118,6 +2193,7 @@ class AudioPlayer(QWidget):
             media_url = file.absolute_path()
             self.player.setSource(media_url)
             self.slider.setValue(0)
+       #     log_player_action("play", self.player)
             self.player.play()
             self.lyrics_timer.start()
             self.playlist_widget.setCurrentRow(idx)
@@ -2530,6 +2606,7 @@ class AudioPlayer(QWidget):
             # Adjust current_index if necessary
             if row == self.current_index:
                 self.player.stop()
+               #("stop", self.player)
                 self.current_index = -1
                 self.lyrics_display.clear()
                 self.update_play_button()
@@ -4203,6 +4280,7 @@ class TextEdit(QWidget):
         self.instructions_edit.setText(text_8)
 
 if __name__ == "__main__":
+  #  qInstallMessageHandler(qt_message_handler)
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon('static/images/favicon.ico'))
     settings = get_settings()
