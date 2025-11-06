@@ -269,9 +269,7 @@ class ScanWorker(QObject):
                     f"Error reading album art from {file_path}: {str(e)}")
 
             # Transition Duration removed for brevity
-
-
-            self.status.emit(f"Successfully extracted metadata from: {file_path}")
+          #  self.status.emit(f"Successfully extracted metadata from: {file_path}")
             return metadata
 
         except Exception as e:

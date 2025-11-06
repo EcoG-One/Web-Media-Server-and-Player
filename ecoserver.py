@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import sqlite3
 import subprocess
@@ -842,30 +843,51 @@ def parse_playlist_file(playlist_path):
                 except Exception as e:
                     logger.error(str(e))
                     return playlist
-
-        for line in lines:
-            line_count += 1
-            try:
-                # line = line.strip('ufeff01')
-                line = line.strip()
-                line = line.strip('.\\')
-                if not sys.platform.startswith("win"):
-                    line = line.replace("\\", "/")
-                if line and not line.startswith(('#', '﻿#')):
-                    # Convert relative path to absolute path
-                    if not os.path.isabs(line):
-                        line = os.path.join(playlist_dir, line)
-
-                    if os.path.exists(line):
-                        playlist.append(line)
-                        logger.debug(f"Added to playlist: {line}")
-                    else:
+        ext = Path(playlist_path).suffix.lower()
+        if lines:
+            if ext == '.cue':
+                for line in lines:
+                    line_count += 1
+                    try:
+                        if re.match('^FILE .(.*). (.*)$', line):
+                            song_path = line[6:-7]
+                            # Convert relative path to absolute path
+                            if not os.path.isabs(song_path):
+                                song_path = os.path.abspath(
+                                    os.path.join(playlist_dir, song_path))
+                            if os.path.exists(song_path):
+                                playlist.append(song_path)
+                                logger.debug(f"Added to playlist: {song_path}")
+                            else:
+                                logger.warning(
+                                    f"File not found in playlist (line {line_count}): {song_path}")
+                    except Exception as e:
                         logger.warning(
-                            f"File not found in playlist (line {line_count}): {line}")
+                            f"Error processing playlist line {line_count}: {e}")
+            else:
+                for line in lines:
+                    line_count += 1
+                    try:
+                        # line = line.strip('ufeff01')
+                        line = line.strip()
+                        line = line.strip('.\\')
+                        if not sys.platform.startswith("win"):
+                            line = line.replace("\\", "/")
+                        if line and not line.startswith(('#', '﻿#')):
+                            # Convert relative path to absolute path
+                            if not os.path.isabs(line):
+                                line = os.path.join(playlist_dir, line)
 
-            except Exception as e:
-                logger.warning(
-                    f"Error processing playlist line {line_count}: {e}")
+                            if os.path.exists(line):
+                                playlist.append(line)
+                                logger.debug(f"Added to playlist: {line}")
+                            else:
+                                logger.warning(
+                                    f"File not found in playlist (line {line_count}): {line}")
+
+                    except Exception as e:
+                        logger.warning(
+                            f"Error processing playlist line {line_count}: {e}")
 
         logger.info(f"Parsed playlist with {len(playlist)} valid files")
         return playlist

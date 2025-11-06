@@ -12,11 +12,11 @@ from PySide6.QtWidgets import (
     QDialog) # QMainWindow,
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 import qdarkstyle
-import mutagen
+# import mutagen
 from mutagen import File
 from mutagen.flac import FLAC
 from mediafile import MediaFile
-import datetime
+# import datetime
 from pathlib import Path
 from random import shuffle
 import librosa
@@ -31,7 +31,7 @@ import base64
 import webbrowser
 import wikipedia
 from qdarkstyle import DarkPalette, LightPalette
-#from get_lyrics import LyricsPlugin
+from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
 from scanworker import ScanWorker
 from text import text_1, text_2, text_3, text_4, text_5, text_6, text_7, text_8
@@ -456,7 +456,7 @@ class AudioPlayer(QWidget):
         self.open_action.triggered.connect(self.show_playlist_menu)
         local_menu.addAction(self.open_action)
 
-        self.load_action = QAction(QIcon("icons/edit-alignment.png"), "Load &Playlists", self)
+        self.load_action = QAction(QIcon("icons/playlist.png"), "Load &Playlists", self)
         self.load_action.setShortcut(QKeySequence.Print)
         self.load_action.triggered.connect(self.get_local_playlists)
         local_menu.addAction(self.load_action)
@@ -522,47 +522,47 @@ class AudioPlayer(QWidget):
         self.server_action.triggered.connect(self.enter_server)
         remote_menu.addAction(self.server_action)
 
-        self.load_remote_action = QAction(QIcon("icons/edit-alignment.png"), "Load &Playlists", self)
+        self.load_remote_action = QAction(QIcon("icons/playlistR.png"), "Load &Playlists", self)
         self.load_remote_action.setShortcut(QKeySequence.Print)
         self.load_remote_action.triggered.connect(self.get_playlists)
         remote_menu.addAction(self.load_remote_action)
 
-        self.list_remote_songs_action = QAction(QIcon("icons/music-beam-16.png"), "List all &Songs", self)
+        self.list_remote_songs_action = QAction(QIcon("icons/music-beamR.png"), "List all &Songs", self)
         self.list_remote_songs_action.setShortcut(QKeySequence("Ctrl+S"))
         self.list_remote_songs_action.triggered.connect(self.get_songs)
         remote_menu.addAction(self.list_remote_songs_action)
 
-        self.list_remote_artists_action = QAction(QIcon("icons/violoncello.png"), "List all &Artists", self)
+        self.list_remote_artists_action = QAction(QIcon("icons/violoncelloR.png"), "List all &Artists", self)
         self.list_remote_artists_action.setShortcut(QKeySequence("Ctrl+A"))
         self.list_remote_artists_action.triggered.connect(self.get_artists)
         remote_menu.addAction(self.list_remote_artists_action)
 
-        self.list_remote_albums_action = QAction(QIcon("icons/vinil.png"), "List all Al&bums", self)
+        self.list_remote_albums_action = QAction(QIcon("icons/vinilR.png"), "List all Al&bums", self)
         self.list_remote_albums_action.setShortcut(QKeySequence("Ctrl+B"))
         self.list_remote_albums_action.triggered.connect(self.get_albums)
         remote_menu.addAction(self.list_remote_albums_action)
 
-        self.scan_remote_action = QAction(QIcon("icons/database-insert.png"), "Scan &Library", self)
+        self.scan_remote_action = QAction(QIcon("icons/database-insertR.png"), "Scan &Library", self)
         self.scan_remote_action.setShortcut(QKeySequence("Ctrl+R"))
         self.scan_remote_action.triggered.connect(self.scan_remote_library)
         remote_menu.addAction(self.scan_remote_action)
 
-        self.purge_remote_action = QAction(QIcon("icons/database-delete.png"), "P&urge Library", self)
+        self.purge_remote_action = QAction(QIcon("icons/database-deleteR.png"), "P&urge Library", self)
         self.purge_remote_action.setShortcut(QKeySequence("Ctrl+U"))
         self.purge_remote_action.triggered.connect(self.purge_remote_library)
         remote_menu.addAction(self.purge_remote_action)
 
-        self.remote_web_action = QAction(QIcon("icons/internet.png"), "Launch &Web UI", self)
+        self.remote_web_action = QAction(QIcon("icons/internetR.png"), "Launch &Web UI", self)
         self.remote_web_action.setShortcut(QKeySequence("Ctrl+I"))
         self.remote_web_action.triggered.connect(self.remote_web_ui)
         remote_menu.addAction(self.remote_web_action)
 
-        self.remote_desktop_action = QAction(QIcon("icons/application-blue.png"), "Launch &Desktop UI", self)
+        self.remote_desktop_action = QAction(QIcon("icons/favicon.ico"), "Launch &Desktop UI", self)
         self.remote_desktop_action.setShortcut(QKeySequence("Ctrl+D"))
         self.remote_desktop_action.triggered.connect(self.remote_desk_ui)
         remote_menu.addAction(self.remote_desktop_action)
 
-        self.remote_shutdown_action = QAction(QIcon("icons/power.png"), "S&hutdown Server", self)
+        self.remote_shutdown_action = QAction(QIcon("icons/powerR.png"), "S&hutdown Server", self)
         self.remote_shutdown_action.setShortcut(QKeySequence("Ctrl+C"))
         self.remote_shutdown_action.triggered.connect(self.shutdown_server)
         remote_menu.addAction(self.remote_shutdown_action)
@@ -600,8 +600,9 @@ class AudioPlayer(QWidget):
         self.lyrics_action = CheckBoxAction(self, "Auto download Lyrics")
       #  self.lyrics_action.triggered.connect(self.toggle_lyrics_scan)
         lyrics_menu.addAction(self.lyrics_action)
-        self.checkbox = self.lyrics_action.widget.findChild(QCheckBox)
-        self.checkbox.stateChanged.connect(self.toggle_lyrics_scan)
+        self.lyrics_checkbox = self.lyrics_action.widget.findChild(QCheckBox)
+        self.lyrics_checkbox.setChecked(self.scan_for_lyrics)
+        self.lyrics_checkbox.stateChanged.connect(self.toggle_lyrics_scan)
 
         # Help menu
         help_menu = QMenu("&Help", self)
@@ -828,8 +829,8 @@ class AudioPlayer(QWidget):
         gap_killer_group = QGroupBox("Auto Mix")
      #   gap_killer_group.setFixedSize(QSize(180, 80))
         gap_box = QHBoxLayout()
-        self.chk_gap = QCheckBox("ON")
-        self.chk_gap.setChecked(True)
+      #  self.chk_gap = QCheckBox("ON")
+       # self.chk_gap.setChecked(True)
         self.silence_db = QSlider(Qt.Horizontal)
         self.silence_db.setRange(-60, -20)
         self.silence_db.setValue(-46)
@@ -837,7 +838,7 @@ class AudioPlayer(QWidget):
         self.silence_dur.setRange(1, 50)
         self.silence_dur.setValue(5)
         self.gap_status = QLabel("Monitoring")
-        gap_box.addWidget(self.chk_gap)
+       # gap_box.addWidget(self.chk_gap)
         gap_box.addWidget(QLabel("Threshold (dB):"))
         gap_box.addWidget(self.silence_db, 1)
         gap_box.addWidget(QLabel("Min Silence (x100ms):"))
@@ -862,7 +863,7 @@ class AudioPlayer(QWidget):
         meta_layout.addWidget(self.year_label)
         meta_layout.addWidget(self.codec_label)
 
-        metadata_layout = QVBoxLayout(self)
+        metadata_layout = QVBoxLayout()
         metadata_layout.addWidget(self.btn_info)
         metadata_layout.addWidget(self.text)
 
@@ -900,7 +901,7 @@ class AudioPlayer(QWidget):
         playlist_layout.addLayout(shuffle_box)
         playlist_layout.addWidget(self.playlist_widget)
 
-        main_layout = QHBoxLayout(self)
+        main_layout = QHBoxLayout()
         main_layout.addLayout(playlist_layout, 1)
         main_layout.addLayout(left_layout, 2)
         layout.addWidget(menubar)
@@ -1116,7 +1117,7 @@ class AudioPlayer(QWidget):
 
     def toggle_lyrics_scan(self):
         """Toggle lyrics scanning option"""
-        if self.checkbox.isChecked():
+        if self.lyrics_checkbox.isChecked():
             self.scan_for_lyrics = True
         else:
             self.scan_for_lyrics = False
@@ -2433,8 +2434,26 @@ class AudioPlayer(QWidget):
 
     def load_cue_playlist(self, path):
         songs = []
-        with open(path, encoding='utf-8-sig') as f:
-            for line in f:
+        try:
+            with open(path, 'r', encoding='utf-8-sig') as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            # Try with ANSI encoding if UTF-8 fails
+            try:
+                with open(path, 'r', encoding='ANSI') as f:
+                    lines = f.readlines()
+            except UnicodeDecodeError:
+                try:
+                    # Try to guess the encoding if UTF-8 and ANSI fail
+                    from charset_normalizer import from_path
+                    result = from_path(path).best()
+                    with open(path, 'r', encoding=result.encoding) as f:
+                        lines = f.readlines()
+                except Exception as e:
+                    QMessageBox.critical(self, "Error!", str(e))
+                    return songs
+        if lines:
+            for line in lines:
                 if re.match('^FILE .(.*). (.*)$', line):
                     file_path = line[6:-7]
                     if not os.path.isabs(file_path):
@@ -2891,18 +2910,30 @@ class AudioPlayer(QWidget):
 
         try:
             file = MediaFile(file_path)
+            for field in file.fields():
+                try:
+                    if field != 'art' and field != 'lyrics':
+                        self.text.append(field + ': ' + getattr(file, field))
+                except:
+                    pass
+                self.move_to_top()
             transition_duration = self.detect_low_intensity_segments(
                 file_path, threshold_db=self.silence_threshold_db,
                 frame_duration=0.1)
+            if file.channels == 2:
+                channels = "Stereo"
+            else:
+                channels = str(file.channels) + ' channels'
             metadata = {
                 'artist'             : file.artist,
                 'album_artist'       : file.albumartist,
                 'title'              : file.title,
                 'album'              : file.album,
-                'year'               : file.year,
+                'year'               : file.original_year or file.year,
                 'duration'           : file.length,
                 'lyrics'             : file.lyrics,
-                'codec'              : file.format,
+                'codec'              : file.format + ' ' + channels
+                                       + str(file.bitdepth) + 'bit ' + str(file.samplerate/1000) + 'kHz',
                 'picture'            : file.art,
                 'transition_duration': transition_duration
             }
@@ -2914,15 +2945,30 @@ class AudioPlayer(QWidget):
                 'album_artist'       : 'Unknown Album Artist',
                 'title'              : 'Unknown Title',
                 'album'              : 'Unknown Album',
-                'year'               : 'Unknown Year',
+                'year'               : '---',
                 'duration'           : 0,
-                'lyrics'             : '---',
+                'lyrics'             : '--',
                 'codec'              : '',
                 'picture'            : None,
                 'transition_duration': 5.0
             }
         self.status_bar.showMessage(
             f"Successfully extracted metadata from: {file_path}", 3000)
+        if metadata['lyrics'] == "--" and self.scan_for_lyrics:
+            try:
+                lyr = LyricsPlugin()
+                metadata['lyrics'] = lyr.get_lyrics(metadata['artist'],
+                                                    metadata['title'],
+                                                    metadata['album'],
+                                                    metadata['duration'])
+                if metadata['lyrics'] != "":
+                    lrc_path = os.path.splitext(file_path)[0] + ".lrc"
+                    with open(lrc_path, "w", encoding='utf-8-sig') as f:
+                        f.write(metadata['lyrics'])
+            except Exception as e:
+                self.status_bar.showMessage(
+                    f"Error reading lyrics from {file_path}: {str(e)}")
+                metadata['lyrics'] = "--"
         return metadata
 
     def update_metadata(self, index):
@@ -2946,26 +2992,9 @@ class AudioPlayer(QWidget):
           #  self.meta_data = None
             self.meta_data = self.get_audio_metadata(file.path)
             self.set_metadata_label()
-            if self.meta_data['year'] == 'Unknown Year':
-                self.year_label.setText('Year: ---')
-            else:
-                self.year_label.setText('Year: ' + str(self.meta_data['year']))
-            codec = self.meta_data['codec']
-            self.codec_label.setText(codec.replace('audio/', ''))
             self.load_lyrics(file)
             self.set_album_art(file)
-            meta_list = mutagen.File(file.path).pprint().split("=")
-            new_meta_list = [meta_list[0]]
-            for m in range(len(meta_list) - 1):
-                if ((not 'LYRICS' in meta_list[m]) and (not 'lyrics' in meta_list[m])
-                        and (not '©lyr' in meta_list[m])):
-                    new_meta_list.append(meta_list[m + 1])
-            new_meta_str = ': '.join([str(s) for s in new_meta_list])
-            new_meta_str = new_meta_str.replace('LYRICS:', 'DATE:')
-            final_meta = new_meta_str.split('\n: ')
-            for item in final_meta:
-                self.text.append(item)
-            self.move_to_top()
+
 
 
     def set_metadata_label(self):
@@ -2984,6 +3013,10 @@ class AudioPlayer(QWidget):
         title = self.meta_data['title']
         artist = self.meta_data['artist']
         album = self.meta_data['album']
+        year = str(self.meta_data['year'])
+        codec = self.meta_data['codec']
+
+        self.codec_label.setText(codec)
         if len(title) > 41:
             multiline_title = title[:41] + '\n         '
             l = (len(title) // 41)
@@ -3013,7 +3046,10 @@ class AudioPlayer(QWidget):
                 'Album: {0}{1}'.format(multiline_album, album[(l * 35):]))
         else:
             self.album_label.setText('Album: ' + album)
-      #  self.reveal_label.setText(self.meta_data["title"])
+        self.year_label.setText('Year: ' + year)
+        self.codec_label.setText('Codec: ' + codec)
+
+
 
     def get_info(self):
         if not self.meta_data:
@@ -3688,45 +3724,28 @@ class AudioPlayer(QWidget):
             playlist = []
             playlist_dir = os.path.dirname(playlist_path)
             line_count = 0
-            try:
-                with open(playlist_path, 'r', encoding='utf-8-sig') as f:
-                    lines = f.readlines()
-            except UnicodeDecodeError:
-                # Try with ANSI encoding if UTF-8 fails
-                try:
-                    with open(playlist_path, 'r', encoding='ANSI') as f:
-                        lines = f.readlines()
-                except UnicodeDecodeError:
-                    try:
-                        # Try to guess the encoding if UTF-8 and ANSI fail
-                        from charset_normalizer import from_path
-                        result = from_path(playlist_path).best()
-                        with open(playlist_path, 'r',
-                                  encoding=result.encoding) as f:
-                            lines = f.readlines()
-                    except Exception as e:
-                        QMessageBox.critical(self, "error", str(e))
-                        return playlist
+            ext = Path(playlist_path).suffix.lower()
+            if ext in ['.m3u', '.m3u8']:
+                lines = self.load_m3u_playlist(playlist_path)
+            elif ext == '.cue':
+                lines = self.load_cue_playlist(playlist_path)
+            elif ext == '.json':
+                lines = self.load_json_playlist(playlist_path)
+            else:
+                QMessageBox.warning(self, "Error!",
+                                    f"Unsupported playlist format: {ext}")
+                return
 
             for line in lines:
                 line_count += 1
                 try:
-                    line = line.strip()
-                    line = line.strip('.\\')
-                    if not sys.platform.startswith("win"):
-                        line = line.replace("\\", "/")
-                    if line and not line.startswith(('#', '﻿#')):
-                        # Convert relative path to absolute path
-                        if not os.path.isabs(line):
-                            line = os.path.join(playlist_dir, line)
-
-                        if os.path.exists(line):
-                            playlist.append(line)
-                            self.status_bar.showMessage(
-                                f"Added to playlist: {line}")
-                        else:
-                            QMessageBox.critical(self, "warning",
-                                                 f"File not found in playlist (line {line_count}): {line}")
+                    if os.path.exists(line.path):
+                        playlist.append(line)
+                        self.status_bar.showMessage(
+                            f"Added to playlist: {line}")
+                    else:
+                        QMessageBox.critical(self, "warning",
+                                             f"File not found in playlist (line {line_count}): {line}")
 
                 except Exception as e:
                     QMessageBox.critical(self, "warning",
@@ -3806,22 +3825,7 @@ class AudioPlayer(QWidget):
                     songs = []
                     idx = self.playlist_widget.currentRow()
                     playlist_name = data['name']
-                    for line in data["playlist"]:
-                        line = line.strip()
-                        if not os.path.isabs(line):
-                            line = os.path.abspath(
-                                os.path.join(os.path.dirname(line), line))
-                        if os.path.isfile(line):
-                            audio = File(line)
-                        else:
-                            audio = None
-                        if not line or not audio:
-                            continue
-                        song = ListItem()
-                        song.item_type = "song_title"
-                        song.display_text = os.path.basename(line)
-                        song.path = line
-                        song.is_remote = False
+                    for song in data["playlist"]:
                         songs.append(song)
                     self.clear_playlist()
                     self.add_files(songs)
