@@ -427,7 +427,7 @@ def add_covers_to_database():
                         im_bytes = im_file.getvalue()  # im_bytes: image in binary format.
                         cover = base64.b64encode(im_bytes).decode('utf-8')
                     cursor.execute('''
-                        INSERT INTO Covers (album, cover) 
+                        INSERT INTO Covers (album, album_artist, cover) 
                         VALUES (?,?)''', (album, cover))
                     added_covers += 1
                     print(
@@ -514,10 +514,11 @@ try:
     audio_files, playlist_files = scan_for_audio_files("/share/Music/0.AtoZ")
 
     # Add to database
-    added_songs = add_songs_to_database(audio_files)
-    added_playlists = add_playlists_to_database(playlist_files)
+  #  added_songs = add_songs_to_database(audio_files)
+  #  added_playlists = add_playlists_to_database(playlist_files)
+    added_covers = add_covers_to_database()
 
-    success_msg = f'Successfully added {added_songs} songs and {added_playlists} playlists to the database.'
+    success_msg = f'Successfully added {added_covers} songs to the database.'
     print(success_msg)
 
 except Exception as e:

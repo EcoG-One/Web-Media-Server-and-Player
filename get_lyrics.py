@@ -29,7 +29,9 @@ import requests
 from bs4 import BeautifulSoup
 from unidecode import unidecode
 import plugins
-from distance import string_dist
+from jellyfish import levenshtein_distance
+from beets.util import as_string
+#from distance import string_dist
 
 if TYPE_CHECKING:
     from tasks import ImportTask
@@ -42,6 +44,108 @@ if TYPE_CHECKING:
         JSONDict,
         LRCLibAPI,
     )
+
+
+# Candidate distance scoring.
+
+# Artist signals that indicate "various artists". These are used at the
+# album level to determine whether a given release is likely a VA
+# release and also on the track level to to remove the penalty for
+# differing artists.
+VA_ARTISTS = ("", "various artists", "various", "va", "unknown")
+
+# Parameters for string distance function.
+# Words that can be moved to the end of a string using a comma.
+SD_END_WORDS = ["the", "a", "an"]
+# Reduced weights for certain portions of the string.
+SD_PATTERNS = [
+    (r"^the ", 0.1),
+    (r"[\[\(]?(ep|single)[\]\)]?", 0.0),
+    (r"[\[\(]?(featuring|feat|ft)[\. :].+", 0.1),
+    (r"\(.*?\)", 0.3),
+    (r"\[.*?\]", 0.3),
+    (r"(, )?(pt\.|part) .+", 0.2),
+]
+# Replacements to use before testing distance.
+SD_REPLACE = [
+    (r"&", "and"),
+]
+
+
+def _string_dist_basic(str1: str, str2: str) -> float:
+    """Basic edit distance between two strings, ignoring
+    non-alphanumeric characters and case. Comparisons are based on a
+    transliteration/lowering to ASCII characters. Normalized by string
+    length.
+    """
+    assert isinstance(str1, str)
+    assert isinstance(str2, str)
+    str1 = as_string(unidecode(str1))
+    str2 = as_string(unidecode(str2))
+    str1 = re.sub(r"[^a-z0-9]", "", str1.lower())
+    str2 = re.sub(r"[^a-z0-9]", "", str2.lower())
+    if not str1 and not str2:
+        return 0.0
+    return levenshtein_distance(str1, str2) / float(max(len(str1), len(str2)))
+
+
+def string_dist(str1: str | None, str2: str | None) -> float:
+    """Gives an "intuitive" edit distance between two strings. This is
+    an edit distance, normalized by the string length, with a number of
+    tweaks that reflect intuition about text.
+    """
+    if str1 is None and str2 is None:
+        return 0.0
+    if str1 is None or str2 is None:
+        return 1.0
+
+    str1 = str1.lower()
+    str2 = str2.lower()
+
+    # Don't penalize strings that move certain words to the end. For
+    # example, "the something" should be considered equal to
+    # "something, the".
+    for word in SD_END_WORDS:
+        if str1.endswith(f", {word}"):
+            str1 = f"{word} {str1[: -len(word) - 2]}"
+        if str2.endswith(f", {word}"):
+            str2 = f"{word} {str2[: -len(word) - 2]}"
+
+    # Perform a couple of basic normalizing substitutions.
+    for pat, repl in SD_REPLACE:
+        str1 = re.sub(pat, repl, str1)
+        str2 = re.sub(pat, repl, str2)
+
+    # Change the weight for certain string portions matched by a set
+    # of regular expressions. We gradually change the strings and build
+    # up penalties associated with parts of the string that were
+    # deleted.
+    base_dist = _string_dist_basic(str1, str2)
+    penalty = 0.0
+    for pat, weight in SD_PATTERNS:
+        # Get strings that drop the pattern.
+        case_str1 = re.sub(pat, "", str1)
+        case_str2 = re.sub(pat, "", str2)
+
+        if case_str1 != str1 or case_str2 != str2:
+            # If the pattern was present (i.e., it is deleted in the
+            # the current case), recalculate the distances for the
+            # modified strings.
+            case_dist = _string_dist_basic(case_str1, case_str2)
+            case_delta = max(0.0, base_dist - case_dist)
+            if case_delta == 0.0:
+                continue
+
+            # Shift our baseline strings down (to avoid rematching the
+            # same part of the string) and add a scaled distance
+            # amount to the penalties.
+            str1 = case_str1
+            str2 = case_str2
+            base_dist = case_dist
+            penalty += weight * case_delta
+
+    return base_dist + penalty
+
 
 
 def sanitize_choices(

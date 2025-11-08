@@ -2463,7 +2463,7 @@ class AudioPlayer(QWidget):
                     song.item_type = "song_title"
                     song.path = file_path
                     song.is_remote = False
-                    song.display_text = file_path
+                    song.display_text = os.path.basename(file_path)
                     songs.append(song)
         return songs
 
@@ -2921,9 +2921,9 @@ class AudioPlayer(QWidget):
                 file_path, threshold_db=self.silence_threshold_db,
                 frame_duration=0.1)
             if file.channels == 2:
-                channels = "Stereo"
+                channels = "Stereo "
             else:
-                channels = str(file.channels) + ' channels'
+                channels = str(file.channels) + ' channels '
             metadata = {
                 'artist'             : file.artist,
                 'album_artist'       : file.albumartist,
@@ -2954,7 +2954,7 @@ class AudioPlayer(QWidget):
             }
         self.status_bar.showMessage(
             f"Successfully extracted metadata from: {file_path}", 3000)
-        if metadata['lyrics'] == "--" and self.scan_for_lyrics:
+        if metadata['lyrics'] is None and self.scan_for_lyrics:
             try:
                 lyr = LyricsPlugin()
                 metadata['lyrics'] = lyr.get_lyrics(metadata['artist'],
@@ -2965,6 +2965,10 @@ class AudioPlayer(QWidget):
                     lrc_path = os.path.splitext(file_path)[0] + ".lrc"
                     with open(lrc_path, "w", encoding='utf-8-sig') as f:
                         f.write(metadata['lyrics'])
+            except NotImplementedError as e:
+                self.status_bar.showMessage(
+                    f"Cannot Find lyrics for {file_path}: {str(e)}", 8000)
+                metadata['lyrics'] = f"Cannot Find lyrics for '{metadata['title']}' by {metadata['artist']}."
             except Exception as e:
                 self.status_bar.showMessage(
                     f"Error reading lyrics from {file_path}: {str(e)}")
@@ -3742,10 +3746,10 @@ class AudioPlayer(QWidget):
                     if os.path.exists(line.path):
                         playlist.append(line)
                         self.status_bar.showMessage(
-                            f"Added to playlist: {line}")
+                            f"Added to playlist: {line.display_text}")
                     else:
                         QMessageBox.critical(self, "warning",
-                                             f"File not found in playlist (line {line_count}): {line}")
+                                             f"File not found in playlist (line {line_count}): {line.display_text}")
 
                 except Exception as e:
                     QMessageBox.critical(self, "warning",
