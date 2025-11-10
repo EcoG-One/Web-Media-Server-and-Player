@@ -31,6 +31,9 @@ import base64
 import webbrowser
 import wikipedia
 from qdarkstyle import DarkPalette, LightPalette
+# from local_meta_worker import LocalMetaWorker
+from sklearn.metrics import d2_absolute_error_score
+
 from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
 from scanworker import ScanWorker
@@ -48,7 +51,7 @@ DB_PATH = APP_DIR / 'music.db'
 COVERS_DB_PATH = APP_DIR / 'covers.db'
 MUSIC_DIR = ''
 wikipedia.set_lang("en")
-audio_extensions = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.wma'}
+audio_extensions = {'.mp3', '.flac', '.wav', '.ape', '.ogg', '.m4a', '.aac', '.wma'}
 playlist_extensions = {'.m3u', '.m3u8', '.cue', '.json'}
 
 
@@ -1947,6 +1950,7 @@ class AudioPlayer(QWidget):
 
     def set_transition_duration(self, val):
         self.transition_duration = val
+        self.transition_spin.setValue(int(self.transition_duration))
 
     def set_skip_silence(self, val):
         self.skip_silence = val
@@ -2849,10 +2853,11 @@ class AudioPlayer(QWidget):
                 if self.mix_method == "Auto":
                     self.transition_duration = self.meta_data.get(
                         'transition_duration', 5)
+                    self.set_transition_duration(self.transition_duration)
               #  self.set_album_art(path)
 
                 self.set_metadata_label()
-                self.year_label.setText('Year: ' + self.meta_data['year'])
+                self.year_label.setText('Year: ' + str(self.meta_data['year']))
                 self.codec_label.setText(codec)
                 self.load_lyrics(file)
                 self.set_album_art(file)
@@ -2917,25 +2922,28 @@ class AudioPlayer(QWidget):
                 except:
                     pass
                 self.move_to_top()
-            transition_duration = self.detect_low_intensity_segments(
-                file_path, threshold_db=self.silence_threshold_db,
-                frame_duration=0.1)
+            if self.mix_method == "Auto":
+                self.transition_duration = self.detect_low_intensity_segments(
+                    file_path, threshold_db=self.silence_threshold_db,
+                    frame_duration=0.1)
+                self.set_transition_duration(self.transition_duration)
+                self.transition_spin.setValue(int(self.transition_duration))
             if file.channels == 2:
                 channels = "Stereo "
             else:
                 channels = str(file.channels) + ' channels '
             metadata = {
-                'artist'             : file.artist,
-                'album_artist'       : file.albumartist,
-                'title'              : file.title,
-                'album'              : file.album,
-                'year'               : file.original_year or file.year,
-                'duration'           : file.length,
+                'artist'             : file.artist or 'Unknown Artist',
+                'album_artist'       : file.albumartist or file.artist or 'Unknown Album Artist',
+                'title'              : file.title or os.path.basename(file_path),
+                'album'              : file.album or 'Unknown Album',
+                'year'               : file.original_year or file.year or '---',
+                'duration'           : file.length or 0,
                 'lyrics'             : file.lyrics,
                 'codec'              : file.format + ' ' + channels
                                        + str(file.bitdepth) + 'bit ' + str(file.samplerate/1000) + 'kHz',
                 'picture'            : file.art,
-                'transition_duration': transition_duration
+                'transition_duration': self.transition_duration
             }
         except Exception as e:
             self.status_bar.showMessage(
@@ -2992,12 +3000,14 @@ class AudioPlayer(QWidget):
             self.meta_worker.start()
             self.meta_worker.mutex.lock()
         else:
-            # local fallback
-          #  self.meta_data = None
-            self.meta_data = self.get_audio_metadata(file.path)
-            self.set_metadata_label()
-            self.load_lyrics(file)
-            self.set_album_art(file)
+            self.meta_worker = LocalMetaWorker(file.path,
+                                               self.get_audio_metadata)
+            self.meta_worker.work_completed.connect(self.on_receive_metadata)
+            self.meta_worker.work_error.connect(self.on_metadata_error)
+            self.meta_worker.finished.connect(self.cleanup_metadata)
+            # mirror behavior of other workers (lock so handler will unlock)
+            self.meta_worker.mutex.lock()
+            self.meta_worker.start()
 
 
 
@@ -3952,6 +3962,32 @@ class AudioPlayer(QWidget):
                                   "scan_for_lyrics"     : self.scan_for_lyrics,
                                   "style"               : self.dark_style                                     })
         self.close()
+
+
+class LocalMetaWorker(QThread):
+    """
+    Runs local audio metadata extraction off the GUI thread.
+    Expects an extractor callable that takes a single file_path arg and
+    returns the metadata dict (same structure as get_audio_metadata).
+    """
+    work_completed = Signal(dict)   # Emits {'retrieved_metadata': metadata}
+    work_error = Signal(str)
+
+    def __init__(self, file_path: str, extractor_callable):
+        super().__init__()
+        self.file_path = file_path
+        self.extractor_callable = extractor_callable
+        self.mutex = QMutex()
+
+    def run(self):
+        try:
+            # Call the provided extractor (this will perform heavy work)
+            metadata = self.extractor_callable(self.file_path)
+            # Emit in same structure as your remote meta worker
+            self.work_completed.emit({'retrieved_metadata': metadata})
+        except Exception as e:
+            self.work_error.emit(str(e))
+
 
 class Worker(QThread):
     """
