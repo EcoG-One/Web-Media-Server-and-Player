@@ -33,12 +33,22 @@ import wikipedia
 from qdarkstyle import DarkPalette, LightPalette
 # from local_meta_worker import LocalMetaWorker
 from sklearn.metrics import d2_absolute_error_score
-
 from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
 from scanworker import ScanWorker
 from text import text_1, text_2, text_3, text_4, text_5, text_6, text_7, text_8
 import threading, traceback
+
+# try to import VLC fallback (optional dependency)
+try:
+    import vlc  # python-vlc wrapper
+    HAVE_VLC = True
+except Exception:
+    vlc = None
+    HAVE_VLC = False
+
+# import the wrapper
+from vlc_fallback import VlcFallbackPlayer, HAVE_VLC as VLC_AVAILABLE
 
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
@@ -51,7 +61,10 @@ DB_PATH = APP_DIR / 'music.db'
 COVERS_DB_PATH = APP_DIR / 'covers.db'
 MUSIC_DIR = ''
 wikipedia.set_lang("en")
-audio_extensions = {'.mp3', '.flac', '.wav', '.ape', '.ogg', '.m4a', '.aac', '.wma'}
+audio_extensions = {'.mp3', '.flac', '.wav', '.ape', '.ogg', '.m4a', '.aac',
+                    '.wma', '.wv', '.tta', '.tak', '.ofr', '.ofs', '.shn', '.mpp', '.mpc'}
+# extensions known to cause backend issues (use VLC fallback)
+problematic_exts = {'.ape', '.wv', '.tta', '.tak', '.ofr', '.ofs', '.shn', '.mpp', '.mpc'}
 playlist_extensions = {'.m3u', '.m3u8', '.cue', '.json'}
 
 
@@ -384,6 +397,19 @@ class AudioPlayer(QWidget):
         # store full settings dict for use with wizard persistence
         self.scan_thread = None
         self.settings = settings
+
+        # VLC fallback helper
+        self.vlc_helper = None
+        self.vlc_active = False
+        if VLC_AVAILABLE:
+            self.vlc_helper = VlcFallbackPlayer(self)
+            self.vlc_helper.positionChanged.connect(
+                lambda pos: self._on_vlc_position_changed(pos))
+            self.vlc_helper.durationChanged.connect(
+                lambda dur: self._on_vlc_duration_changed(dur))
+            self.vlc_helper.playbackStateChanged.connect(
+                lambda state: self._on_vlc_playback_state(state))
+            self.vlc_helper.ended.connect(self._on_vlc_ended)
 
         # data
         self.scan_thread = None
@@ -718,8 +744,8 @@ class AudioPlayer(QWidget):
         self.playlist_widget.setDragDropMode(QListWidget.InternalMove)
         self.playlist_widget.itemClicked.connect(
             self.play_selected_playlist)
-        self.playlist_widget.itemDoubleClicked.connect(
-            self.play_selected_track)
+       # self.playlist_widget.itemDoubleClicked.connect(
+           # self.play_selected_track)
         self.playlist_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.playlist_widget.customContextMenuRequested.connect(
             self.show_playlist_context_menu)
@@ -1984,6 +2010,12 @@ class AudioPlayer(QWidget):
     def start_fade_to_next(self, mode="auto"):
         """Perform the selected crossfade mode when transitioning."""
         next_idx = self.current_index + 1
+        next_path = self.playlist[next_idx]
+        if self._uses_vlc_for_path(next_path.path):
+            # disable complex crossfade for VLC; schedule cue instead
+            self.cue_next_track()
+            self.update_metadata(next_idx)
+            return
         if not (0 <= next_idx < len(self.playlist)):
             return
         next_song = self.playlist[next_idx]
@@ -2196,15 +2228,30 @@ class AudioPlayer(QWidget):
             if file.is_remote:
                 file.route = 'serve_audio'
             media_url = file.absolute_path()
-            self.player.setSource(media_url)
-            self.slider.setValue(0)
-       #     log_player_action("play", self.player)
-            self.player.play()
-            self.lyrics_timer.start()
-            self.playlist_widget.setCurrentRow(idx)
-            if not self.is_local_file(path):
+            if self.vlc_helper.is_playing():
+                if self.meta_worker:
+                    self.meta_worker.mutex.unlock()
+                    self.meta_worker.deleteLater()
+                    self.meta_worker = None
+                    import time
+                    time.sleep(0.1)
+                self.vlc_helper.stop()
                 self.update_metadata(idx)
-            self.update_play_button()
+            # Determine fallback
+            if self._uses_vlc_for_path(file.path):
+                # use VLC fallback
+                self._start_vlc_play(file, idx)
+                self.update_metadata(idx)
+            else:
+            # else QMediaPlayer path
+                self.player.setSource(media_url)
+                self.player.play()
+                self.playlist_widget.setCurrentRow(idx)
+                self.update_play_button()
+            self.slider.setValue(0)
+            self.lyrics_timer.start()
+            if not self.is_local_file(path) and not self.vlc_active:
+                self.update_metadata(idx)
         else:
             self.title_label.setText("No Track Loaded")
             self.artist_label.setText("--")
@@ -2723,13 +2770,28 @@ class AudioPlayer(QWidget):
             self.load_track(next_idx)
 
     def toggle_play_pause(self):
-        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self.player.pause()
+        if self.vlc_active:
+            # Use VLC player's state
+            if self.vlc_helper.is_playing():
+                self.vlc_helper.pause()
+            else:
+                self.vlc_helper.resume()
         else:
-            self.player.play()
+            if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                self.player.pause()
+            else:
+                self.player.play()
 
     def update_play_button(self):
         if self.sub_images:
+            if self.vlc_active:
+                playing = self.vlc_helper.is_playing() if self.vlc_helper else False
+                pixmap = QPixmap.fromImage(
+                    self.sub_images[1]) if playing else QPixmap.fromImage(
+                    self.sub_images[0])
+                self.play_button.setIcon(QIcon(pixmap))
+                return
+            # else QMediaPlayer path: existing code (unchanged)
             if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
                 pixmap = QPixmap.fromImage(self.sub_images[1])
             else:
@@ -2818,6 +2880,73 @@ class AudioPlayer(QWidget):
             self.next_track()
 
             # self.update_play_button()
+
+    def _uses_vlc_for_path(self, path: str) -> bool:
+        # determine if path should use VLC fallback
+        if not VLC_AVAILABLE:
+            return False
+        ext = Path(path).suffix.lower()
+        return ext in problematic_exts
+
+    def _stop_vlc(self):
+        if self.vlc_helper and self.vlc_active:
+            try:
+                self.vlc_helper.stop()
+            except Exception:
+                pass
+            self.vlc_active = False
+
+    def _start_vlc_play(self, file: ListItem, idx: int):
+        # stop QMediaPlayer if it's active
+        try:
+            self.player.stop()
+        except Exception as e:
+            print(str(e))
+            pass
+        path = file.path
+        # if remote, use absolute URL
+        media_url = file.absolute_path().toString()
+        self.vlc_active = True
+        self.vlc_helper.play(media_url)
+        # set volume mapping from existing QAudioOutput volume (0..1)
+        try:
+            self.vlc_helper.set_volume(self.audio_output.volume())
+        except Exception:
+            pass
+        self.current_index = idx
+        self.playlist_widget.setCurrentRow(idx)
+        self.update_play_button()
+
+    def _on_vlc_position_changed(self, pos_ms):
+        # called from VlcFallbackPlayer; update slider and time label
+        duration = self.vlc_helper.duration() if self.vlc_helper else 0
+        if duration > 0:
+            value = int((pos_ms / duration) * 100) if duration > 0 else 0
+            self.slider.blockSignals(True)
+            self.slider.setValue(value)
+            self.slider.blockSignals(False)
+        self.update_time_label(pos_ms, duration)
+
+    def _on_vlc_duration_changed(self, duration):
+        # enable slider if duration > 0
+        self.slider.setEnabled(duration > 0)
+
+    def _on_vlc_playback_state(self, state_str):
+        # Map VLC state to QMediaPlayer state concept for UI
+        # state_str expected: 'playing', 'paused', 'stopped'
+        self.update_play_button()
+
+    def _on_vlc_ended(self):
+        # when VLC playback ends, behave like EndOfMedia
+        # schedule next track immediate
+        self._mixing_next = False
+        # call next_track logic (same as QMediaPlayer EndOfMedia)
+        if hasattr(self, '_cue_next') and self._cue_next is not None:
+            next_idx = self._cue_next
+            self._cue_next = None
+            self.load_track(next_idx)
+        else:
+            self.next_track()
 
     def on_metadata_changed(self):
         path = self.playlist[self.current_index].path

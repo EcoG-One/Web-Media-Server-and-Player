@@ -385,9 +385,9 @@ def get_audio_metadata(file_path):
                                                   'mime') and audio_file.mime else audio_file.__class__.__name__
 
             # Sample rate and bitrate
-            sample_rate = getattr(audio_file.info, 'sample_rate', None)
-            bits = getattr(audio_file.info, 'bits_per_sample', None)
-            bitrate = getattr(audio_file.info, 'bitrate', None)
+            sample_rate = getattr(audio_file.info, 'sample_rate', 0)
+            bits = getattr(audio_file.info, 'bits_per_sample', 0)
+            bitrate = getattr(audio_file.info, 'bitrate', 0)
             if codec == 'audio/mp3':
                 metadata['codec'] = codec + ' ' + str(
                     sample_rate / 1000) + 'kHz ' + str(

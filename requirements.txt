@@ -9,3 +9,5 @@ plyer
 python-dotenv
 wikipedia
 librosa
+python-vlc
+ffcuesplitter
