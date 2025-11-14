@@ -763,10 +763,13 @@ class AudioPlayer(QWidget):
             QPixmap("static/images/default_album_art.png") if os.path.exists(
                 "static/images/default_album_art.png") else QPixmap())
         self.title_label = QLabel("Title --")
+        self.title_label.setWordWrap(True)
         self.title_label.setFixedWidth(256)
         self.artist_label = QLabel("Artist --")
+        self.artist_label.setWordWrap(True)
         self.artist_label.setFixedWidth(256)
         self.album_label = QLabel("Album --")
+        self.album_label.setWordWrap(True)
         self.album_label.setFixedWidth(256)
         self.year_label = QLabel("Year --")
         self.codec_label = QLabel("Codec --")
@@ -3160,35 +3163,9 @@ class AudioPlayer(QWidget):
         codec = self.meta_data['codec']
 
         self.codec_label.setText(codec)
-        if len(title) > 41:
-            multiline_title = title[:41] + '\n         '
-            l = (len(title) // 41)
-            for i in range(1, l):
-                multiline_title += title[i * 41:(i + 1) * 41] + '\n         '
-            self.title_label.setText(
-                'Title: {0}{1}'.format(multiline_title, title[(l * 41):]))
-        else:
-            self.title_label.setText('Title: ' + title)
-        if len(artist) > 40:
-            multiline_artist = artist[:40] + '\n          '
-            l = (len(artist) // 40)
-            for i in range(1, l):
-                multiline_artist += artist[
-                                        i * 40:(i + 1) * 40] + '\n          '
-            self.artist_label.setText(
-                'Artist: {0}{1}'.format(multiline_artist, artist[(l * 40):]))
-        else:
-            self.artist_label.setText('Artist: ' + artist)
-        if len(album) > 35:
-            multiline_album = album[:35] + '\n             '
-            l = (len(album) // 35)
-            for i in range(1, l):
-                multiline_album += album[
-                                       i * 35:(i + 1) * 35] + '\n             '
-            self.album_label.setText(
-                'Album: {0}{1}'.format(multiline_album, album[(l * 35):]))
-        else:
-            self.album_label.setText('Album: ' + album)
+        self.title_label.setText('Title: ' + title)
+        self.artist_label.setText('Artist: ' + artist)
+        self.album_label.setText('Album: ' + album)
         self.year_label.setText('Year: ' + year)
         self.codec_label.setText('Codec: ' + codec)
 
