@@ -4,14 +4,14 @@ from ffcuesplitter.cuesplitter import FFCueSplitter
 # from ffcuesplitter.user_service import FileSystemOperations
 import sys
 from PySide6.QtGui import QIcon, QAction
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QThread, Signal, QMutex, Slot
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QWizard, QWizardPage, QLabel, QCheckBox, QPushButton,
     QToolBar, QTextEdit, QFileDialog, QLineEdit, QDialog, QFormLayout, QDialogButtonBox, QMessageBox)
 from formats import ffmpeg_formats
 from pathlib import Path
 import json
 
-# ffmpeg_formats = ["mp4", "mov", "avi", "mkv", "webm"]
+# basic ffmpeg_formats = ["mp4", "flac", "mov", "avi", "mkv", "webm"]
 APP_DIR = Path.home() / "Codec Converter"
 APP_DIR.mkdir(exist_ok=True)
 SETTINGS_FILE = APP_DIR / "settings.json"
@@ -120,8 +120,11 @@ class TwoInputCustomDialog(QDialog):
 
 
 class AppWindow(QMainWindow):
+    work_error = Signal(str)
+    worker_messages = Signal(str)
     def __init__(self, settings):
         super().__init__()
+        self.worker = None
         self.setWindowTitle("EcoG's Codec Converter")
         self.setGeometry(500, 100, 500, 400)
         self.settings = settings
@@ -203,6 +206,7 @@ class AppWindow(QMainWindow):
 
         # Connections
         quit_action.triggered.connect(self.close)
+        self.worker_messages.connect(self.editor_update)
 
         # Wizard
         if self.settings.get('show_welcome', True):
@@ -225,9 +229,10 @@ class AppWindow(QMainWindow):
                 json_settings[k] = v
         return json_settings
 
+    def editor_update(self, msg):
+        self.editor.append(msg)
 
-
-    def file_converter(self, from_codec, to_codec, convert_dir: str, del_files=False):
+    def file_converter(self, from_codec: str, to_codec: str, convert_dir: str, del_files=False):
         # convert_dir = "/path/to/folder/tobeconverted"
         f_codec = "." + from_codec
         t_codec = "." + to_codec
@@ -241,18 +246,19 @@ class AppWindow(QMainWindow):
                     output = file.replace(f_codec, t_codec)
                     try:
                         (ffmpeg.input(file).output(output).run())
-                        self.editor.append(f"File {output} created.")
+                        self.worker_messages.emit(f"File {output} created.")
                     except FileNotFoundError as e:
-                        self.editor.append("File not found. " + str(e))
+                        self.work_error.emit("File not found. " + str(e))
                     except Exception as e:
-                        self.editor.append("Error: "+ str(e))
+                        self.work_error.emit("Error: "+ str(e))
                     finally:
                         if del_files and os.path.exists(output):
                             os.remove(file)
-                        self.editor.append(f"File {file} deleted.")
+                            self.worker_messages.emit(f"File {file} deleted.")
                 else:
-                    self.editor.append(
-                        f"{name} is NOT a {from_codec} file.")
+                    continue
+                   # self.worker_messages.emit(
+                       # f"{name} is NOT a {from_codec} file.")
 
 
     def show_two_input_dialog(self):
@@ -312,7 +318,7 @@ class AppWindow(QMainWindow):
 
 
     def go(self, c_from, c_to, del_files):
-        if c_from == None:
+        if not c_from:
             QMessageBox.warning(self, 'Ooops!', 'Please set conversion codecs.')
             return
         try:
@@ -341,8 +347,68 @@ class AppWindow(QMainWindow):
         ret = msg_box.exec()
         if ret == QMessageBox.Apply:
             self.editor.clear()
-            self.file_converter(c_from, c_to,
-                                self.selected_directory, del_files)
+            self.editor.append("Convertion Begins...")
+            self.worker = LocalMetaWorker(c_from, c_to,
+                                self.selected_directory, del_files, self.file_converter)
+            self.worker.work_completed.connect(self.on_work_completed)
+            self.worker.work_error.connect(self.on_work_error)
+            self.worker.finished.connect(self.cleanup_worker)
+            # mirror behavior of other workers (lock so handler will unlock)
+            self.worker.mutex.lock()
+            self.worker.start()
+          #  self.file_converter(c_from, c_to,
+                             #   self.selected_directory, del_files)
+
+    @Slot(str)
+    def on_work_completed(self, success_message):
+        if self.worker:
+            self.worker.mutex.unlock()
+        self.editor.append(success_message)
+        QMessageBox.information(self,"Success!", success_message)
+
+
+    def on_work_error(self, error_message):
+        """Handle metadata error"""
+        self.worker.mutex.unlock()
+        QMessageBox.critical(self, "Error", error_message)
+
+
+    def cleanup_worker(self):
+        """Clean up after scan completion"""
+        # Clean up worker reference
+        if self.worker:
+            self.worker.deleteLater()
+            self.worker = None
+
+
+
+class LocalMetaWorker(QThread):
+    """
+    Runs local audio metadata extraction off the GUI thread.
+    Expects an extractor callable that takes a single file_path arg and
+    returns the metadata dict (same structure as get_audio_metadata).
+    """
+    work_completed = Signal(str)   # Emits {'retrieved_metadata': metadata}
+    work_error = Signal(str)
+
+    def __init__(self, c_from, c_to, selected_directory, del_files, callable):
+        super().__init__()
+        self.c_from = c_from
+        self.c_to = c_to
+        self.selected_directory = selected_directory
+        self.del_files = del_files
+        self.callable = callable
+        self.mutex = QMutex()
+
+    def run(self):
+        try:
+            # Call the provided extractor (this will perform heavy work)
+            self.callable(self.c_from, self.c_to,
+                                               self.selected_directory, self.del_files)
+            # Emit in same structure as your remote meta worker
+            self.work_completed.emit("Convertion Completed!")
+        except Exception as e:
+            self.work_error.emit(str(e))
 
 
 class CodecsWizardPage(QWizardPage):

@@ -201,7 +201,7 @@ ffmpeg_formats = (
 'lvf',
 'lxf',
 'm4v',
-'matroska',
+'mkv',
 'matroska,webm',
 'mca',
 'mcc',
