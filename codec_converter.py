@@ -8,6 +8,39 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QWizard, QWizardPage, QLabel, QCheckBox, QPushButton,
     QToolBar, QTextEdit, QFileDialog, QLineEdit, QDialog, QFormLayout, QDialogButtonBox, QMessageBox)
 from formats import ffmpeg_formats
+from pathlib import Path
+import json
+
+# ffmpeg_formats = ["mp4", "mov", "avi", "mkv", "webm"]
+APP_DIR = Path.home() / "Codec Converter"
+APP_DIR.mkdir(exist_ok=True)
+SETTINGS_FILE = APP_DIR / "settings.json"
+
+
+def load_json(path: Path, default):
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        QMessageBox.warning(window, "Error!", str(e))
+    return default
+
+
+def save_json(path: Path, obj):
+    try:
+        path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+    except Exception as e:
+        QMessageBox.warning(window, "Error!", str(e))
+
+def get_settings():
+    default = {"show_welcome": True
+               }
+    json_settings = load_json(SETTINGS_FILE, default=default)
+    # Ensure keys exist
+    for k, v in default.items():
+        if k not in json_settings:
+            json_settings[k] = v
+    return json_settings
 
 
 def cue_spliter(cue_file: str, output_dir: str = '.', dry_run: bool = False):
@@ -30,11 +63,11 @@ def select_directory_dialog():
     file_dialog.setViewMode(QFileDialog.ViewMode.List)
     if file_dialog.exec():
         selected_directory = file_dialog.selectedFiles()[0]
-      #  window.editor.append(f"Selected Directory: {selected_directory}")
-        window.editor.append(f"Selected Directory: {selected_directory}")
+        try:
+            window.editor.append(f"Selected Directory: {selected_directory}")
+        except NameError:
+            pass
     return selected_directory
-
-
 
 
 class TwoInputCustomDialog(QDialog):
@@ -49,7 +82,11 @@ class TwoInputCustomDialog(QDialog):
         form_layout = QFormLayout()
 
         self.input1_field = QLineEdit(self)
+        if window.c_from:
+            self.input1_field.setText(window.c_from)
         self.input2_field = QLineEdit(self)
+        if window.c_to:
+            self.input2_field.setText(window.c_to)
         self.delete_files = QCheckBox(self)
         self.delete_files.setChecked(False)
 
@@ -71,16 +108,16 @@ class TwoInputCustomDialog(QDialog):
 
     def get_inputs(self):
         """Method to retrieve the text values."""
-        return self.input1_field.text(), self.input2_field.text(), self.delete_files
+        return self.input1_field.text(), self.input2_field.text(), self.delete_files.isChecked()
 
 
 
 class AppWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, settings):
         super().__init__()
         self.setWindowTitle("EcoG's Codec Converter")
         self.setGeometry(500, 100, 500, 400)
-
+        self.settings = settings
         self.selected_directory = None
         self.del_files = False
         self.c_from = None
@@ -102,16 +139,16 @@ class AppWindow(QMainWindow):
         wiz_action = QAction(QIcon("icons/wizard.png"), "Start Wizard", self)
         wiz_action.setShortcut('Ctrl+W')
         wiz_action.triggered.connect(self.start_wizard)
-        set_action = QAction(QIcon("icons/new.png"), "Set", self)
+        set_action = QAction(QIcon("icons/codecs.png"), "Set", self)
         set_action.setShortcut('Ctrl+S')
         set_action.triggered.connect(self.show_two_input_dialog)
         open_action = QAction(QIcon("icons/open.png"), "Choose", self)
         open_action.setShortcut("Ctrl+C")
         open_action.triggered.connect(select_directory_dialog)
-        go_action = QAction(QIcon("icons/save.png"), "Go", self)
+        go_action = QAction(QIcon("icons/go.png"), "Go", self)
         go_action.setShortcut("Ctrl+G")
         go_action.triggered.connect(self.ready)
-        quit_action = QAction("Quit", self)
+        quit_action = QAction(QIcon("icons/power.png"),"Quit", self)
         quit_action.setShortcut("Ctrl+Q")
 
         '''copy_action = QAction(QIcon("icons/copy.png"), "Copy", self)
@@ -160,7 +197,25 @@ class AppWindow(QMainWindow):
         quit_action.triggered.connect(self.close)
 
         # Wizard
-        self.start_wizard()
+        if self.settings.get('show_welcome', True):
+            self.start_wizard()
+
+
+    def save_json(self, path: Path, obj):
+        try:
+            path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+        except Exception as e:
+            QMessageBox.warning(window, "Error!", str(e))
+
+    def get_settings(self):
+        default = {"show_welcome": True
+                   }
+        json_settings = load_json(SETTINGS_FILE, default=default)
+        # Ensure keys exist
+        for k, v in default.items():
+            if k not in json_settings:
+                json_settings[k] = v
+        return json_settings
 
 
 
@@ -202,9 +257,13 @@ class AppWindow(QMainWindow):
                                          ffmpeg_formats}
             self.c_from, self.c_to, self.del_files = from_to_input.get_inputs()
             if self.c_from.lower() in self.valid_elements_lower and self.c_to.lower() in self.valid_elements_lower:
+                if self.del_files:
+                    no = ''
+                else:
+                    no = 'NOT'
                 self.editor.append(
                     f"You chose to convert from: <b>{self.c_from}</b>, "
-                    f"to: <b>{self.c_to}</b>.<br> Please select <b>directory</b> to proceed.")
+                    f"to: <b>{self.c_to}</b> and {no} delete the {self.c_from} files.<br> Please select <b>directory</b> to proceed.")
             else:
                 if self.c_from.lower() not in ffmpeg_formats:
                     QMessageBox.critical(self, 'Oops',
@@ -225,8 +284,13 @@ class AppWindow(QMainWindow):
         if sys.platform == 'darwin':
             wizard.setWizardStyle(QWizard.ModernStyle)
         if wizard.exec():
-            del_files = wizard.field("delete_files")
-            self.go(wizard.field('from'), wizard.field('to'), del_files)
+            wizard.finish_wizard()
+            self.c_from = wizard.field('from')
+            self.c_to = wizard.field('to')
+            self.del_files = wizard.field("delete_files")
+            self.ready()
+          #  del_files = wizard.field("delete_files")
+           # self.go(wizard.field('from'), wizard.field('to'), del_files)
 
 
     def ready(self):
@@ -234,6 +298,9 @@ class AppWindow(QMainWindow):
 
 
     def go(self, c_from, c_to, del_files):
+        if c_from == None:
+            QMessageBox.warning(self, 'Ooops!', 'Please set conversion codecs.')
+            return
         try:
             self.selected_directory = selected_directory
         except NameError:
@@ -249,8 +316,9 @@ class AppWindow(QMainWindow):
         msg_box = QMessageBox(self)
         msg_box.setIcon(QMessageBox.Icon.Question)
         msg_box.setText(f"You chose to "
-                       f"convert all {c_from} files to {c_to}, "
-                       f"on directory: {self.selected_directory} and {no} delete the {c_from} files.")
+                       f"convert all {c_from} files to {c_to},\n"
+                       f"on directory: {self.selected_directory}\n"
+                        f"and {no} delete the {c_from} files.")
         msg_box.setInformativeText(
             "<h2>Do you want to proceed with conversion?</h2>")
         msg_box.setStandardButtons(
@@ -261,8 +329,6 @@ class AppWindow(QMainWindow):
             self.editor.clear()
             self.file_converter(c_from, c_to,
                                 self.selected_directory, del_files)
-
-# ffmpeg_formats = ["mp4", "mov", "avi", "mkv", "webm"]
 
 
 class CodecsWizardPage(QWizardPage):
@@ -361,46 +427,14 @@ class ConvertWizard(QWizard):
         super().__init__(parent)
 
         self.addPage(self.intro_page())
-        self.addPage(self.codecs_page())
+        self.addPage(self.codecs_page())  # Calls the function below
         self.addPage(self.dir_page())
+        # self.addPage(
+            # self.conclusion_page())  # Added conclusion page for completeness
 
       #  self.addPage(self.conclusion_page())
         self.setWindowTitle("EcoG's File Convertion Wizard")
 
-    def validate_from(self):
-        return self.validate_input(self.from_line_edit.text().strip())
-
-    def validate_to(self):
-        return self.validate_input(self.to_line_edit.text().strip())
-
-    def validate_input(self, input_text):
-        """Validates the input text against the predefined set."""
-        # Get the text from the QLineEdit
-       # input_text = self.from_line_edit.text().strip()
-
-        self.valid_elements_lower = {item.lower() for item in
-                                     ffmpeg_formats}
-        input_text_lower = input_text.lower()
-        if not input_text:
-            # Handle empty input
-            self.status_label.setText("Status: Input is empty")
-            self.status_label.setStyleSheet("color: black;")
-            return
-        if input_text_lower in self.valid_elements_lower:
-            # Match found
-            self.status_label.setText(
-                f"Status: **'{input_text}' is a valid format** ✅")
-            self.status_label.setStyleSheet("color: green; font-weight: bold;")
-            return True  # Return True to indicate completion/validity
-        else:
-            # No match found
-            self.status_label.setText(
-                f"Status: **'{input_text}' is NOT a valid format** ❌")
-            self.status_label.setStyleSheet("color: red; font-weight: bold;")
-            return False  # Return False
-
-    def validation(self):
-        return self.field('from') in ffmpeg_formats and self.field('to') in ffmpeg_formats
 
 
     def intro_page(self):
@@ -416,75 +450,66 @@ class ConvertWizard(QWizard):
 
     def codecs_page(self):
         return CodecsWizardPage(self)
-        '''page = QWizardPage()
-        page.setTitle("Set Codecs")
-        page.setSubTitle("Please fill both fields.")
-
-        self.from_label = QLabel("Covert from:")
-        self.from_line_edit = QLineEdit()
-        self.from_line_edit.setFixedWidth(120)
-        self.from_line_edit.setMaxLength(16)
-        page.registerField("from*", self.from_line_edit)
-
-        self.to_label = QLabel("To:")
-        self.to_line_edit = QLineEdit()
-        self.to_line_edit.setFixedWidth(120)
-        self.to_line_edit.setMaxLength(16)
-        page.registerField("to*", self.to_line_edit)
-
-        self.delete_files = QCheckBox("Delete original files after conversion")
-        self.delete_files.setChecked(False)
-        page.registerField("delete_files", self.delete_files)
-
-        self.status_label = QLabel("Status: Awaiting input")
-      #  self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        layout = QVBoxLayout()
-        layout.addWidget(self.from_label)
-        layout.addWidget(self.from_line_edit)
-        layout.addWidget(self.to_label)
-        layout.addWidget(self.to_line_edit)
-        layout.addWidget(self.delete_files)
-        layout.addWidget(self.status_label)
-        page.setLayout(layout)
-
-        self.from_line_edit.textChanged.connect(self.validate_from)
-        self.to_line_edit.textChanged.connect(self.validate_to)
-        return page'''
 
 
     def dir_page(self):
+
+        def select_directory():
+            select_directory_dialog()
+            label.setText(f"You selected: {selected_directory}\nNow hit [ Finish ] "
+                          f"to start the convertion, or [ Browse ] to select another directory.")
+
+
         page = QWizardPage()
         page.setTitle("Select Directory")
         label = QLabel(
             "Please select the directory containing the files to be converted.")
         label.setWordWrap(True)
         button = QPushButton("Browse...")
-        button.clicked.connect(select_directory_dialog)
+        button.clicked.connect(select_directory)
         button.setFixedSize(100, 40)
+       # status_label = QLabel("Now hit [ Finish ] to start the convertion.")
         layout = QVBoxLayout()
         layout.addWidget(label)
         layout.addWidget(button)
+       # layout.addWidget(status_label)
+        self.dont_show_checkbox = QCheckBox("Don't show Wizard next time.", self)
+        self.dont_show_checkbox.setChecked(False)
+       # layout.addWidget(status_label)
+        # Add the "Don't show again" checkbox
+        layout.addWidget(self.dont_show_checkbox)
+        page.registerField("dont_show_wizard", self.dont_show_checkbox)
         page.setLayout(layout)
         return page
 
-    def conclusion_page(self):
-        page = QWizardPage()
-        page.setTitle("Conclusion")
-        label = QLabel( "You have completed the wizard. Press Finish to start the Conversion.")
-        label.setWordWrap(True)
-        layout = QVBoxLayout()
-        layout.addWidget(label)
-        page.setLayout(layout)
-        return page
+    def finish_wizard(self):
+        # Persist "don't show again" option if checked
+        try:
+            settings = load_json(SETTINGS_FILE, default={})
+            if not isinstance(settings, dict):
+                settings = {}
+            settings[
+                'show_welcome'] = not self.dont_show_checkbox.isChecked()
+            # Ensure other known settings remain (merge defaults)
+            defaults = get_settings()
+            for k, v in defaults.items():
+                if k not in settings:
+                    settings[k] = v
+            save_json(SETTINGS_FILE, settings)
+        except Exception as e:
+            QMessageBox.warning(self, "Error",
+                                f"Could not save settings: {e}")
+        self.accept()
 
+# --- End of Welcome Wizard Implementation ---
 
 
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
-    window = AppWindow()
+    settings = get_settings()
+    window = AppWindow(settings)
     window.show()
     sys.exit(app.exec())
 
