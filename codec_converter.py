@@ -65,6 +65,13 @@ def select_directory_dialog():
         selected_directory = file_dialog.selectedFiles()[0]
         try:
             window.editor.append(f"Selected Directory: {selected_directory}")
+            if window.c_from:
+                window.editor.append("\nNow hit [ Go ] to start the convertion!")
+        except NameError:
+            pass
+    else:
+        try:
+            window.editor.append("You cancelled the directory selection.")
         except NameError:
             pass
     return selected_directory
@@ -188,7 +195,8 @@ class AppWindow(QMainWindow):
 
         self.editor = QTextEdit()
         main_layout.addWidget(self.editor)
-        self.editor.append("Welcome to <b>EcoG's Codec Converter!</b><br>Please <b>set codecs</b> and <b>choose directory</b> to proceed.")
+        self.editor.append("Welcome to <b>EcoG's Codec Converter!</b><br>"
+                           "Please <b>set codecs</b> and <b>choose directory</b> to proceed.")
 
         # Set central widget
         self.setCentralWidget(c_widget)
@@ -263,7 +271,13 @@ class AppWindow(QMainWindow):
                     no = 'NOT'
                 self.editor.append(
                     f"You chose to convert from: <b>{self.c_from}</b>, "
-                    f"to: <b>{self.c_to}</b> and {no} delete the {self.c_from} files.<br> Please select <b>directory</b> to proceed.")
+                    f"to: <b>{self.c_to}</b> and {no} delete the {self.c_from} files.")
+                if selected_directory:
+                    self.editor.append(f"You selected the directory: {selected_directory}"
+                        f"\nNow hit [ Go ] to start the convertion!")
+                else:
+                    self.editor.append("Please select <b>directory</b> to proceed.")
+
             else:
                 if self.c_from.lower() not in ffmpeg_formats:
                     QMessageBox.critical(self, 'Oops',
