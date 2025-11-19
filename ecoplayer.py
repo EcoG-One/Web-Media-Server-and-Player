@@ -2,7 +2,7 @@ import sys
 import os
 import sqlite3
 from fuzzywuzzy import fuzz
-from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot, QMutex, qInstallMessageHandler
+from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot, QMutex
 from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -32,12 +32,13 @@ import webbrowser
 import wikipedia
 from qdarkstyle import DarkPalette, LightPalette
 # from local_meta_worker import LocalMetaWorker
-from sklearn.metrics import d2_absolute_error_score
+# from sklearn.metrics import d2_absolute_error_score
 from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
 from scanworker import ScanWorker
 from text import text_1, text_2, text_3, text_4, text_5, text_6, text_7, text_8
 import threading, traceback
+import time
 
 # try to import VLC fallback (optional dependency)
 try:
@@ -394,11 +395,8 @@ class AudioPlayer(QWidget):
     def __init__(self, settings):
         super().__init__()
 
-        # store full settings dict for use with wizard persistence
-        self.scan_thread = None
-        self.settings = settings
-
         # VLC fallback helper
+        self.song_index = None
         self.vlc_helper = None
         self.vlc_active = False
         if VLC_AVAILABLE:
@@ -411,8 +409,9 @@ class AudioPlayer(QWidget):
                 lambda state: self._on_vlc_playback_state(state))
             self.vlc_helper.ended.connect(self._on_vlc_ended)
 
-        # data
+        # store full settings dict for use with wizard persistence
         self.scan_thread = None
+        self.settings = settings
         self.scan_worker = None
         self.purge_worker = None
         self.is_local = None
@@ -743,7 +742,7 @@ class AudioPlayer(QWidget):
         self.btn_shuffle.setFixedSize(QSize(60, 26))
         self.playlist_widget.setDragDropMode(QListWidget.InternalMove)
         self.playlist_widget.itemClicked.connect(
-            self.play_selected_playlist)
+            self.play_selected_item)
        # self.playlist_widget.itemDoubleClicked.connect(
            # self.play_selected_track)
         self.playlist_widget.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -963,7 +962,6 @@ class AudioPlayer(QWidget):
         self.player.playbackStateChanged.connect(self.update_play_button)
         self.slider.sliderPressed.connect(lambda: self.player.pause())
         self.slider.sliderReleased.connect(lambda: self.player.play())
-        self.player.metaDataChanged.connect(self.on_metadata_changed)
         self.silence_db.valueChanged.connect(
             lambda v: setattr(self, "silence_threshold_db", v))
         self.silence_dur.valueChanged.connect(
@@ -2017,7 +2015,6 @@ class AudioPlayer(QWidget):
         if self._uses_vlc_for_path(next_path.path):
             # disable complex crossfade for VLC; schedule cue instead
             self.cue_next_track()
-            self.update_metadata(next_idx)
             return
         if not (0 <= next_idx < len(self.playlist)):
             return
@@ -2123,11 +2120,6 @@ class AudioPlayer(QWidget):
                     except Exception:
                         pass
                     try:
-                        old_player.metaDataChanged.disconnect(
-                            self.on_metadata_changed)
-                    except Exception:
-                        pass
-                    try:
                         old_player.errorOccurred.disconnect(self.handle_error)
                     except Exception:
                         pass
@@ -2139,8 +2131,6 @@ class AudioPlayer(QWidget):
                   # Switch to next player
                     self.player = self.next_player
                     self.audio_output = self.next_output
-                  # self.update_metadata(next_idx)
-                  # self.current_index = next_idx
 
                 self.player.positionChanged.connect(self.update_slider,
                                                     type=Qt.AutoConnection)
@@ -2150,8 +2140,6 @@ class AudioPlayer(QWidget):
                     self.media_status_changed, type=Qt.AutoConnection)
                 self.player.playbackStateChanged.connect(
                     self.update_play_button, type=Qt.AutoConnection)
-                self.player.metaDataChanged.connect(self.on_metadata_changed,
-                                                    type=Qt.AutoConnection)
                 self.player.errorOccurred.connect(self.handle_error,
                                                   type=Qt.AutoConnection)
                 self.player.positionChanged.connect(
@@ -2173,8 +2161,10 @@ class AudioPlayer(QWidget):
                 self.next_player = None
                 self.next_output = None
                 self._mixing_next = False
-
-                self.update_metadata(next_idx)
+                if not self.meta_worker:
+                    self.update_metadata(next_idx)
+                else:
+                    self.song_index = next_idx
                 self.current_index = next_idx
                 self.update_play_button()
                 self.playlist_widget.setCurrentRow(self.current_index)
@@ -2226,35 +2216,29 @@ class AudioPlayer(QWidget):
                     self.playlist_widget.setCurrentRow(idx)
                 else:
                     return
-            path = file.path
+           # path = file.path
             self.current_index = idx
             if file.is_remote:
                 file.route = 'serve_audio'
             media_url = file.absolute_path()
+
             if self.vlc_helper.is_playing():
-                if self.meta_worker:
-                    self.meta_worker.mutex.unlock()
-                    self.meta_worker.deleteLater()
-                    self.meta_worker = None
-                    import time
-                    time.sleep(0.1)
                 self.vlc_helper.stop()
-                self.update_metadata(idx)
             # Determine fallback
             if self._uses_vlc_for_path(file.path):
                 # use VLC fallback
                 self._start_vlc_play(file, idx)
-                self.update_metadata(idx)
             else:
-            # else QMediaPlayer path
                 self.player.setSource(media_url)
                 self.player.play()
                 self.playlist_widget.setCurrentRow(idx)
                 self.update_play_button()
             self.slider.setValue(0)
             self.lyrics_timer.start()
-            if not self.is_local_file(path) and not self.vlc_active:
+            if not self.meta_worker:
                 self.update_metadata(idx)
+            else:
+                self.song_index = idx
         else:
             self.title_label.setText("No Track Loaded")
             self.artist_label.setText("--")
@@ -2264,7 +2248,6 @@ class AudioPlayer(QWidget):
             self.album_art.setPixmap(QPixmap())
             self.lyrics_display.clear()
             self.lyrics_timer.stop()
-       # self.update_play_button()
 
     # Drag-and-drop support
     def dragEnterEvent(self, event):
@@ -2645,7 +2628,6 @@ class AudioPlayer(QWidget):
 
     def play_selected_track(self, item):
         idx = self.playlist_widget.row(item)
-       # self.update_metadata(idx)
         self.load_track(idx)
 
     def show_playlist_context_menu(self, pos):
@@ -2903,10 +2885,11 @@ class AudioPlayer(QWidget):
         # stop QMediaPlayer if it's active
         try:
             self.player.stop()
+            self.cleanup_metadata()
         except Exception as e:
             print(str(e))
             pass
-        path = file.path
+       # path = file.path
         # if remote, use absolute URL
         media_url = file.absolute_path().toString()
         self.vlc_active = True
@@ -2951,13 +2934,6 @@ class AudioPlayer(QWidget):
         else:
             self.next_track()
 
-    def on_metadata_changed(self):
-        path = self.playlist[self.current_index].path
-        if self.is_local_file(path):
-            md = self.player.metaData()
-            if not md.isEmpty():
-                self.update_metadata(self.current_index)
-
 
     def move_to_top(self):
         cursor = self.text.textCursor()
@@ -2966,8 +2942,6 @@ class AudioPlayer(QWidget):
 
     @Slot(dict)
     def on_receive_metadata(self, data):
-        if self.meta_worker:
-            self.meta_worker.mutex.unlock()
         file = self.playlist[self.current_index]
         if not data:
             self.status_bar.showMessage(
@@ -3001,22 +2975,26 @@ class AudioPlayer(QWidget):
 
     def on_metadata_error(self, error_message):
         """Handle metadata error"""
-        self.meta_worker.mutex.unlock()
         QMessageBox.critical(self, "Error", error_message)
         self.status_bar.repaint()
 
     def cleanup_metadata(self):
-        """Clean up after scan completion"""
+        """Clean up after meta completion"""
         # Remove progress bar and clear status
 
         if self.progress:
             self.status_bar.removeWidget(self.progress)
-        self.status_bar.clearMessage()
 
         # Clean up worker reference
         if self.meta_worker:
+            self.meta_worker.mutex.unlock()
             self.meta_worker.deleteLater()
             self.meta_worker = None
+            time.sleep(0.1)
+        self.status_bar.clearMessage()
+        if self.song_index:
+            self.update_metadata(self.song_index)
+            self.song_index = None
 
     def get_audio_metadata(self, file_path):
         """Extract metadata from audio file with comprehensive error handling
@@ -3059,7 +3037,6 @@ class AudioPlayer(QWidget):
                     file_path, threshold_db=self.silence_threshold_db,
                     frame_duration=0.1)
                 self.set_transition_duration(self.transition_duration)
-                self.transition_spin.setValue(int(self.transition_duration))
             if file.channels == 2:
                 channels = "Stereo "
             else:
@@ -3078,8 +3055,7 @@ class AudioPlayer(QWidget):
                 'transition_duration': self.transition_duration
             }
         except Exception as e:
-            self.status_bar.showMessage(
-                 f"Error extracting metadata from {file_path}: {str(e)}")
+            self.meta_worker.work_message.emit(f"Error extracting metadata from {file_path}: {str(e)}")
             metadata = {
                 'artist'             : 'Unknown Artist',
                 'album_artist'       : 'Unknown Album Artist',
@@ -3092,8 +3068,7 @@ class AudioPlayer(QWidget):
                 'picture'            : None,
                 'transition_duration': 5.0
             }
-        self.status_bar.showMessage(
-            f"Successfully extracted metadata from: {file_path}", 3000)
+        self.meta_worker.work_message.emit(f"Successfully extracted metadata from: {file_path}")
         if metadata['lyrics'] is None and self.scan_for_lyrics:
             try:
                 lyr = LyricsPlugin()
@@ -3106,12 +3081,10 @@ class AudioPlayer(QWidget):
                     with open(lrc_path, "w", encoding='utf-8-sig') as f:
                         f.write(metadata['lyrics'])
             except NotImplementedError as e:
-                self.status_bar.showMessage(
-                    f"Cannot Find lyrics for {file_path}: {str(e)}", 8000)
+                self.meta_worker.work_message.emit(f"Cannot Find lyrics for {file_path}: {str(e)}")
                 metadata['lyrics'] = f"Cannot Find lyrics for '{metadata['title']}' by {metadata['artist']}."
             except Exception as e:
-                self.status_bar.showMessage(
-                    f"Error reading lyrics from {file_path}: {str(e)}")
+                self.meta_worker.work_message.emit(f"Error reading lyrics from {file_path}: {str(e)}")
                 metadata['lyrics'] = "--"
         return metadata
 
@@ -3120,6 +3093,7 @@ class AudioPlayer(QWidget):
         file = self.playlist[index]
         if file.item_type != "song_title":
             return
+
         if file.is_remote:
             url = rf"http://{file.server}:5000/get_song_metadata/{file.path}"
             self.meta_worker = Worker('meta', url)
@@ -3135,13 +3109,16 @@ class AudioPlayer(QWidget):
             self.meta_worker = LocalMetaWorker(file.path,
                                                self.get_audio_metadata)
             self.meta_worker.work_completed.connect(self.on_receive_metadata)
+            self.meta_worker.work_message.connect(self.on_metadata_message)
             self.meta_worker.work_error.connect(self.on_metadata_error)
             self.meta_worker.finished.connect(self.cleanup_metadata)
             # mirror behavior of other workers (lock so handler will unlock)
             self.meta_worker.mutex.lock()
             self.meta_worker.start()
 
-
+    def on_metadata_message(self, message):
+        self.status_bar.showMessage(message)
+        self.status_bar.repaint()
 
     def set_metadata_label(self):
         '''Sets metadata labels, splitting them in multiple lines if necessary'''
@@ -3880,7 +3857,7 @@ class AudioPlayer(QWidget):
                                  f"Error parsing playlist {playlist_path}: {e}")
             return []
 
-    def play_selected_playlist(self):
+    def play_selected_item(self):
         idx = self.playlist_widget.currentRow()
         item = self.playlist_widget.currentItem()
         file = self.playlist[idx]
@@ -3892,7 +3869,7 @@ class AudioPlayer(QWidget):
             if 0 <= idx < len(self.playlist):
                 file = self.playlist[idx]
                 self.playlist_widget.setCurrentRow(idx)
-                self.play_selected_playlist()
+                self.play_selected_item()
             else:
                 return
         # item_ext = Path(item.text()).suffix
@@ -4078,6 +4055,7 @@ class LocalMetaWorker(QThread):
     """
     work_completed = Signal(dict)   # Emits {'retrieved_metadata': metadata}
     work_error = Signal(str)
+    work_message = Signal(str)
 
     def __init__(self, file_path: str, extractor_callable):
         super().__init__()

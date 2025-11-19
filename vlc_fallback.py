@@ -75,8 +75,8 @@ class VlcFallbackPlayer(QObject):
         if self.player:
             try:
                 self.player.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                print('namaste')  # pass
         self._poll.stop()
         self.playbackStateChanged.emit('stopped')
 
