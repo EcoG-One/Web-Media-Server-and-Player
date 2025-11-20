@@ -16,7 +16,6 @@ import qdarkstyle
 from mutagen import File
 from mutagen.flac import FLAC
 from mediafile import MediaFile
-# import datetime
 from pathlib import Path
 from random import shuffle
 import librosa
@@ -155,7 +154,7 @@ class ItemType(Enum):
     COVER = 'cover'
     DIRECTORY = 'directory'
 
-    def set_item_type(item_type):
+    def set_item_type(self, item_type):
         if not isinstance(item_type, ItemType):
             raise ValueError("Invalid status value")
         w.status_bar.showMessage(f"Status set to: {item_type.value}")
@@ -771,6 +770,7 @@ class AudioPlayer(QWidget):
         self.album_label.setWordWrap(True)
         self.album_label.setFixedWidth(256)
         self.year_label = QLabel("Year --")
+        self.duration_label = QLabel("Duration --")
         self.codec_label = QLabel("Codec --")
 
         self.text = QTextEdit(readOnly=True)
@@ -892,6 +892,7 @@ class AudioPlayer(QWidget):
         meta_layout.addWidget(self.artist_label)
         meta_layout.addWidget(self.album_label)
         meta_layout.addWidget(self.year_label)
+        meta_layout.addWidget(self.duration_label)
         meta_layout.addWidget(self.codec_label)
 
         metadata_layout = QVBoxLayout()
@@ -1252,12 +1253,6 @@ class AudioPlayer(QWidget):
         # Clear references so GC can collect after deleteLater runs
         self.scan_worker = None
         self.scan_thread = None
-
-    # Replace the lambda signal connections in start_scan with explicit @Slot methods
-    # and connect using Qt.QueuedConnection so UI code always runs in the main thread.
-
-    from PySide6.QtCore import QThread, Qt, Slot
-    from PySide6.QtWidgets import QMessageBox, QProgressBar
 
     def start_scan(self, directory):
         # ...
@@ -2963,14 +2958,16 @@ class AudioPlayer(QWidget):
               #  self.set_album_art(path)
 
                 self.set_metadata_label()
-                self.year_label.setText('Year: ' + str(self.meta_data['year']))
-                self.codec_label.setText(codec)
+             #   self.year_label.setText('Year: ' + str(self.meta_data['year']))
+             #   self.codec_label.setText(codec)
                 self.load_lyrics(file)
                 self.set_album_art(file)
+                # update metadata text label
                 if self.meta_data:
                     for key in self.meta_data:
                         if key != 'picture' and key != 'lyrics':
-                            self.text.append(f"{key}: {self.meta_data[key]}")
+                            if self.meta_data[key]:
+                                self.text.append(f"{key}: {self.meta_data[key]}")
                 self.move_to_top()
 
     def on_metadata_error(self, error_message):
@@ -3022,37 +3019,100 @@ class AudioPlayer(QWidget):
         samplerate = file.samplerate
         track = file.track
         year = file.year """
-
         try:
-            file = MediaFile(file_path)
-            for field in file.fields():
-                try:
-                    if field != 'art' and field != 'lyrics':
-                        self.text.append(field + ': ' + getattr(file, field))
-                except:
-                    pass
-                self.move_to_top()
             if self.mix_method == "Auto":
                 self.transition_duration = self.detect_low_intensity_segments(
                     file_path, threshold_db=self.silence_threshold_db,
                     frame_duration=0.1)
                 self.set_transition_duration(self.transition_duration)
-            if file.channels == 2:
-                channels = "Stereo "
+        except Exception as e:
+            self.meta_worker.work_message.emit(
+                f"Error extracting transition duration from {file_path}: {str(e)}")
+        file = MediaFile(file_path)
+        try:
+            title = file.title
+            artist = file.artist
+            album = file.album
+            albumartist = file.albumartist
+            if file.samplerate:
+                samplerate = str(file.samplerate)
+            if file.bitdepth:
+                bitdepth = file.bitdepth
+            if file.bitrate:
+                bitrate = str(round(file.bitrate/1000))
+            if file.channels:
+                if file.channels == 2:
+                    channels = "Stereo "
+                else:
+                    channels = str(file.channels)
             else:
-                channels = str(file.channels) + ' channels '
+                channels = None
+            composer = file.composer
+            if file.date:
+                date = file.date.strftime('%d/%m/%Y')
+            else:
+                date = None
+            encoder_info = file.encoder_info
+            encoder_settings = file.encoder_settings
+            codec = file.format
+            genre = file.genre
+            if file.length:
+                duration = f"{(file.length // 60):.0f}:{(file.length % 60):.0f}"
+            else:
+                duration = '---'
+            if file.original_date:
+                original_date = file.original_date.strftime('%d/%m/%Y')
+            else:
+                original_date = None
+            if file.year:
+                year = str(file.year)
+            else:
+                year = '---'
+            if file.original_year:
+                original_year = str(file.original_year)
+                year = original_year
+            else:
+                original_year = None
+            if file.r128_album_gain:
+                r128_album_gain = str(file.r128_album_gain)
+            else:
+                r128_album_gain = None
+            if file.r128_track_gain:
+                r128_track_gain = str(file.r128_track_gain)
+            else:
+                r128_track_gain = None
+            if file.track:
+                track = str(file.track)
+            else:
+                track = None
+            lyrics = file.lyrics
+
             metadata = {
-                'artist'             : file.artist or 'Unknown Artist',
-                'album_artist'       : file.albumartist or file.artist or 'Unknown Album Artist',
-                'title'              : file.title or os.path.basename(file_path),
-                'album'              : file.album or 'Unknown Album',
-                'year'               : file.original_year or file.year or '---',
-                'duration'           : file.length or 0,
-                'lyrics'             : file.lyrics,
-                'codec'              : file.format + ' ' + channels
+                'artist'            : artist or 'Unknown Artist',
+                'album_artist'      : albumartist or artist or 'Unknown Album Artist',
+                'title'             : title or os.path.basename(file_path),
+                'album'             : album or 'Unknown Album',
+                'year'              : year or '---',
+                'duration'          : duration,
+                'bitdepth'          : bitdepth,
+                'bitrate'           : bitrate,
+                'channels'          : channels,
+                'composer'          : composer,
+                'date'              : date,
+                'encoder_info'      : encoder_info,
+                'encoder_settings'  : encoder_settings,
+                'genre'             : genre,
+                'lyrics'            : lyrics,
+                'original_date'     : original_date,
+                'original_year'     : original_year,
+                'r128_album_gain'   : r128_album_gain,
+                'r128_track_gain'   : r128_track_gain,
+                'samplerate'        : samplerate,
+                'track'             : track,
+                'codec'             : codec + ' ' + channels
                                        + str(file.bitdepth) + 'bit ' + str(file.samplerate/1000) + 'kHz',
-                'picture'            : file.art,
-                'transition_duration': self.transition_duration
+                'picture'           : file.art,
+                'transition_duration': self.transition_duration or 5
             }
         except Exception as e:
             self.meta_worker.work_message.emit(f"Error extracting metadata from {file_path}: {str(e)}")
@@ -3062,8 +3122,8 @@ class AudioPlayer(QWidget):
                 'title'              : 'Unknown Title',
                 'album'              : 'Unknown Album',
                 'year'               : '---',
-                'duration'           : 0,
-                'lyrics'             : '--',
+                'duration'           : '---',
+                'lyrics'             : f"Cannot Find lyrics for {os.path.basename(file_path)}",
                 'codec'              : '',
                 'picture'            : None,
                 'transition_duration': 5.0
@@ -3097,33 +3157,26 @@ class AudioPlayer(QWidget):
         if file.is_remote:
             url = rf"http://{file.server}:5000/get_song_metadata/{file.path}"
             self.meta_worker = Worker('meta', url)
-            self.meta_worker.work_completed.connect(
-                self.on_receive_metadata)
-            self.meta_worker.work_error.connect(self.on_metadata_error)
-            self.meta_worker.finished.connect(self.cleanup_metadata)
-
-            # Start the async operation
-            self.meta_worker.start()
-            self.meta_worker.mutex.lock()
         else:
             self.meta_worker = LocalMetaWorker(file.path,
                                                self.get_audio_metadata)
-            self.meta_worker.work_completed.connect(self.on_receive_metadata)
             self.meta_worker.work_message.connect(self.on_metadata_message)
-            self.meta_worker.work_error.connect(self.on_metadata_error)
-            self.meta_worker.finished.connect(self.cleanup_metadata)
-            # mirror behavior of other workers (lock so handler will unlock)
-            self.meta_worker.mutex.lock()
-            self.meta_worker.start()
+
+        self.meta_worker.work_completed.connect(self.on_receive_metadata)
+        self.meta_worker.work_error.connect(self.on_metadata_error)
+        self.meta_worker.finished.connect(self.cleanup_metadata)
+        # mirror behavior of other workers (lock so handler will unlock)
+        self.meta_worker.mutex.lock()
+        self.meta_worker.start()
 
     def on_metadata_message(self, message):
         self.status_bar.showMessage(message)
         self.status_bar.repaint()
 
     def set_metadata_label(self):
-        '''Sets metadata labels, splitting them in multiple lines if necessary'''
+        '''Sets metadata labels'''
         if not self.meta_data or "error" in self.meta_data:
-            path = self.playlist[self.current_index].path
+          #  path = self.playlist[self.current_index].path
             title = self.playlist[self.current_index].display_text #  os.path.basename(path)
             artist = album = year = codec = "--"
             self.title_label.setText('Title: ' + title)
@@ -3136,7 +3189,8 @@ class AudioPlayer(QWidget):
         title = self.meta_data['title']
         artist = self.meta_data['artist']
         album = self.meta_data['album']
-        year = str(self.meta_data['year'])
+        year = self.meta_data['year']
+        duration = self.meta_data['duration']
         codec = self.meta_data['codec']
 
         self.codec_label.setText(codec)
@@ -3144,6 +3198,7 @@ class AudioPlayer(QWidget):
         self.artist_label.setText('Artist: ' + artist)
         self.album_label.setText('Album: ' + album)
         self.year_label.setText('Year: ' + year)
+        self.duration_label.setText('Duration: ' + duration)
         self.codec_label.setText('Codec: ' + codec)
 
 
