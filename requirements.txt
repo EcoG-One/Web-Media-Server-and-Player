@@ -11,3 +11,8 @@ wikipedia
 librosa
 python-vlc
 ffcuesplitter
+qdarkstyle
+pillow
+unidecode
+mediafile
+beets
