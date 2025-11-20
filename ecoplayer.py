@@ -488,7 +488,7 @@ class AudioPlayer(QWidget):
         self.load_action.triggered.connect(self.get_local_playlists)
         local_menu.addAction(self.load_action)
 
-        self.list_songs_action = QAction(QIcon("icons/music-beam-16.png"), "List all &Songs", self)
+        self.list_songs_action = QAction(QIcon("icons/music-beam.png"), "List all &Songs", self)
         self.list_songs_action.setShortcut(QKeySequence("Ctrl+S"))
         self.list_songs_action.triggered.connect(self.get_local_songs)
         local_menu.addAction(self.list_songs_action)
