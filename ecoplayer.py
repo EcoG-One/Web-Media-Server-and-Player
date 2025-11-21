@@ -3198,6 +3198,8 @@ class AudioPlayer(QWidget):
         self.artist_label.setText('Artist: ' + artist)
         self.album_label.setText('Album: ' + album)
         self.year_label.setText('Year: ' + year)
+        if isinstance(duration, int):
+            duration = str(duration)
         self.duration_label.setText('Duration: ' + duration)
         self.codec_label.setText('Codec: ' + codec)
 

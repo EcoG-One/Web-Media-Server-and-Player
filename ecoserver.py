@@ -898,7 +898,7 @@ def parse_playlist_file(playlist_path):
         return []
 
 
-# New migration function: add album_artist column if missing and populate it
+# migration: add album_artist column if missing and populate it
 def migrate_add_album_artist():
     """
     Ensure 'album_artist' column exists in Songs table and populate it for each record
