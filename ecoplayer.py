@@ -3057,7 +3057,7 @@ class AudioPlayer(QWidget):
             codec = file.format
             genre = file.genre
             if file.length:
-                duration = f"{(file.length // 60):.0f}:{(file.length % 60):.0f}"
+                duration = f"{(file.length // 60):.0f}:" + "{:06.3F}".format(file.length % 60)
             else:
                 duration = '---'
             if file.original_date:
@@ -3123,7 +3123,7 @@ class AudioPlayer(QWidget):
                 'album'              : 'Unknown Album',
                 'year'               : '---',
                 'duration'           : '---',
-                'lyrics'             : f"Cannot Find lyrics for {os.path.basename(file_path)}",
+                'lyrics'             : None,
                 'codec'              : '',
                 'picture'            : None,
                 'transition_duration': 5.0

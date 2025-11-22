@@ -9,6 +9,7 @@ from pathlib import Path
 from flask import Flask, render_template, request, jsonify, redirect, url_for, \
     send_file, abort
 from mutagen import File
+from mediafile import MediaFile
 from io import BytesIO
 import base64
 from threading import Thread
@@ -37,6 +38,8 @@ COVERS_DB_PATH = APP_DIR / 'covers.db'
 MUSIC_DIR = '/share/CACHEDEV1_DATA'  # Use only on NAS systems
 size = 256, 256
 results = None
+scan_for_lyrics = True
+silence_threshold_db = -46  # dB
 
 
 def run_flask():
@@ -235,196 +238,149 @@ def detect_low_intensity_segments(audio_path, threshold_db=-46,
 
 def get_audio_metadata(file_path):
     """Extract metadata from audio file with comprehensive error handling"""
+
+    logger.debug(f"Extracting metadata from: {file_path}")
+
+    if not os.path.exists(file_path):
+        logger.warning(f"File does not exist: {file_path}")
+        return None
     try:
-        logger.debug(f"Extracting metadata from: {file_path}")
-
-        if not os.path.exists(file_path):
-            logger.warning(f"File does not exist: {file_path}")
-            return None
-
-        audio_file = File(file_path)
+        transition_duration = detect_low_intensity_segments(
+                file_path, threshold_db=silence_threshold_db,
+                frame_duration=0.1)
+    except Exception as e:
+        transition_duration = 4.5
+        logger.error(
+            f"Error extracting transition duration from {file_path}: {str(e)}")
+    try:
+        audio_file = MediaFile(file_path)
         if audio_file is None:
             logger.warning(f"Could not read audio file: {file_path}")
             return None
 
+        title = audio_file.title
+        artist = audio_file.artist
+        album = audio_file.album
+        albumartist = audio_file.albumartist
+        if audio_file.samplerate:
+            samplerate = str(audio_file.samplerate)
+        if audio_file.bitdepth:
+            bitdepth = audio_file.bitdepth
+        if audio_file.bitrate:
+            bitrate = str(round(audio_file.bitrate / 1000))
+        if audio_file.channels:
+            if audio_file.channels == 2:
+                channels = "Stereo "
+            else:
+                channels = str(audio_file.channels)
+        else:
+            channels = None
+        composer = audio_file.composer
+        if audio_file.date:
+            date = audio_file.date.strftime('%d/%m/%Y')
+        else:
+            date = None
+        encoder_info = audio_file.encoder_info
+        encoder_settings = audio_file.encoder_settings
+        codec = audio_file.format
+        genre = audio_file.genre
+        if audio_file.length:
+            duration = f"{(audio_file.length // 60):.0f}:" + "{:06.3F}".format(audio_file.length % 60)
+        else:
+            duration = '---'
+        if audio_file.original_date:
+            original_date = audio_file.original_date.strftime('%d/%m/%Y')
+        else:
+            original_date = None
+        if audio_file.year:
+            year = str(audio_file.year)
+        else:
+            year = '---'
+        if audio_file.original_year:
+            original_year = str(audio_file.original_year)
+            year = original_year
+        else:
+            original_year = None
+        if audio_file.r128_album_gain:
+            r128_album_gain = str(audio_file.r128_album_gain)
+        else:
+            r128_album_gain = None
+        if audio_file.r128_track_gain:
+            r128_track_gain = str(audio_file.r128_track_gain)
+        else:
+            r128_track_gain = None
+        if audio_file.track:
+            track = str(audio_file.track)
+        else:
+            track = None
+        lyrics = audio_file.lyrics
+
         metadata = {
-            'artist'             : '',
-            'album_artist'       : '',
-            'title'              : '',
-            'album'              : '',
-            'year'               : '',
-            'duration'           : 0,
-            'lyrics'             : '',
+            'artist'             : artist or 'Unknown Artist',
+            'album_artist'       : albumartist or artist or 'Unknown Album Artist',
+            'title'              : title or os.path.basename(file_path),
+            'album'              : album or 'Unknown Album',
+            'year'               : year or '---',
+            'duration'           : duration,
+            'bitdepth'           : bitdepth,
+            'bitrate'            : bitrate,
+            'channels'           : channels,
+            'composer'           : composer,
+            'date'               : date,
+            'encoder_info'       : encoder_info,
+            'encoder_settings'   : encoder_settings,
+            'genre'              : genre,
+            'lyrics'             : lyrics,
+            'original_date'      : original_date,
+            'original_year'      : original_year,
+            'r128_album_gain'    : r128_album_gain,
+            'r128_track_gain'    : r128_track_gain,
+            'samplerate'         : samplerate,
+            'track'              : track,
+            'codec'              : codec + ' ' + channels
+                                   + str(audio_file.bitdepth) + 'bit ' + str(
+                audio_file.samplerate / 1000) + 'kHz',
+            'picture'            : audio_file.art,
+            'transition_duration': transition_duration or 5
+        }
+        logger.info(f"Successfully extracted metadata from: {file_path}")
+    except Exception as e:
+        logger.error(f"Error extracting metadata from {file_path}: {str(e)}")
+        metadata = {
+            'artist'             : 'Unknown Artist',
+            'album_artist'       : 'Unknown Album Artist',
+            'title'              : 'Unknown Title',
+            'album'              : 'Unknown Album',
+            'year'               : '---',
+            'duration'           : '---',
+            'lyrics'             : None,
             'codec'              : '',
             'picture'            : None,
             'transition_duration': 5.0
         }
-
-        # Get basic metadata - ARTIST
-        try:
-            if 'TPE1' in audio_file:  # Artist (ID3)
-                metadata['artist'] = str(audio_file['TPE1'])
-            elif 'ARTIST' in audio_file:
-                metadata['artist'] = str(audio_file['ARTIST'][0])
-            elif '©ART' in audio_file:
-                metadata['artist'] = str(audio_file['©ART'][0])
-        except Exception as e:
-            logger.warning(
-                f"Error reading artist metadata from {file_path}: {e}")
-
-        # Get album artist (common tags: TPE2 (ID3), ALBUMARTIST, albumartist, aART (MP4))
-        try:
-            if 'TPE2' in audio_file:  # Album artist (ID3)
-                metadata['album_artist'] = str(audio_file['TPE2'])
-            elif 'ALBUMARTIST' in audio_file:
-                metadata['album_artist'] = str(audio_file['ALBUMARTIST'][0])
-            elif 'albumartist' in audio_file:
-                metadata['album_artist'] = str(audio_file['albumartist'][0])
-            elif 'aART' in audio_file:  # MP4 atom for album artist
-                metadata['album_artist'] = str(audio_file['aART'][0])
-            else:
-                # fallback: use artist if album artist not present
-                if metadata['artist']:
-                    metadata['album_artist'] = metadata['artist']
-        except Exception as e:
-            logger.warning(
-                f"Error reading album artist metadata from {file_path}: {e}")
-            # fallback to artist
-            if metadata['artist']:
-                metadata['album_artist'] = metadata['artist']
-
-        try:
-            if 'TIT2' in audio_file:  # Title
-                metadata['title'] = str(audio_file['TIT2'])
-            elif 'TITLE' in audio_file:
-                metadata['title'] = str(audio_file['TITLE'][0])
-            elif '©nam' in audio_file:
-                metadata['title'] = str(audio_file['©nam'][0])
-        except Exception as e:
-            logger.warning(
-                f"Error reading title metadata from {file_path}: {e}")
-
-        try:
-            if 'TALB' in audio_file:  # Album
-                metadata['album'] = str(audio_file['TALB'])
-            elif 'ALBUM' in audio_file:
-                metadata['album'] = str(audio_file['ALBUM'][0])
-            elif '©alb' in audio_file:
-                metadata['album'] = str(audio_file['©alb'][0])
-        except Exception as e:
-            logger.warning(
-                f"Error reading album metadata from {file_path}: {e}")
-
-        try:
-            if 'TDRC' in audio_file:  # Year
-                metadata['year'] = str(audio_file['TDRC'])
-            elif 'DATE' in audio_file:
-                metadata['year'] = str(audio_file['DATE'][0])
-            elif '©day' in audio_file:
-                metadata['year'] = str(audio_file['©day'][0])
-        except Exception as e:
-            logger.warning(
-                f"Error reading year metadata from {file_path}: {e}")
-
-        # Duration
-        try:
-            if audio_file.info:
-                metadata['duration'] = int(audio_file.info.length)
-        except Exception as e:
-            logger.warning(f"Error reading duration from {file_path}: {e}")
-
-        # Lyrics
-        try:
-            lrc_path = os.path.splitext(file_path)[0] + ".lrc"
-            if os.path.exists(lrc_path):
-                with open(lrc_path, encoding='utf-8-sig') as f:
-                    metadata['lyrics'] = f.read()
-            else:
-                # FLAC/Vorbis
-                if audio_file.__class__.__name__ == 'FLAC':
-                    for key in audio_file:
-                        if key.lower() in ('lyrics', 'unsyncedlyrics',
-                                           'lyric'):
-                            metadata['lyrics'] = audio_file[key][0]
-                    # MP3 (ID3)
-                elif hasattr(audio_file, 'tags') and audio_file.tags:
-                    # USLT (unsynchronized lyrics) is the standard for ID3
-                    for k in audio_file.tags.keys():
-                        if k.startswith('USLT') or k.startswith('SYLT'):
-                            metadata['lyrics'] = str(audio_file.tags[k])
-                        if k.lower() in ('lyrics', 'unsyncedlyrics', 'lyric'):
-                            metadata['lyrics'] = str(audio_file.tags[k])
-                    # MP4/AAC
-                elif hasattr(audio_file, 'tags') and hasattr(audio_file.tags,
-                                                             'get'):
-                    if audio_file.tags.get('\xa9lyr'):
-                        metadata['lyrics'] = audio_file.tags['\xa9lyr'][0]
-                else:
-                    metadata['lyrics'] = "--"
-            if metadata['lyrics'] == "":
-                try:
-                    lyr = LyricsPlugin()
-                    metadata['lyrics'] = lyr.get_lyrics(metadata['artist'],
-                                                        metadata['title'],
-                                                        metadata['album'],
-                                                        metadata['duration'])
-                    if metadata['lyrics'] != "":
-                        lrc_path = os.path.splitext(file_path)[0] + ".lrc"
-                        with open(lrc_path, "w", encoding='utf-8-sig') as f:
-                            f.write(metadata['lyrics'])
-                except Exception as e:
-                    logger.warning(
-                        f"Error reading lyrics from {file_path}: {str(e)}")
-                    metadata['lyrics'] = "--"
-        except Exception as e:
-            logger.warning(f"Error reading lyrics from {file_path}: {e}")
-
-        # Codec
-        try:
-            codec = audio_file.mime[0] if hasattr(audio_file,
-                                                  'mime') and audio_file.mime else audio_file.__class__.__name__
-
-            # Sample rate and bitrate
-            sample_rate = getattr(audio_file.info, 'sample_rate', 0)
-            bits = getattr(audio_file.info, 'bits_per_sample', 0)
-            bitrate = getattr(audio_file.info, 'bitrate', 0)
-            if codec == 'audio/mp3':
-                metadata['codec'] = codec + ' ' + str(
-                    sample_rate / 1000) + 'kHz ' + str(
-                    round(bitrate / 1000)) + 'kbps'
-            else:
-                metadata['codec'] = codec + ' ' + str(
-                    sample_rate / 1000) + 'kHz/' + str(
-                    round(bits)) + 'bits  ' + str(
-                    round(bitrate / 1000)) + 'kbps'
-        except Exception as e:
-            logger.warning(f"Error reading codec from {file_path}: {e}")
-
-        # Album art
-        try:
-            if 'APIC:' in audio_file:
-                metadata['picture'] = audio_file['APIC:'].data
-            elif hasattr(audio_file, 'pictures') and audio_file.pictures:
-                metadata['picture'] = audio_file.pictures[0].data
-            elif 'covr' in audio_file:
-                metadata['picture'] = audio_file['covr'][0]
-        except Exception as e:
-            logger.warning(f"Error reading album art from {file_path}: {e}")
-
-        try:
-            metadata["transition_duration"] = detect_low_intensity_segments(
-                file_path)
-        except Exception as e:
-            logger.error(
-                f"Error detecting transition duration from {file_path}: {e}")
-
-        logger.debug(f"Successfully extracted metadata from: {file_path}")
-        return metadata
-
-    except Exception as e:
-        logger.error(f"Error extracting metadata from {file_path}: {e}")
         logger.error(traceback.format_exc())
-        return None
+      #  return None
+
+    if metadata['lyrics'] is None and scan_for_lyrics:
+        try:
+            lyr = LyricsPlugin()
+            metadata['lyrics'] = lyr.get_lyrics(metadata['artist'],
+                                                metadata['title'],
+                                                metadata['album'],
+                                                metadata['duration'])
+            if metadata['lyrics'] != "":
+                lrc_path = os.path.splitext(file_path)[0] + ".lrc"
+                with open(lrc_path, "w", encoding='utf-8-sig') as f:
+                    f.write(metadata['lyrics'])
+        except NotImplementedError as e:
+            logger.debug(f"Cannot Find lyrics for {file_path}: {str(e)}")
+            metadata[
+                'lyrics'] = f"Cannot Find lyrics for '{metadata['title']}' by {metadata['artist']}."
+        except Exception as e:
+            logger.debug(f"Error reading lyrics from {file_path}: {str(e)}")
+            metadata['lyrics'] = "--"
+    return metadata
+
 
 
 def get_album_art(file_path):
