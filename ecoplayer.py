@@ -1916,9 +1916,9 @@ class AudioPlayer(QWidget):
 
     def do_shuffle(self):
         if self.playlist and len(self.playlist) > 1:
-            shuffle(self.playlist)
             self.playlist = [song for song in self.playlist if
-                             song.item_type != 'cover']
+                             not isinstance(song, QListWidgetItem) and song.item_type != 'cover']
+            shuffle(self.playlist)
             self.playlist_widget.clear()
             self.current_index = -1
             for song in self.playlist:
@@ -1927,14 +1927,15 @@ class AudioPlayer(QWidget):
 
     def do_sort(self):
         if self.playlist and len(self.playlist) > 1:
+            self.playlist = [song for song in self.playlist if
+                             not isinstance(song, QListWidgetItem) and song.item_type != 'cover']
             self.playlist.sort(key=lambda x: x.display_text)
-            self.playlist =[song for song in self.playlist if song.item_type != 'cover']
+
             self.playlist_widget.clear()
             self.current_index = -1
             for song in self.playlist:
-                if song.item_type != 'cover':
-                    item = QListWidgetItem(song.display_text)
-                    self.playlist_widget.addItem(item)
+                item = QListWidgetItem(song.display_text)
+                self.playlist_widget.addItem(item)
 
 
 
@@ -2682,10 +2683,20 @@ class AudioPlayer(QWidget):
         self.playlist_widget.clear()
         self.playlist.clear()
         self.playlist_label.setText('Queue:')
-      #  self.player.stop()
+        self.player.stop()
         self.current_index = -1
-       # self.lyrics_display.clear()
-       # self.update_play_button()
+        self.album_art.setPixmap(
+            QPixmap("static/images/default_album_art.png") if os.path.exists(
+                "static/images/default_album_art.png") else QPixmap())
+        self.title_label.setText("Title --")
+        self.artist_label.setText("Artist --")
+        self.album_label.setText("Album --")
+        self.year_label.setText("Year --")
+        self.duration_label.setText("Duration --")
+        self.codec_label.setText("Codec --")
+        self.text.clear()
+        self.lyrics_display.clear()
+        self.update_play_button()
 
     def is_remote_file(self, path):
         return path.is_remote
@@ -2869,10 +2880,14 @@ class AudioPlayer(QWidget):
          #       self.next_track()
 
     def handle_error(self, error, error_string):
+        self.player.errorOccurred.disconnect(self.handle_error)
         if error != QMediaPlayer.NoError:
-            QMessageBox.critical(self, "Error!",
-                                 "Playback Error: " + error_string)
-            self.next_track()
+            if QMessageBox.question(self, "Error!",
+                "Playback Error: " + error_string + " Continue to next track?") == QMessageBox.Yes:
+                self.next_track()
+            else:
+                self.clear_playlist()
+        self.player.errorOccurred.connect(self.handle_error)
 
             # self.update_play_button()
 
@@ -3686,7 +3701,7 @@ class AudioPlayer(QWidget):
                                 "static/images/default_album_art.png") else QPixmap())
                     self.playlist_widget.setIconSize(QSize(256, 256))
                     album = ListItem()
-                    album.item_type = 'cover'
+                    album.item_type = 'album'
                     album.is_remote = False
                     album.display_text = f'{c[1]} - {c[0]}'
                     album_item = QListWidgetItem(album.display_text)
