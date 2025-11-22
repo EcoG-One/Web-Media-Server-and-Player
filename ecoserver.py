@@ -367,7 +367,7 @@ def get_audio_metadata(file_path):
             metadata['lyrics'] = lyr.get_lyrics(metadata['artist'],
                                                 metadata['title'],
                                                 metadata['album'],
-                                                metadata['duration'])
+                                                audio_file.length)
             if metadata['lyrics'] != "":
                 lrc_path = os.path.splitext(file_path)[0] + ".lrc"
                 with open(lrc_path, "w", encoding='utf-8-sig') as f:
