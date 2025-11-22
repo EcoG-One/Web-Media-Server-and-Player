@@ -442,7 +442,7 @@ class AudioPlayer(QWidget):
         self.playlist = []
         self.current_index = -1
         self.show_remaining = False
-        self.short_albums = True
+        self.sort_albums = True
         self.lyrics = None
         self.lyrics_timer = QTimer(self)
         self.lyrics_timer.setInterval(200)
@@ -739,6 +739,8 @@ class AudioPlayer(QWidget):
         self.playlist_label = QLabel("Queue:")
         self.btn_shuffle = QPushButton("Shuffle")
         self.btn_shuffle.setFixedSize(QSize(60, 26))
+        self.sort = QPushButton("Sort")
+        self.sort.setFixedSize(QSize(60, 26))
         self.playlist_widget.setDragDropMode(QListWidget.InternalMove)
         self.playlist_widget.itemClicked.connect(
             self.play_selected_item)
@@ -930,6 +932,7 @@ class AudioPlayer(QWidget):
         playlist_layout = QVBoxLayout()
         shuffle_box.addWidget(self.playlist_label, )
         shuffle_box.addWidget(self.btn_shuffle, )
+        shuffle_box.addWidget(self.sort, )
         playlist_layout.addLayout(shuffle_box)
         playlist_layout.addWidget(self.playlist_widget)
 
@@ -954,6 +957,7 @@ class AudioPlayer(QWidget):
         self.btn_go.clicked.connect(self.on_go)
         self.search.returnPressed.connect(self.on_local)
         self.btn_shuffle.clicked.connect(self.do_shuffle)
+        self.sort.clicked.connect(self.do_sort)
         self.btn_info.clicked.connect(self.get_info)
         self.request_search.connect(self.search_tracks)
         self.request_reveal.connect(self.reveal_path)
@@ -1871,7 +1875,7 @@ class AudioPlayer(QWidget):
                     album_art = covers[album]
                 album_songs = songs[album]
                 album_artist = album_songs[0]['album_artist']
-                if self.short_albums:
+                if self.sort_albums:
                     self.add_album(album_art, album_artist, album)
                 for track in album_songs:
                     song = ListItem()
@@ -1912,15 +1916,26 @@ class AudioPlayer(QWidget):
 
     def do_shuffle(self):
         if self.playlist and len(self.playlist) > 1:
-            if self.playlist[0].item_type == 'song_title':
-                shuffle(self.playlist)
-            elif self.playlist[0].item_type == 'cover' and self.playlist[1].item_type == 'song_title':
-                shuffle(self.playlist[1:])
+            shuffle(self.playlist)
+            self.playlist = [song for song in self.playlist if
+                             song.item_type != 'cover']
             self.playlist_widget.clear()
             self.current_index = -1
             for song in self.playlist:
                 item = QListWidgetItem(song.display_text)
                 self.playlist_widget.addItem(item)
+
+    def do_sort(self):
+        if self.playlist and len(self.playlist) > 1:
+            self.playlist.sort(key=lambda x: x.display_text)
+            self.playlist =[song for song in self.playlist if song.item_type != 'cover']
+            self.playlist_widget.clear()
+            self.current_index = -1
+            for song in self.playlist:
+                if song.item_type != 'cover':
+                    item = QListWidgetItem(song.display_text)
+                    self.playlist_widget.addItem(item)
+
 
 
     # --- Mixing/transition config slots ---
@@ -3135,7 +3150,7 @@ class AudioPlayer(QWidget):
                 metadata['lyrics'] = lyr.get_lyrics(metadata['artist'],
                                                     metadata['title'],
                                                     metadata['album'],
-                                                    metadata['duration'])
+                                                    file.length)
                 if metadata['lyrics'] != "":
                     lrc_path = os.path.splitext(file_path)[0] + ".lrc"
                     with open(lrc_path, "w", encoding='utf-8-sig') as f:
