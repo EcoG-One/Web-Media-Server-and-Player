@@ -2233,7 +2233,7 @@ class AudioPlayer(QWidget):
                 file.route = 'serve_audio'
             media_url = file.absolute_path()
 
-            if self.vlc_helper.is_playing():
+            if self.vlc_helper and self.vlc_helper.is_playing():
                 self.vlc_helper.stop()
             # Determine fallback
             if self._uses_vlc_for_path(file.path):
