@@ -796,7 +796,7 @@ class AudioPlayer(QWidget):
        # self.wc_label = QLabel("To start the music, Drag-and-drop Playlists or/and Songs to Queue pane.")
        # self.status_bar.addPermanentWidget(self.wc_label)
 
-        image_path = 'static/images/buttons.jpg'
+        image_path = 'static/images/buttons.png'
         tile_width = 1650
         tile_height = 1650
         self.sub_images = self.split_image(image_path, tile_width, tile_height)
