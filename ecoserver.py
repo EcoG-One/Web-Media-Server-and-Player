@@ -8,7 +8,6 @@ import traceback
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, redirect, url_for, \
     send_file, abort
-from mutagen import File
 from mediafile import MediaFile
 from io import BytesIO
 import base64
@@ -390,17 +389,13 @@ def get_album_art(file_path):
         logger.warning(f"File does not exist: {file_path}")
         return None
     album_art = None
-    audio_file = File(file_path)
-    if audio_file is None:
-        logger.warning(f"Could not read audio file: {file_path}")
-        return None
+
     try:
-        if 'APIC:' in audio_file:
-            album_art = audio_file['APIC:'].data
-        elif hasattr(audio_file, 'pictures') and audio_file.pictures:
-            album_art = audio_file.pictures[0].data
-        elif 'covr' in audio_file:
-            album_art = audio_file['covr'][0]
+        file = MediaFile(file_path)
+        if file is None:
+            logger.warning(f"Could not read audio file: {file_path}")
+            return None
+        album_art = file.art
     except Exception as e:
         logger.warning(f"Error reading album art from {file_path}: {e}")
     logger.debug(f"Successfully extracted album art from: {file_path}")

@@ -2,7 +2,7 @@ import sys
 import os
 import sqlite3
 from fuzzywuzzy import fuzz
-from PySide6.QtCore import Qt, QDate, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot, QMutex
+from PySide6.QtCore import Qt, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot, QMutex
 from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -12,9 +12,6 @@ from PySide6.QtWidgets import (
     QDialog) # QMainWindow,
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 import qdarkstyle
-# import mutagen
-# from mutagen import File
-# from mutagen.flac import FLAC
 from mediafile import MediaFile
 from pathlib import Path
 from random import shuffle
