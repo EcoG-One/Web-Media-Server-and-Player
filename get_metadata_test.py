@@ -202,6 +202,8 @@ def get_basic_metadata(file_path):
             metadata['artist'] = str(audio_file['ARTIST'][0])
         elif '©ART' in audio_file:
             metadata['artist'] = str(audio_file['©ART'][0])
+        else:
+            metadata['artist'] = 'Unknown Artist'
     except Exception as e:
         print(
             f"Error reading artist metadata from {file_path}: {str(e)}")
@@ -244,6 +246,8 @@ def get_basic_metadata(file_path):
             metadata['album'] = str(audio_file['ALBUM'][0])
         elif '©alb' in audio_file:
             metadata['album'] = str(audio_file['©alb'][0])
+        else:
+            metadata['album'] = 'Unknown Album'
     except Exception as e:
         print(
             f"Error reading album metadata from {file_path}: {str(e)}")
@@ -255,6 +259,8 @@ def get_basic_metadata(file_path):
             metadata['year'] = str(audio_file['DATE'][0])
         elif '©day' in audio_file:
             metadata['year'] = str(audio_file['©day'][0])
+        else:
+            metadata['year'] = ''
     except Exception as e:
         print(
             f"Error reading year metadata from {file_path}: {e}")
@@ -263,6 +269,9 @@ def get_basic_metadata(file_path):
     try:
         if audio_file.info:
             metadata['duration'] = int(audio_file.info.length)
+        else:
+            metadata['duration'] = 0
+
     except Exception as e:
         print(f"Error reading duration from {file_path}: {e}")
 

@@ -13,8 +13,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 import qdarkstyle
 # import mutagen
-from mutagen import File
-from mutagen.flac import FLAC
+# from mutagen import File
+# from mutagen.flac import FLAC
 from mediafile import MediaFile
 from pathlib import Path
 from random import shuffle
@@ -1694,7 +1694,7 @@ class AudioPlayer(QWidget):
     def get_album_art(self, path):
         img_data = None
         try:
-            audio = File(path)
+            audio = MediaFile(path)
             if audio is not None and hasattr(audio, 'tags'):
                 tags = audio.tags
                 if 'APIC:' in tags:
@@ -2297,60 +2297,25 @@ class AudioPlayer(QWidget):
 
 
     def get_basic_metadata(self, file_path):
-        audio_file = File(file_path)
-        if audio_file is None:
-            self.status_bar.showMessage(
-                f"Could not read audio file: {file_path}. Make sure the file exists.")
-            return None
-
-        metadata = {
-            'artist': '',
-            'title': '',
-            'album': '',
-            'year': '',
-            'duration': 0,
-            'lyrics': '',
-            'codec': '',
-            'picture': None
-        }
-
-        # Get basic metadata
+        song_title = os.path.basename(file_path)
+        artist = 'Unknown Artist'
+        album = 'Unknown Album'
         try:
-            if 'TPE1' in audio_file:  # Artist
-                metadata['artist'] = str(audio_file['TPE1'])
-            elif 'ARTIST' in audio_file:
-                metadata['artist'] = str(audio_file['ARTIST'][0])
-            elif '©ART' in audio_file:
-                metadata['artist'] = str(audio_file['©ART'][0])
+            file = MediaFile(file_path)
+            if file is None:
+                self.status_bar.showMessage(
+                    f"Could not read audio file: {file_path}. Make sure the file exists.")
+                return None
+
+            # Get basic metadata
+            song_title = file.title
+            artist = file.artist
+            album = file.album
+
         except Exception as e:
-            self.status_bar.showMessage(
-                f"Error reading artist metadata from {file_path}: {str(e)}")
+            print(f"Error extracting metadata from {file_path}: {str(e)}")
 
-        try:
-            if 'TIT2' in audio_file:  # Title
-                metadata['title'] = str(audio_file['TIT2'])
-            elif 'TITLE' in audio_file:
-                metadata['title'] = str(audio_file['TITLE'][0])
-            elif '©nam' in audio_file:
-                metadata['title'] = str(audio_file['©nam'][0])
-        except Exception as e:
-            self.status_bar.showMessage(
-                f"Error reading title metadata from {file_path}: {str(e)}")
-
-        try:
-            if 'TALB' in audio_file:  # Album
-                metadata['album'] = str(audio_file['TALB'])
-            elif 'ALBUM' in audio_file:
-                metadata['album'] = str(audio_file['ALBUM'][0])
-            elif '©alb' in audio_file:
-                metadata['album'] = str(audio_file['©alb'][0])
-        except Exception as e:
-            self.status_bar.showMessage(
-                f"Error reading album metadata from {file_path}: {str(e)}")
-
-        display_text = f"{metadata['artist']} - {metadata['title']} ({metadata['album']})"
-
-        return display_text
+        return f"{artist} - {song_title} ({album})"
 
 
 
@@ -2467,14 +2432,14 @@ class AudioPlayer(QWidget):
                 if not os.path.isabs(line):
                     line = os.path.abspath(os.path.join(os.path.dirname(path), line))
                 if os.path.isfile(line):
-                    audio = File(line)
+                    audio = MediaFile(line)
                 else:
                     audio = None
                 if not line or not audio:
                     continue
                 song = ListItem()
                 song.item_type = "song_title"
-                song.display_text = os.path.basename(line)
+                song.display_text = self.get_basic_metadata(line)
                 song.path = line
                 song.is_remote = False
                 songs.append(song)
@@ -3286,32 +3251,7 @@ class AudioPlayer(QWidget):
         m, s = divmod(s, 60)
         return f"{m:02}:{s:02}"
 
-    def extract_year(self, meta):
-        # Try from Qt meta first (works for MP3/MP4, rarely for FLAC)
-        date_val = meta.value(QMediaMetaData.Date) if hasattr(meta,
-                                                              "value") else None
-        if date_val:
-            if isinstance(date_val, QDate):
-                return str(date_val.year())
-            if isinstance(date_val, str):
-                match = re.search(r'\b(\d{4})\b', date_val)
-                if match:
-                    return match.group(1)
-            date_str = str(date_val)
-            match = re.search(r'\b(\d{4})\b', date_str)
-            if match:
-                return match.group(1)
-        # If FLAC, try mutagen
-        audio_path = self.playlist[self.current_index]
-        if audio_path.lower().endswith(".flac"):
-            try:
-                audio = FLAC(audio_path)
-                for tag in ("date", "year", "year_released"):
-                    if tag in audio:
-                        return audio[tag][0][:4]
-            except Exception:
-                pass
-        return "--"
+
 
     def extract_audio_info(self):
         path = self.playlist[self.current_index]
@@ -3324,7 +3264,7 @@ class AudioPlayer(QWidget):
             except Exception as e:
                 self.status_bar.showMessage("Remote metadata fetch error: " + str(e))
         else:
-            audio = File(self.playlist[self.current_index])
+            audio = MediaFile(self.playlist[self.current_index])
             if not audio:
                 self.status_bar.showMessage(f"{audio} is not an audio file, or it is unsupported or corrupted.")
                 return None
