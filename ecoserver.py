@@ -252,94 +252,102 @@ def get_audio_metadata(file_path):
         logger.error(
             f"Error extracting transition duration from {file_path}: {str(e)}")
     try:
-        audio_file = MediaFile(file_path)
-        if audio_file is None:
+        file = MediaFile(file_path)
+        if file is None:
             logger.warning(f"Could not read audio file: {file_path}")
             return None
 
-        title = audio_file.title
-        artist = audio_file.artist
-        album = audio_file.album
-        albumartist = audio_file.albumartist
-        if audio_file.samplerate:
-            samplerate = str(audio_file.samplerate)
-        if audio_file.bitdepth:
-            bitdepth = audio_file.bitdepth
-        if audio_file.bitrate:
-            bitrate = str(round(audio_file.bitrate / 1000))
-        if audio_file.channels:
-            if audio_file.channels == 2:
+        title = file.title
+        artist = file.artist
+        album = file.album
+        albumartist = file.albumartist
+        if file.samplerate:
+            samplerate = str(file.samplerate / 1000) + 'kHz'
+        else:
+            samplerate = ''
+        if file.bitrate:
+            bitrate = str(round(file.bitrate / 1000))
+        else:
+            bitrate = ''
+        if file.format == 'MP3':
+            bitdepth = bitrate + 'kbps '
+        elif file.bitdepth:
+            bitdepth = str(file.bitdepth) + 'bit '
+        else:
+            bitdepth = ''
+        if file.channels:
+            if file.channels == 2:
                 channels = "Stereo "
             else:
-                channels = str(audio_file.channels)
+                channels = str(file.channels)
         else:
             channels = None
-        composer = audio_file.composer
-        if audio_file.date:
-            date = audio_file.date.strftime('%d/%m/%Y')
+        composer = file.composer
+        if file.date:
+            date = file.date.strftime('%d/%m/%Y')
         else:
             date = None
-        encoder_info = audio_file.encoder_info
-        encoder_settings = audio_file.encoder_settings
-        codec = audio_file.format
-        genre = audio_file.genre
-        if audio_file.length:
-            duration = f"{(audio_file.length // 60):.0f}:" + "{:06.3F}".format(audio_file.length % 60)
+        encoder_info = file.encoder_info
+        encoder_settings = file.encoder_settings
+        codec = file.format
+        genre = file.genre
+        if file.length:
+            duration = f"{(file.length // 60):.0f}:" + "{:06.3F}".format(
+                file.length % 60)
         else:
             duration = '---'
-        if audio_file.original_date:
-            original_date = audio_file.original_date.strftime('%d/%m/%Y')
+        if file.original_date:
+            original_date = file.original_date.strftime('%d/%m/%Y')
         else:
             original_date = None
-        if audio_file.year:
-            year = str(audio_file.year)
+        if file.year:
+            year = str(file.year)
         else:
             year = '---'
-        if audio_file.original_year:
-            original_year = str(audio_file.original_year)
+        if file.original_year:
+            original_year = str(file.original_year)
             year = original_year
         else:
             original_year = None
-        if audio_file.r128_album_gain:
-            r128_album_gain = str(audio_file.r128_album_gain)
+        if file.r128_album_gain:
+            r128_album_gain = str(file.r128_album_gain)
         else:
             r128_album_gain = None
-        if audio_file.r128_track_gain:
-            r128_track_gain = str(audio_file.r128_track_gain)
+        if file.r128_track_gain:
+            r128_track_gain = str(file.r128_track_gain)
         else:
             r128_track_gain = None
-        if audio_file.track:
-            track = str(audio_file.track)
+        if file.track:
+            track = str(file.track)
         else:
             track = None
-        lyrics = audio_file.lyrics
+        lyrics = file.lyrics
 
         metadata = {
-            'artist'             : artist or 'Unknown Artist',
-            'album_artist'       : albumartist or artist or 'Unknown Album Artist',
-            'title'              : title or os.path.basename(file_path),
-            'album'              : album or 'Unknown Album',
-            'year'               : year or '---',
-            'duration'           : duration,
-            'bitdepth'           : bitdepth,
-            'bitrate'            : bitrate,
-            'channels'           : channels,
-            'composer'           : composer,
-            'date'               : date,
-            'encoder_info'       : encoder_info,
-            'encoder_settings'   : encoder_settings,
-            'genre'              : genre,
-            'lyrics'             : lyrics,
-            'original_date'      : original_date,
-            'original_year'      : original_year,
-            'r128_album_gain'    : r128_album_gain,
-            'r128_track_gain'    : r128_track_gain,
-            'samplerate'         : samplerate,
-            'track'              : track,
-            'codec'              : codec + ' ' + channels
-                                   + str(audio_file.bitdepth) + 'bit ' + str(
-                audio_file.samplerate / 1000) + 'kHz',
-            'picture'            : audio_file.art,
+            'artist'          : artist or 'Unknown Artist',
+            'album_artist'    : albumartist or artist or 'Unknown Album Artist',
+            'title'           : title or os.path.basename(file_path),
+            'album'           : album or 'Unknown Album',
+            'year'            : year or '---',
+            'duration'        : duration,
+            'bitdepth'        : bitdepth,
+            'bitrate'         : bitrate,
+            'channels'        : channels,
+            'composer'        : composer,
+            'date'            : date,
+            'encoder_info'    : encoder_info,
+            'encoder_settings': encoder_settings,
+            'genre'           : genre,
+            'lyrics'          : lyrics,
+            'original_date'   : original_date,
+            'original_year'   : original_year,
+            'r128_album_gain' : r128_album_gain,
+            'r128_track_gain' : r128_track_gain,
+            'samplerate'      : samplerate,
+            'track'           : track,
+            'codec'           : codec + ' ' + channels
+                                + bitdepth + samplerate,
+            'picture'         : file.art,
             'transition_duration': transition_duration or 5
         }
         logger.info(f"Successfully extracted metadata from: {file_path}")
@@ -355,10 +363,10 @@ def get_audio_metadata(file_path):
             'lyrics'             : None,
             'codec'              : '',
             'picture'            : None,
-            'transition_duration': 5.0
+            'transition_duration': transition_duration or 5
         }
         logger.error(traceback.format_exc())
-      #  return None
+        return
 
     if metadata['lyrics'] is None and scan_for_lyrics:
         try:
@@ -366,7 +374,7 @@ def get_audio_metadata(file_path):
             metadata['lyrics'] = lyr.get_lyrics(metadata['artist'],
                                                 metadata['title'],
                                                 metadata['album'],
-                                                audio_file.length)
+                                                file.length)
             if metadata['lyrics'] != "":
                 lrc_path = os.path.splitext(file_path)[0] + ".lrc"
                 with open(lrc_path, "w", encoding='utf-8-sig') as f:
@@ -883,13 +891,11 @@ def migrate_add_album_artist():
             song_id, path = row
             try:
                 if path and os.path.exists(path):
-                    metadata = get_audio_metadata(path)
-                    if metadata:
-                        album_artist = metadata.get('album_artist') or metadata.get('artist') or ''
-                        cursor.execute("UPDATE Songs SET album_artist = ? WHERE id = ?", (album_artist, song_id))
-                        updated += 1
-                    else:
-                        logger.warning(f"Metadata could not be extracted for: {path}")
+                    file = MediaFile(path)
+                    artist = file.artist
+                    album_artist = file.albumartist or artist or ''
+                    cursor.execute("UPDATE Songs SET album_artist = ? WHERE id = ?", (album_artist, song_id))
+                    updated += 1
                 else:
                     logger.warning(f"File path missing or does not exist for DB record id={song_id}: {path}")
             except Exception as e:
@@ -1622,6 +1628,7 @@ def setup_tray():
 
 
 if __name__ == '__main__':
+    sys.stdout.reconfigure(encoding='utf-8')
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
     if '--no-tray' in sys.argv:

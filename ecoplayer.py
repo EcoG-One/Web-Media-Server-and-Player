@@ -2237,6 +2237,7 @@ class AudioPlayer(QWidget):
                 # use VLC fallback
                 self._start_vlc_play(file, idx)
             else:
+               # codec_context.pkt_timebase = media.time_base
                 self.player.setSource(media_url)
                 self.player.play()
                 self.playlist_widget.setCurrentRow(idx)
@@ -2964,7 +2965,7 @@ class AudioPlayer(QWidget):
 
     def on_metadata_error(self, error_message):
         """Handle metadata error"""
-        QMessageBox.critical(self, "Error", error_message)
+        self.status_bar.showMessage(f"Error: {error_message}")
         self.status_bar.repaint()
 
     def cleanup_metadata(self):
@@ -3018,20 +3019,41 @@ class AudioPlayer(QWidget):
                     frame_duration=0.1)
                 self.set_transition_duration(self.transition_duration)
         except Exception as e:
+            self.transition_duration = 5
             self.meta_worker.work_message.emit(
                 f"Error extracting transition duration from {file_path}: {str(e)}")
-        file = MediaFile(file_path)
+        metadata = {
+            'artist'             : 'Unknown Artist',
+            'album_artist'       : 'Unknown Album Artist',
+            'title'              : os.path.basename(file_path),
+            'album'              : 'Unknown Album',
+            'year'               : '---',
+            'duration'           : '---',
+            'lyrics'             : None,
+            'codec'              : '',
+            'picture'            : None,
+            'transition_duration': self.transition_duration
+        }
         try:
+            file = MediaFile(file_path)
             title = file.title
             artist = file.artist
             album = file.album
             albumartist = file.albumartist
             if file.samplerate:
-                samplerate = str(file.samplerate)
-            if file.bitdepth:
-                bitdepth = file.bitdepth
+                samplerate = str(file.samplerate/1000) + 'kHz'
+            else:
+                samplerate = ''
             if file.bitrate:
                 bitrate = str(round(file.bitrate/1000))
+            else:
+                bitrate = ''
+            if file.format == 'MP3':
+                bitdepth = bitrate + 'kbps '
+            elif file.bitdepth:
+                bitdepth = str(file.bitdepth) + 'bit '
+            else:
+                bitdepth = ''
             if file.channels:
                 if file.channels == 2:
                     channels = "Stereo "
@@ -3102,24 +3124,13 @@ class AudioPlayer(QWidget):
                 'samplerate'        : samplerate,
                 'track'             : track,
                 'codec'             : codec + ' ' + channels
-                                       + str(file.bitdepth) + 'bit ' + str(file.samplerate/1000) + 'kHz',
+                                       + bitdepth + samplerate,
                 'picture'           : file.art,
                 'transition_duration': self.transition_duration or 5
             }
         except Exception as e:
             self.meta_worker.work_message.emit(f"Error extracting metadata from {file_path}: {str(e)}")
-            metadata = {
-                'artist'             : 'Unknown Artist',
-                'album_artist'       : 'Unknown Album Artist',
-                'title'              : 'Unknown Title',
-                'album'              : 'Unknown Album',
-                'year'               : '---',
-                'duration'           : '---',
-                'lyrics'             : None,
-                'codec'              : '',
-                'picture'            : None,
-                'transition_duration': 5.0
-            }
+            return metadata
         self.meta_worker.work_message.emit(f"Successfully extracted metadata from: {file_path}")
         if metadata['lyrics'] is None and self.scan_for_lyrics:
             try:
