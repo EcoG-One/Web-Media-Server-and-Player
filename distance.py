@@ -229,9 +229,7 @@ class Distance:
     def update(self, dist: Distance):
         """Adds all the distance penalties from `dist`."""
         if not isinstance(dist, Distance):
-            raise ValueError(
-                f"`dist` must be a Distance object, not {type(dist)}"
-            )
+            raise ValueError(f"`dist` must be a Distance object, not {type(dist)}")
         for key, penalties in dist._penalties.items():
             self._penalties.setdefault(key, []).extend(penalties)
 
@@ -389,11 +387,7 @@ def track_distance(
     dist.add_string("track_title", item.title, track_info.title)
 
     # Artist. Only check if there is actually an artist in the track data.
-    if (
-        incl_artist
-        and track_info.artist
-        and item.artist.lower() not in VA_ARTISTS
-    ):
+    if incl_artist and track_info.artist and item.artist.lower() not in VA_ARTISTS:
         dist.add_string("track_artist", item.artist, track_info.artist)
 
     # Track index.
@@ -443,9 +437,7 @@ def distance(
     if album_info.media:
         # Preferred media options.
         media_patterns: Sequence[str] = preferred_config["media"].as_str_seq()
-        options = [
-            re.compile(rf"(\d+x)?({pat})", re.I) for pat in media_patterns
-        ]
+        options = [re.compile(rf"(\d+x)?({pat})", re.I) for pat in media_patterns]
         if options:
             dist.add_priority("media", album_info.media, options)
         # Current media.
@@ -472,9 +464,7 @@ def distance(
         elif album_info.original_year:
             # Prefer matchest closest to the release year.
             diff = abs(likelies["year"] - album_info.year)
-            diff_max = abs(
-                datetime.date.today().year - album_info.original_year
-            )
+            diff_max = abs(datetime.date.today().year - album_info.original_year)
             dist.add_ratio("year", diff, diff_max)
         else:
             # Full penalty when there is no original year.
@@ -495,9 +485,7 @@ def distance(
 
     # Catalog number.
     if likelies["catalognum"] and album_info.catalognum:
-        dist.add_string(
-            "catalognum", likelies["catalognum"], album_info.catalognum
-        )
+        dist.add_string("catalognum", likelies["catalognum"], album_info.catalognum)
 
     # Disambiguation.
     if likelies["albumdisambig"] and album_info.albumdisambig:
@@ -507,9 +495,7 @@ def distance(
 
     # Album ID.
     if likelies["mb_albumid"]:
-        dist.add_equality(
-            "album_id", likelies["mb_albumid"], album_info.album_id
-        )
+        dist.add_equality("album_id", likelies["mb_albumid"], album_info.album_id)
 
     # Tracks.
     dist.tracks = {}

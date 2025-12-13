@@ -114,9 +114,7 @@ class ImportSession:
             iconfig["incremental"] = False
 
         if iconfig["reflink"]:
-            iconfig["reflink"] = iconfig["reflink"].as_choice(
-                ["auto", True, False]
-            )
+            iconfig["reflink"] = iconfig["reflink"].as_choice(["auto", True, False])
 
         # Copy, move, reflink, link, and hardlink are mutually exclusive.
         if iconfig["move"]:

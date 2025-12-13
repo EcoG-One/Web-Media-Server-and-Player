@@ -117,17 +117,12 @@ class LibModel(dbcore.Model["Library"]):
     @classmethod
     def any_writable_media_field_query(cls, *args, **kwargs) -> dbcore.OrQuery:
         fields = cls.writable_media_fields
-        return dbcore.OrQuery(
-            [cls.field_query(f, *args, **kwargs) for f in fields]
-        )
+        return dbcore.OrQuery([cls.field_query(f, *args, **kwargs) for f in fields])
 
     def duplicates_query(self, fields: list[str]) -> dbcore.AndQuery:
         """Return a query for entities with same values in the given fields."""
         return dbcore.AndQuery(
-            [
-                self.field_query(f, self.get(f), dbcore.MatchQuery)
-                for f in fields
-            ]
+            [self.field_query(f, self.get(f), dbcore.MatchQuery) for f in fields]
         )
 
 
@@ -162,10 +157,7 @@ class FormattedItemMapping(dbcore.db.FormattedMapping):
             if self.included_keys == self.ALL_KEYS:
                 # Performance note: this triggers a database query.
                 for key in self.album.keys(computed=True):
-                    if (
-                        key in Album.item_keys
-                        or key not in self.item._fields.keys()
-                    ):
+                    if key in Album.item_keys or key not in self.item._fields.keys():
                         album_keys.append(key)
             else:
                 album_keys = self.included_keys
@@ -525,9 +517,7 @@ class Album(LibModel):
             subpath = util.asciify_path(
                 subpath, beets.config["path_sep_replace"].as_str()
             )
-        subpath = util.sanitize_path(
-            subpath, replacements=self._db.replacements
-        )
+        subpath = util.sanitize_path(subpath, replacements=self._db.replacements)
         subpath = bytestring_path(subpath)
 
         _, ext = os.path.splitext(image)
@@ -730,9 +720,7 @@ class Item(LibModel):
     # Any kind of field (fixed, flexible, and computed) may be a media
     # field. Only these fields are read from disk in `read` and written in
     # `write`.
-    _media_fields = set(MediaFile.readable_fields()).intersection(
-        _fields.keys()
-    )
+    _media_fields = set(MediaFile.readable_fields()).intersection(_fields.keys())
 
     # Set of item fields that are backed by *writable* `MediaFile` tag
     # fields.
@@ -798,9 +786,7 @@ class Item(LibModel):
 
     def duplicates_query(self, fields: list[str]) -> dbcore.AndQuery:
         """Return a query for entities with same values in the given fields."""
-        return super().duplicates_query(fields) & dbcore.query.NoneQuery(
-            "album_id"
-        )
+        return super().duplicates_query(fields) & dbcore.query.NoneQuery("album_id")
 
     @classmethod
     def from_path(cls, path):
@@ -1036,19 +1022,13 @@ class Item(LibModel):
                 destination=dest,
             )
             util.move(self.path, dest)
-            plugins.send(
-                "item_moved", item=self, source=self.path, destination=dest
-            )
+            plugins.send("item_moved", item=self, source=self.path, destination=dest)
         elif operation == MoveOperation.COPY:
             util.copy(self.path, dest)
-            plugins.send(
-                "item_copied", item=self, source=self.path, destination=dest
-            )
+            plugins.send("item_copied", item=self, source=self.path, destination=dest)
         elif operation == MoveOperation.LINK:
             util.link(self.path, dest)
-            plugins.send(
-                "item_linked", item=self, source=self.path, destination=dest
-            )
+            plugins.send("item_linked", item=self, source=self.path, destination=dest)
         elif operation == MoveOperation.HARDLINK:
             util.hardlink(self.path, dest)
             plugins.send(

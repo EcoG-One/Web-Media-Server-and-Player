@@ -1,3 +1,5 @@
+
+
 import os
 import re
 import sys
@@ -6,8 +8,16 @@ import subprocess
 import logging
 import traceback
 from pathlib import Path
-from flask import Flask, render_template, request, jsonify, redirect, url_for, \
-    send_file, abort
+from flask import (
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    redirect,
+    url_for,
+    send_file,
+    abort,
+)
 from mediafile import MediaFile
 from io import BytesIO
 import base64
@@ -22,7 +32,8 @@ from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
 from dlna_server import serve_audio_via_upnp
 from ecoserver_dlna_blueprint import dlna_bp
-if '--no-tray' not in sys.argv:
+
+if "--no-tray" not in sys.argv:
     from pystray import Icon, MenuItem, Menu
     from plyer import notification
 
@@ -35,9 +46,9 @@ SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
 APP_DIR = Path.home() / "Web-Media-Server-and-Player"
 APP_DIR.mkdir(exist_ok=True)
 SETTINGS_FILE = APP_DIR / "settings.json"
-DB_PATH = APP_DIR / 'music.db'
-COVERS_DB_PATH = APP_DIR / 'covers.db'
-MUSIC_DIR = '/share/CACHEDEV1_DATA'  # Use only on NAS systems
+DB_PATH = APP_DIR / "music.db"
+COVERS_DB_PATH = APP_DIR / "covers.db"
+MUSIC_DIR = "/share/CACHEDEV1_DATA"  # Use only on NAS systems
 size = 256, 256
 results = None
 scan_for_lyrics = True
@@ -45,13 +56,26 @@ silence_threshold_db = -46  # dB
 
 
 def run_flask():
+    """
+        Start the Flask server and initialize the database.
+
+        This function performs the following steps:
+        1. Initializes the database by calling `init_database()`.
+        2. Checks if the `--migrate` argument is passed in the command line. If so,
+           it runs the `migrate_add_album_artist()` function to ensure the database schema is updated.
+        3. Starts the Flask server on host `0.0.0.0` and port `5000` with debugging enabled.
+        4. Logs any errors encountered during the server startup process.
+
+        Raises:
+            Exception: If the server fails to start or an unexpected error occurs.
+        """
     try:
         init_database()
-        if len(sys.argv) > 1 and '--migrate' in sys.argv:
+        if len(sys.argv) > 1 and "--migrate" in sys.argv:
             # Ensure the Songs table has an album_artist column and populate it
             migrate_add_album_artist()
         logger.info(f"Starting Flask server on port 5000")
-        app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+        app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
     except Exception as e:
         logger.error(f"Failed to start server: {e}")
         logger.error(traceback.format_exc())
@@ -59,14 +83,20 @@ def run_flask():
 
 
 def show_notification(title, message):
-    """Show desktop notification"""
-    if '--no-tray' in sys.argv:
+    """
+    Display a desktop notification.
+
+    This function uses the `plyer` library to show a notification with the given title and message.
+    If the `--no-tray` argument is passed in the command line, the function does nothing.
+
+    Args:
+        title (str): The title of the notification.
+        message (str): The message content of the notification.
+    """
+    if "--no-tray" in sys.argv:
         pass
     notification.notify(
-        title=title,
-        message=message,
-        app_name='FlaskApp',
-        timeout=5  # seconds
+        title=title, message=message, app_name="FlaskApp", timeout=5  # seconds
     )
 
 
@@ -74,29 +104,27 @@ def show_notification(title, message):
 def setup_logging():
     """Setup comprehensive logging configuration"""
     # Create logs directory if it doesn't exist
-    log_dir = Path('logs')
+    log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
     # Create formatters
     detailed_formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+        "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s"
     )
 
-    simple_formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s'
-    )
+    simple_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
     # Setup root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
 
     # File handler for all logs
-    file_handler = logging.FileHandler(log_dir / 'ecoserver.log')
+    file_handler = logging.FileHandler(log_dir / "ecoserver.log")
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(detailed_formatter)
 
     # File handler for errors only
-    error_handler = logging.FileHandler(log_dir / 'errors.log')
+    error_handler = logging.FileHandler(log_dir / "errors.log")
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(detailed_formatter)
 
@@ -124,12 +152,9 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 # Global settings
-SETTINGS = {
-    'crossfade_time': 4,
-    'fade_in'       : 0
-}
-audio_extensions = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.wma'}
-playlist_extensions = {'.m3u', '.m3u8', '.cue'}
+SETTINGS = {"crossfade_time": 4, "fade_in": 0}
+audio_extensions = {".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac", ".wma"}
+playlist_extensions = {".m3u", ".m3u8", ".cue"}
 
 
 # Database initialization
@@ -141,7 +166,8 @@ def init_database():
         cursor = conn.cursor()
 
         # Create Songs table (including album_artist column)
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS Songs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 path CHAR(255) NOT NULL,
@@ -153,16 +179,19 @@ def init_database():
                 album CHAR(120),
                 year SMALLINT
             )
-        ''')
+        """
+        )
 
         # Create Playlists table
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS Playlists (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 path CHAR(255) NOT NULL,
                 PL_name CHAR(120) NOT NULL
             )
-        ''')
+        """
+        )
 
         conn.commit()
         conn.close()
@@ -171,14 +200,16 @@ def init_database():
         cursor = conn.cursor()
 
         # Create Album Art table
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS Covers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 album CHAR(120) NOT NULL,
                 album_artist CHAR(120) NOT NULL,
                 cover TEXT
             )
-        ''')
+        """
+        )
 
         conn.commit()
         conn.close()
@@ -194,8 +225,7 @@ def init_database():
         raise
 
 
-def detect_low_intensity_segments(audio_path, threshold_db=-46,
-                                  frame_duration=0.1):
+def detect_low_intensity_segments(audio_path, threshold_db=-46, frame_duration=0.1):
     # Load audio file
     y, sr = librosa.load(audio_path, sr=None)
     duration = librosa.get_duration(y=y, sr=sr)
@@ -223,7 +253,7 @@ def detect_low_intensity_segments(audio_path, threshold_db=-46,
         if len(frame) == 0:
             continue
 
-        rms = np.sqrt(np.mean(frame ** 2))
+        rms = np.sqrt(np.mean(frame**2))
         db = 20 * np.log10(rms + 1e-10)  # Avoid log(0)
 
         if db < threshold_db:
@@ -248,12 +278,11 @@ def get_audio_metadata(file_path):
         return None
     try:
         transition_duration = detect_low_intensity_segments(
-                file_path, threshold_db=silence_threshold_db,
-                frame_duration=0.1)
+            file_path, threshold_db=silence_threshold_db, frame_duration=0.1
+        )
     except Exception as e:
         transition_duration = 4.5
-        logger.error(
-            f"Error extracting transition duration from {file_path}: {str(e)}")
+        logger.error(f"Error extracting transition duration from {file_path}: {str(e)}")
     try:
         file = MediaFile(file_path)
         if file is None:
@@ -265,19 +294,19 @@ def get_audio_metadata(file_path):
         album = file.album
         albumartist = file.albumartist
         if file.samplerate:
-            samplerate = str(file.samplerate / 1000) + 'kHz'
+            samplerate = str(file.samplerate / 1000) + "kHz"
         else:
-            samplerate = ''
+            samplerate = ""
         if file.bitrate:
             bitrate = str(round(file.bitrate / 1000))
         else:
-            bitrate = ''
-        if file.format == 'MP3':
-            bitdepth = bitrate + 'kbps '
+            bitrate = ""
+        if file.format == "MP3":
+            bitdepth = bitrate + "kbps "
         elif file.bitdepth:
-            bitdepth = str(file.bitdepth) + 'bit '
+            bitdepth = str(file.bitdepth) + "bit "
         else:
-            bitdepth = ''
+            bitdepth = ""
         if file.channels:
             if file.channels == 2:
                 channels = "Stereo "
@@ -287,7 +316,7 @@ def get_audio_metadata(file_path):
             channels = None
         composer = file.composer
         if file.date:
-            date = file.date.strftime('%d/%m/%Y')
+            date = file.date.strftime("%d/%m/%Y")
         else:
             date = None
         encoder_info = file.encoder_info
@@ -296,17 +325,18 @@ def get_audio_metadata(file_path):
         genre = file.genre
         if file.length:
             duration = f"{(file.length // 60):.0f}:" + "{:06.3F}".format(
-                file.length % 60)
+                file.length % 60
+            )
         else:
-            duration = '---'
+            duration = "---"
         if file.original_date:
-            original_date = file.original_date.strftime('%d/%m/%Y')
+            original_date = file.original_date.strftime("%d/%m/%Y")
         else:
             original_date = None
         if file.year:
             year = str(file.year)
         else:
-            year = '---'
+            year = "---"
         if file.original_year:
             original_year = str(file.original_year)
             year = original_year
@@ -327,70 +357,68 @@ def get_audio_metadata(file_path):
         lyrics = file.lyrics
 
         metadata = {
-            'artist'          : artist or 'Unknown Artist',
-            'album_artist'    : albumartist or artist or 'Unknown Album Artist',
-            'title'           : title or os.path.basename(file_path),
-            'album'           : album or 'Unknown Album',
-            'year'            : year or '---',
-            'duration'        : duration,
-            'bitdepth'        : bitdepth,
-            'bitrate'         : bitrate,
-            'channels'        : channels,
-            'composer'        : composer,
-            'date'            : date,
-            'encoder_info'    : encoder_info,
-            'encoder_settings': encoder_settings,
-            'genre'           : genre,
-            'lyrics'          : lyrics,
-            'original_date'   : original_date,
-            'original_year'   : original_year,
-            'r128_album_gain' : r128_album_gain,
-            'r128_track_gain' : r128_track_gain,
-            'samplerate'      : samplerate,
-            'track'           : track,
-            'codec'           : codec + ' ' + channels
-                                + bitdepth + samplerate,
-            'picture'         : file.art,
-            'transition_duration': transition_duration or 5
+            "artist": artist or "Unknown Artist",
+            "album_artist": albumartist or artist or "Unknown Album Artist",
+            "title": title or os.path.basename(file_path),
+            "album": album or "Unknown Album",
+            "year": year or "---",
+            "duration": duration,
+            "bitdepth": bitdepth,
+            "bitrate": bitrate,
+            "channels": channels,
+            "composer": composer,
+            "date": date,
+            "encoder_info": encoder_info,
+            "encoder_settings": encoder_settings,
+            "genre": genre,
+            "lyrics": lyrics,
+            "original_date": original_date,
+            "original_year": original_year,
+            "r128_album_gain": r128_album_gain,
+            "r128_track_gain": r128_track_gain,
+            "samplerate": samplerate,
+            "track": track,
+            "codec": codec + " " + channels + bitdepth + samplerate,
+            "picture": file.art,
+            "transition_duration": transition_duration or 5,
         }
         logger.info(f"Successfully extracted metadata from: {file_path}")
     except Exception as e:
         logger.error(f"Error extracting metadata from {file_path}: {str(e)}")
         metadata = {
-            'artist'             : 'Unknown Artist',
-            'album_artist'       : 'Unknown Album Artist',
-            'title'              : 'Unknown Title',
-            'album'              : 'Unknown Album',
-            'year'               : '---',
-            'duration'           : '---',
-            'lyrics'             : None,
-            'codec'              : '',
-            'picture'            : None,
-            'transition_duration': transition_duration or 5
+            "artist": "Unknown Artist",
+            "album_artist": "Unknown Album Artist",
+            "title": "Unknown Title",
+            "album": "Unknown Album",
+            "year": "---",
+            "duration": "---",
+            "lyrics": None,
+            "codec": "",
+            "picture": None,
+            "transition_duration": transition_duration or 5,
         }
         logger.error(traceback.format_exc())
         return
 
-    if metadata['lyrics'] is None and scan_for_lyrics:
+    if metadata["lyrics"] is None and scan_for_lyrics:
         try:
             lyr = LyricsPlugin()
-            metadata['lyrics'] = lyr.get_lyrics(metadata['artist'],
-                                                metadata['title'],
-                                                metadata['album'],
-                                                file.length)
-            if metadata['lyrics'] != "":
+            metadata["lyrics"] = lyr.get_lyrics(
+                metadata["artist"], metadata["title"], metadata["album"], file.length
+            )
+            if metadata["lyrics"] != "":
                 lrc_path = os.path.splitext(file_path)[0] + ".lrc"
-                with open(lrc_path, "w", encoding='utf-8-sig') as f:
-                    f.write(metadata['lyrics'])
+                with open(lrc_path, "w", encoding="utf-8-sig") as f:
+                    f.write(metadata["lyrics"])
         except NotImplementedError as e:
             logger.debug(f"Cannot Find lyrics for {file_path}: {str(e)}")
-            metadata[
-                'lyrics'] = f"Cannot Find lyrics for '{metadata['title']}' by {metadata['artist']}."
+            metadata["lyrics"] = (
+                f"Cannot Find lyrics for '{metadata['title']}' by {metadata['artist']}."
+            )
         except Exception as e:
             logger.debug(f"Error reading lyrics from {file_path}: {str(e)}")
-            metadata['lyrics'] = "--"
+            metadata["lyrics"] = "--"
     return metadata
-
 
 
 def get_album_art(file_path):
@@ -411,7 +439,7 @@ def get_album_art(file_path):
         logger.warning(f"Error reading album art from {file_path}: {e}")
     logger.debug(f"Successfully extracted album art from: {file_path}")
     try:
-        album_art = base64.b64encode(album_art).decode('utf-8')
+        album_art = base64.b64encode(album_art).decode("utf-8")
     except Exception as e:
         logger.warning(f"Error encoding album art: {e}")
         album_art = None
@@ -453,7 +481,8 @@ def scan_for_audio_files(directory):
                     scan_errors += 1
 
         logger.info(
-            f"Scan complete. Found {len(audio_files)} audio files and {len(playlist_files)} playlists")
+            f"Scan complete. Found {len(audio_files)} audio files and {len(playlist_files)} playlists"
+        )
         if scan_errors > 0:
             logger.warning(f"Encountered {scan_errors} errors during scanning")
 
@@ -478,8 +507,7 @@ def add_songs_to_database(audio_files):
         for file_path in audio_files:
             try:
                 # Check if file already exists
-                cursor.execute("SELECT id FROM Songs WHERE path = ?",
-                               (file_path,))
+                cursor.execute("SELECT id FROM Songs WHERE path = ?", (file_path,))
                 if cursor.fetchone():
                     logger.debug(f"File already in database: {file_path}")
                     continue
@@ -488,25 +516,28 @@ def add_songs_to_database(audio_files):
                 if metadata:
                     file_name = os.path.basename(file_path)
                     # Insert including album_artist (may be empty)
-                    cursor.execute('''
+                    cursor.execute(
+                        """
                         INSERT INTO Songs (path, file_name, artist, album_artist, song_title, duration, album, year)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        file_path,
-                        file_name,
-                        metadata.get('artist', ''),
-                        metadata.get('album_artist', ''),
-                        metadata.get('title', ''),
-                        metadata.get('duration', 0),
-                        metadata.get('album', ''),
-                        metadata.get('year', '')
-                    ))
+                    """,
+                        (
+                            file_path,
+                            file_name,
+                            metadata.get("artist", ""),
+                            metadata.get("album_artist", ""),
+                            metadata.get("title", ""),
+                            metadata.get("duration", 0),
+                            metadata.get("album", ""),
+                            metadata.get("year", ""),
+                        ),
+                    )
                     added_songs += 1
                     logger.debug(
-                        f"Added song: {metadata.get('artist','')} - {metadata.get('title','')}")
+                        f"Added song: {metadata.get('artist','')} - {metadata.get('title','')}"
+                    )
                 else:
-                    logger.warning(
-                        f"Could not extract metadata from: {file_path}")
+                    logger.warning(f"Could not extract metadata from: {file_path}")
                     errors += 1
 
             except sqlite3.Error as e:
@@ -567,25 +598,32 @@ def add_covers_to_database():
                         im.thumbnail(size)
                         im_file = BytesIO()
                         im.save(im_file, format="JPEG")
-                        im_bytes = im_file.getvalue()  # im_bytes: image in binary format.
-                        cover = base64.b64encode(im_bytes).decode('utf-8')
-                    cursor.execute('''
+                        im_bytes = (
+                            im_file.getvalue()
+                        )  # im_bytes: image in binary format.
+                        cover = base64.b64encode(im_bytes).decode("utf-8")
+                    cursor.execute(
+                        """
                         INSERT INTO Covers (album, cover) 
-                        VALUES (?,?)''', (album, cover))
+                        VALUES (?,?)""",
+                        (album, cover),
+                    )
                     added_covers += 1
-                    logger.debug(
-                        f"Added cover from album: {album}")
+                    logger.debug(f"Added cover from album: {album}")
                 else:
-                    logger.warning(
-                        f"Could not get album art from album: {album}")
+                    logger.warning(f"Could not get album art from album: {album}")
                     errors += 1
                 conn.commit()
                 conn.close()
             except sqlite3.Error as e:
-                logger.error(f"Database error adding album art from album: {album}: {e}")
+                logger.error(
+                    f"Database error adding album art from album: {album}: {e}"
+                )
                 errors += 1
             except Exception as e:
-                logger.error(f"Unexpected error adding album art from album: {album}: {e}")
+                logger.error(
+                    f"Unexpected error adding album art from album: {album}: {e}"
+                )
                 errors += 1
 
             logger.info(f"Successfully added {added_covers} songs to database")
@@ -618,15 +656,14 @@ def delete_missing_songs():
         for song_id, path in db_songs:
             if not os.path.exists(path):
                 songs_to_delete.append(song_id)
-                logger.debug(
-                    f"File deleted externally, removing from DB: {path}")
+                logger.debug(f"File deleted externally, removing from DB: {path}")
                 deleted_songs += 1
 
             # 3. Perform the deletion (if any)
         if songs_to_delete:
             try:
                 # The '?' allows safe parameter passing for multiple values
-                placeholders = ', '.join(['?'] * len(songs_to_delete))
+                placeholders = ", ".join(["?"] * len(songs_to_delete))
                 sql = f"DELETE FROM Songs WHERE id IN ({placeholders})"
                 cursor.execute(sql, songs_to_delete)
             except sqlite3.Error as e:
@@ -639,8 +676,7 @@ def delete_missing_songs():
         conn.commit()
         conn.close()
 
-        logger.info(
-            f"Successfully deleted {deleted_songs} songs from database")
+        logger.info(f"Successfully deleted {deleted_songs} songs from database")
         if errors > 0:
             logger.warning(f"Encountered {errors} errors while deleting songs")
 
@@ -668,37 +704,35 @@ def add_playlists_to_database(playlist_files):
         for file_path in playlist_files:
             try:
                 # Check if playlist already exists
-                cursor.execute("SELECT id FROM Playlists WHERE path = ?",
-                               (file_path,))
+                cursor.execute("SELECT id FROM Playlists WHERE path = ?", (file_path,))
                 if cursor.fetchone():
                     logger.debug(f"Playlist already in database: {file_path}")
                     continue
 
                 pl_name = os.path.basename(file_path)
-                cursor.execute('''
+                cursor.execute(
+                    """
                     INSERT INTO Playlists (path, PL_name)
                     VALUES (?, ?)
-                ''', (file_path, pl_name))
+                """,
+                    (file_path, pl_name),
+                )
                 added_playlists += 1
                 logger.debug(f"Added playlist: {pl_name}")
 
             except sqlite3.Error as e:
-                logger.error(
-                    f"Database error adding playlist {file_path}: {e}")
+                logger.error(f"Database error adding playlist {file_path}: {e}")
                 errors += 1
             except Exception as e:
-                logger.error(
-                    f"Unexpected error adding playlist {file_path}: {e}")
+                logger.error(f"Unexpected error adding playlist {file_path}: {e}")
                 errors += 1
 
         conn.commit()
         conn.close()
 
-        logger.info(
-            f"Successfully added {added_playlists} playlists to database")
+        logger.info(f"Successfully added {added_playlists} playlists to database")
         if errors > 0:
-            logger.warning(
-                f"Encountered {errors} errors while adding playlists")
+            logger.warning(f"Encountered {errors} errors while adding playlists")
 
         return added_playlists
 
@@ -726,33 +760,29 @@ def delete_missing_playlists():
         for playlist_id, path in db_playlists:
             if not os.path.exists(path):
                 playlists_to_delete.append(playlist_id)
-                logger.debug(
-                    f"Playlist deleted externally, removing from DB: {path}")
+                logger.debug(f"Playlist deleted externally, removing from DB: {path}")
                 deleted_playlists += 1
 
         # 3. Perform the deletion (if any)
         if playlists_to_delete:
             try:
                 # The '?' allows safe parameter passing for multiple values
-                placeholders = ', '.join(['?'] * len(playlists_to_delete))
+                placeholders = ", ".join(["?"] * len(playlists_to_delete))
                 sql = f"DELETE FROM Playlists WHERE id IN ({placeholders})"
                 cursor.execute(sql, playlists_to_delete)
             except sqlite3.Error as e:
                 logger.error(f"Database error deleting playlists from db: {e}")
                 errors += 1
             except Exception as e:
-                logger.error(
-                    f"Unexpected error deleting playlists from db: {e}")
+                logger.error(f"Unexpected error deleting playlists from db: {e}")
                 errors += 1
 
         conn.commit()
         conn.close()
 
-        logger.info(
-            f"Successfully deleted {deleted_playlists} playlists from database")
+        logger.info(f"Successfully deleted {deleted_playlists} playlists from database")
         if errors > 0:
-            logger.warning(
-                f"Encountered {errors} errors while deleting playlists")
+            logger.warning(f"Encountered {errors} errors while deleting playlists")
 
         return deleted_playlists
 
@@ -765,9 +795,8 @@ def delete_missing_playlists():
 def is_localhost(request):
     """Check if request is from localhost"""
     try:
-        is_local = request.remote_addr in ['127.0.0.1', '::1', 'localhost']
-        logger.debug(
-            f"Request from {request.remote_addr}, localhost: {is_local}")
+        is_local = request.remote_addr in ["127.0.0.1", "::1", "localhost"]
+        logger.debug(f"Request from {request.remote_addr}, localhost: {is_local}")
         return is_local
     except Exception as e:
         logger.error(f"Error checking localhost: {e}")
@@ -787,55 +816,58 @@ def parse_playlist_file(playlist_path):
         playlist_dir = os.path.dirname(playlist_path)
         line_count = 0
         try:
-            with open(playlist_path, 'r', encoding='utf-8-sig') as f:
+            with open(playlist_path, "r", encoding="utf-8-sig") as f:
                 lines = f.readlines()
         except UnicodeDecodeError:
             # Try with ANSI encoding if UTF-8 fails
             try:
-                with open(playlist_path, 'r', encoding='ANSI') as f:
+                with open(playlist_path, "r", encoding="ANSI") as f:
                     lines = f.readlines()
             except UnicodeDecodeError:
                 try:
                     # Try to guess the encoding if UTF-8 and ANSI fail
                     from charset_normalizer import from_path
+
                     result = from_path(playlist_path).best()
-                    with open(playlist_path, 'r',
-                              encoding=result.encoding) as f:
+                    with open(playlist_path, "r", encoding=result.encoding) as f:
                         lines = f.readlines()
                 except Exception as e:
                     logger.error(str(e))
                     return playlist
         ext = Path(playlist_path).suffix.lower()
         if lines:
-            if ext == '.cue':
+            if ext == ".cue":
                 for line in lines:
                     line_count += 1
                     try:
-                        if re.match('^FILE .(.*). (.*)$', line):
+                        if re.match("^FILE .(.*). (.*)$", line):
                             song_path = line[6:-7]
                             # Convert relative path to absolute path
                             if not os.path.isabs(song_path):
                                 song_path = os.path.abspath(
-                                    os.path.join(playlist_dir, song_path))
+                                    os.path.join(playlist_dir, song_path)
+                                )
                             if os.path.exists(song_path):
                                 playlist.append(song_path)
                                 logger.debug(f"Added to playlist: {song_path}")
                             else:
                                 logger.warning(
-                                    f"File not found in playlist (line {line_count}): {song_path}")
+                                    f"File not found in playlist (line {line_count}): {song_path}"
+                                )
                     except Exception as e:
                         logger.warning(
-                            f"Error processing playlist line {line_count}: {e}")
+                            f"Error processing playlist line {line_count}: {e}"
+                        )
             else:
                 for line in lines:
                     line_count += 1
                     try:
                         # line = line.strip('ufeff01')
                         line = line.strip()
-                        line = line.strip('.\\')
+                        line = line.strip(".\\")
                         if not sys.platform.startswith("win"):
                             line = line.replace("\\", "/")
-                        if line and not line.startswith(('#', '﻿#')):
+                        if line and not line.startswith(("#", "﻿#")):
                             # Convert relative path to absolute path
                             if not os.path.isabs(line):
                                 line = os.path.join(playlist_dir, line)
@@ -845,11 +877,13 @@ def parse_playlist_file(playlist_path):
                                 logger.debug(f"Added to playlist: {line}")
                             else:
                                 logger.warning(
-                                    f"File not found in playlist (line {line_count}): {line}")
+                                    f"File not found in playlist (line {line_count}): {line}"
+                                )
 
                     except Exception as e:
                         logger.warning(
-                            f"Error processing playlist line {line_count}: {e}")
+                            f"Error processing playlist line {line_count}: {e}"
+                        )
 
         logger.info(f"Parsed playlist with {len(playlist)} valid files")
         return playlist
@@ -867,14 +901,16 @@ def migrate_add_album_artist():
     using metadata extracted from the audio file at the path stored in the record.
     """
     try:
-        logger.info("Running migration: add/populate 'album_artist' column in Songs table")
+        logger.info(
+            "Running migration: add/populate 'album_artist' column in Songs table"
+        )
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
         # Check if column exists
         cursor.execute("PRAGMA table_info(Songs)")
         cols = [row[1] for row in cursor.fetchall()]
-        if 'album_artist' not in cols:
+        if "album_artist" not in cols:
             logger.info("'album_artist' column not found; adding column.")
             try:
                 cursor.execute("ALTER TABLE Songs ADD COLUMN album_artist CHAR(120)")
@@ -896,13 +932,20 @@ def migrate_add_album_artist():
                 if path and os.path.exists(path):
                     file = MediaFile(path)
                     artist = file.artist
-                    album_artist = file.albumartist or artist or ''
-                    cursor.execute("UPDATE Songs SET album_artist = ? WHERE id = ?", (album_artist, song_id))
+                    album_artist = file.albumartist or artist or ""
+                    cursor.execute(
+                        "UPDATE Songs SET album_artist = ? WHERE id = ?",
+                        (album_artist, song_id),
+                    )
                     updated += 1
                 else:
-                    logger.warning(f"File path missing or does not exist for DB record id={song_id}: {path}")
+                    logger.warning(
+                        f"File path missing or does not exist for DB record id={song_id}: {path}"
+                    )
             except Exception as e:
-                logger.error(f"Error updating album_artist for id={song_id}, path={path}: {e}")
+                logger.error(
+                    f"Error updating album_artist for id={song_id}, path={path}: {e}"
+                )
         conn.commit()
         conn.close()
         logger.info(f"Migration complete. Updated album_artist for {updated} records.")
@@ -915,57 +958,60 @@ def migrate_add_album_artist():
 @app.errorhandler(404)
 def not_found_error(error):
     logger.warning(f"404 error: {request.url}")
-    return render_template('404.html'), 404
+    return render_template("404.html"), 404
 
 
 @app.errorhandler(500)
 def internal_error(error):
     logger.error(f"500 error: {error}")
     logger.error(traceback.format_exc())
-    return render_template('500.html'), 500
+    return render_template("500.html"), 500
 
 
 @app.errorhandler(Exception)
 def handle_exception(e):
     logger.error(f"Unhandled exception: {e}")
     logger.error(traceback.format_exc())
-    return jsonify({'error': 'Internal server error'}), 500
+    return jsonify({"error": "Internal server error"}), 500
 
 
 # Flask routes with error handling
-@app.route('/')
+@app.route("/")
 def index():
     try:
         logger.info("Serving index page")
-        return render_template('index.html',
-                               settings=SETTINGS,
-                               is_localhost=is_localhost(request))
+        return render_template(
+            "index.html", settings=SETTINGS, is_localhost=is_localhost(request)
+        )
     except Exception as e:
         logger.error(f"Error serving index page: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': 'Error loading page'}), 500
+        return jsonify({"error": "Error loading page"}), 500
 
 
-@app.route('/scan_library', methods=['POST'])
+@app.route("/scan_library", methods=["POST"])
 def scan_library():
     try:
         folder_path = None
         data = request.get_json()
         if data:
-            folder_path = data['folder_path']
+            folder_path = data["folder_path"]
             logger.info(f"Received folder: {folder_path}")
         if folder_path == None:
             # Run openfile.py (or openfile.exe if app will be converted to
             # windows executable) to select music library folder
             if sys.platform.startswith("win"):
-                result = subprocess.run(["openfile.exe"], capture_output=True,
-                                        text=True, timeout=50)
+                result = subprocess.run(
+                    ["openfile.exe"], capture_output=True, text=True, timeout=50
+                )
             elif sys.platform == "darwin":
-                result = subprocess.run(['python', 'openfile.py'],
-                                        capture_output=True, text=True)
+                result = subprocess.run(
+                    ["python", "openfile.py"], capture_output=True, text=True
+                )
             else:
-                result = subprocess.run(['python', 'openfile.py'],
-                                        capture_output=True, text=True)
+                result = subprocess.run(
+                    ["python", "openfile.py"], capture_output=True, text=True
+                )
 
             folder_path = result.stdout.strip("\n")
 
@@ -973,14 +1019,14 @@ def scan_library():
 
             if not folder_path or folder_path == "No file selected.":
                 logger.warning("No folder selected for scanning")
-                return jsonify({'error': 'No folder selected'})
+                return jsonify({"error": "No folder selected"})
 
             if not os.path.isdir(folder_path):
                 logger.error(f"Invalid folder path: {folder_path}")
-                return jsonify({'error': 'Invalid folder path'})
+                return jsonify({"error": "Invalid folder path"})
     except subprocess.TimeoutExpired:
         logger.error("Timeout waiting for folder selection")
-        return jsonify({'error': 'Timeout waiting for folder selection'})
+        return jsonify({"error": "Timeout waiting for folder selection"})
     try:
         # Scan for audio files and playlists
         logger.info("Starting library scan")
@@ -991,40 +1037,40 @@ def scan_library():
         added_playlists = add_playlists_to_database(playlist_files)
         added_covers = add_covers_to_database()
 
-        success_msg = f'Successfully added {added_songs} songs, {added_playlists} playlists and {added_covers} to the database.'
+        success_msg = f"Successfully added {added_songs} songs, {added_playlists} playlists and {added_covers} to the database."
         logger.info(success_msg)
 
-        return jsonify({
-            'success': True,
-            'message': success_msg
-        })
+        return jsonify({"success": True, "message": success_msg})
 
     except Exception as e:
         logger.error(f"Error during library scan: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': str(e)})
+        return jsonify({"error": str(e)})
 
 
-@app.route('/purge_library', methods=['POST'])
+@app.route("/purge_library", methods=["POST"])
 def purge_library():
     try:
         folder_path = None
         data = request.get_json()
         if data:
-            folder_path = data['folder_path']
+            folder_path = data["folder_path"]
             logger.info(f"Received folder: {folder_path}")
         if folder_path == None:
             # Run openfile.py (or openfile.exe if app will be converted to
             # windows executable) to select music library folder
             if sys.platform.startswith("win"):
-                result = subprocess.run(["openfile.exe"], capture_output=True,
-                                        text=True, timeout=50)
+                result = subprocess.run(
+                    ["openfile.exe"], capture_output=True, text=True, timeout=50
+                )
             elif sys.platform == "darwin":
-                result = subprocess.run(['python', 'openfile.py'],
-                                        capture_output=True, text=True)
+                result = subprocess.run(
+                    ["python", "openfile.py"], capture_output=True, text=True
+                )
             else:
-                result = subprocess.run(['python', 'openfile.py'],
-                                        capture_output=True, text=True)
+                result = subprocess.run(
+                    ["python", "openfile.py"], capture_output=True, text=True
+                )
 
             folder_path = result.stdout.strip("\n")
 
@@ -1032,14 +1078,14 @@ def purge_library():
 
             if not folder_path or folder_path == "No file selected.":
                 logger.warning("No folder selected for scanning")
-                return jsonify({'error': 'No folder selected'})
+                return jsonify({"error": "No folder selected"})
 
             if not os.path.isdir(folder_path):
                 logger.error(f"Invalid folder path: {folder_path}")
-                return jsonify({'error': 'Invalid folder path'})
+                return jsonify({"error": "Invalid folder path"})
     except subprocess.TimeoutExpired:
         logger.error("Timeout waiting for folder selection")
-        return jsonify({'error': 'Timeout waiting for folder selection'})
+        return jsonify({"error": "Timeout waiting for folder selection"})
     try:
         # Check audio files and playlists
         logger.info("Starting library Purge")
@@ -1048,21 +1094,18 @@ def purge_library():
         deleted_songs = delete_missing_songs()
         deleted_playlists = delete_missing_playlists()
 
-        success_msg = f'Successfully deleted {deleted_songs} songs and {deleted_playlists} playlists from the database.'
+        success_msg = f"Successfully deleted {deleted_songs} songs and {deleted_playlists} playlists from the database."
         logger.info(success_msg)
 
-        return jsonify({
-            'success': True,
-            'message': success_msg
-        })
+        return jsonify({"success": True, "message": success_msg})
 
     except Exception as e:
         logger.error(f"Error during library purge: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': str(e)})
+        return jsonify({"error": str(e)})
 
 
-@app.route('/get_playlists')
+@app.route("/get_playlists")
 def get_playlists():
     try:
         logger.info("Getting playlists")
@@ -1074,27 +1117,27 @@ def get_playlists():
         conn.close()
 
         logger.info(f"Retrieved {len(playlists)} playlists")
-        return jsonify([{'id': p[0], 'name': p[1]} for p in playlists])
+        return jsonify([{"id": p[0], "name": p[1]} for p in playlists])
 
     except sqlite3.Error as e:
         logger.error(f"Database error getting playlists: {e}")
-        return jsonify({'error': 'Database error'}), 500
+        return jsonify({"error": "Database error"}), 500
     except Exception as e:
         logger.error(f"Error getting playlists: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': 'Error retrieving playlists'}), 500
+        return jsonify({"error": "Error retrieving playlists"}), 500
 
 
-@app.route('/get_all')
+@app.route("/get_all")
 def get_all():
     try:
-        query = request.args.get('query')
+        query = request.args.get("query")
 
         logger.info(f"Getting all {query}s from db")
 
         if not query:
             logger.warning("Missing search parameters")
-            return jsonify({'error': 'Missing parameters'}), 400
+            return jsonify({"error": "Missing parameters"}), 400
 
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -1110,15 +1153,20 @@ def get_all():
 
         logger.info(f"Retrieved {len(results)} {query}s")
         if query == "song_title":
-            return jsonify([{
-                'id'      : r[0],
-                'artist'  : r[1],
-                'album_artist': r[6],
-                'title'   : r[2],
-                'album'   : r[3],
-                'path'    : r[4],
-                'filename': r[5]
-            } for r in results])
+            return jsonify(
+                [
+                    {
+                        "id": r[0],
+                        "artist": r[1],
+                        "album_artist": r[6],
+                        "title": r[2],
+                        "album": r[3],
+                        "path": r[4],
+                        "filename": r[5],
+                    }
+                    for r in results
+                ]
+            )
         elif query == "artist":
             return jsonify([{query: r[0]} for r in results])
         else:
@@ -1130,40 +1178,42 @@ def get_all():
 
     except sqlite3.Error as e:
         logger.error(f"Database error getting query: {e}")
-        return jsonify({'error': 'Database error'}), 500
+        return jsonify({"error": "Database error"}), 500
     except Exception as e:
         logger.error(f"Error getting query: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': 'Error retrieving query'}), 500
+        return jsonify({"error": "Error retrieving query"}), 500
 
 
-@app.route('/list_songs')
+@app.route("/list_songs")
 def list_songs():
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         # Adjust table/column names to your schema: songs table with artist, title, album, path
         cursor.execute(
-            "SELECT artist, song_title, album, path FROM songs ORDER BY album, artist, song_title")
+            "SELECT artist, song_title, album, path FROM songs ORDER BY album, artist, song_title"
+        )
         rows = cursor.fetchall()
         conn.close()
         songs = []
         for r in rows:
-            songs.append({
-                'artist': r[0] or 'Unknown Artist',
-                'title' : r[1] or r[3].split('/')[-1],
-                'album' : r[2] or 'Unknown Album',
-                'path'  : r[3]
-            })
+            songs.append(
+                {
+                    "artist": r[0] or "Unknown Artist",
+                    "title": r[1] or r[3].split("/")[-1],
+                    "album": r[2] or "Unknown Album",
+                    "path": r[3],
+                }
+            )
         return jsonify(songs)
     except Exception as e:
         # return useful error for debugging (remove or mask details in production)
         app.logger.exception("Error in /list_songs")
-        return jsonify(
-            {'error': 'Server error fetching songs', 'details': str(e)}), 500
+        return jsonify({"error": "Server error fetching songs", "details": str(e)}), 500
 
 
-@app.route('/list_artists')
+@app.route("/list_artists")
 def list_artists():
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -1176,24 +1226,24 @@ def list_artists():
     except Exception as e:
         # return useful error for debugging (remove or mask details in production)
         app.logger.exception("Error in /list_songs")
-        return jsonify(
-            {'error': 'Server error fetching songs', 'details': str(e)}), 500
+        return jsonify({"error": "Server error fetching songs", "details": str(e)}), 500
 
 
-@app.route('/artist_albums')
+@app.route("/artist_albums")
 def artist_albums():
-    album_artist = request.args.get('artist')
+    album_artist = request.args.get("artist")
 
     logger.info(f"Getting all {album_artist}'s Albums from db")
 
     if not album_artist:
         logger.warning("Missing search parameters")
-        return jsonify({'error': 'Missing parameters'}), 400
+        return jsonify({"error": "Missing parameters"}), 400
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            f"SELECT song_title, artist, album, path, duration FROM songs WHERE album_artist='{album_artist}'")
+            f"SELECT song_title, artist, album, path, duration FROM songs WHERE album_artist='{album_artist}'"
+        )
         results = cursor.fetchall()
         conn.close()
         albums = {}
@@ -1201,166 +1251,191 @@ def artist_albums():
             if not r[2] in albums.keys():
                 album = r[2]
                 cover = get_album_art(r[3])
-                song ={'song_title': r[0], 'artist': r[1], 'path': r[3], 'duration': r[4]}# "<base64-or-null>"
+                song = {
+                    "song_title": r[0],
+                    "artist": r[1],
+                    "path": r[3],
+                    "duration": r[4],
+                }  # "<base64-or-null>"
                 albums[album] = {
-                    'album' : album,
-                    'artist': album_artist,
-                    'cover' : cover,
-                    'songs' : [song]                }
+                    "album": album,
+                    "artist": album_artist,
+                    "cover": cover,
+                    "songs": [song],
+                }
             else:
-                albums[r[2]]['songs'].append({'song_title': r[0], 'artist': r[1], 'path': r[3], 'duration': r[4]})
+                albums[r[2]]["songs"].append(
+                    {"song_title": r[0], "artist": r[1], "path": r[3], "duration": r[4]}
+                )
         return jsonify(list(albums.values()))
     except Exception as e:
         # return useful error for debugging (remove or mask details in production)
         app.logger.exception("Error in /list_songs")
-        return jsonify(
-            {'error': 'Server error fetching songs', 'details': str(e)}), 500
+        return jsonify({"error": "Server error fetching songs", "details": str(e)}), 500
 
 
-
-@app.route('/list_albums')
+@app.route("/list_albums")
 def list_albums():
-    limit = int(request.args.get('limit', 100))
-    offset = int(request.args.get('offset', 0))
+    limit = int(request.args.get("limit", 100))
+    offset = int(request.args.get("offset", 0))
     try:
         conn = sqlite3.connect(COVERS_DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            f"SELECT album, album_artist, cover FROM Covers ORDER BY album LIMIT {offset}, {limit}")
+            f"SELECT album, album_artist, cover FROM Covers ORDER BY album LIMIT {offset}, {limit}"
+        )
         albums = cursor.fetchall()
         conn.close()
-        return jsonify([{ "album": album[0],
-                          "artist": album[1],
-                          "cover": album[2] } for album in albums])
+        return jsonify(
+            [
+                {"album": album[0], "artist": album[1], "cover": album[2]}
+                for album in albums
+            ]
+        )
     except Exception as e:
         # return useful error for debugging (remove or mask details in production)
         app.logger.exception("Error in /list_songs")
-        return jsonify(
-            {'error': 'Server error fetching songs', 'details': str(e)}), 500
+        return jsonify({"error": "Server error fetching songs", "details": str(e)}), 500
 
 
-@app.route('/album_songs')
+@app.route("/album_songs")
 def album_songs():
-    album = request.args.get('album')
+    album = request.args.get("album")
     album = album.replace('"', '""')
-    album_artist = request.args.get('album_artist')
+    album_artist = request.args.get("album_artist")
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            f'SELECT artist, song_title, path, file_name, duration FROM Songs WHERE album="{album}"')
+            f'SELECT artist, song_title, path, file_name, duration FROM Songs WHERE album="{album}"'
+        )
         rows = cursor.fetchall()
         conn.close()
         songs = []
         for r in rows:
-            songs.append({
-                'title' : r[1] or r[3],   # r[3].split('/')[-1],
-                'path': r[2],
-                'duration': r[4],
-                'artist': r[0] or 'Unknown Artist'
-            })
+            songs.append(
+                {
+                    "title": r[1] or r[3],  # r[3].split('/')[-1],
+                    "path": r[2],
+                    "duration": r[4],
+                    "artist": r[0] or "Unknown Artist",
+                }
+            )
         cover = get_album_art(rows[0][2])
-        return jsonify({
-                'album': album,
-                'album_artist': album_artist,
-                'cover': cover,
-                'songs':songs})
+        return jsonify(
+            {
+                "album": album,
+                "album_artist": album_artist,
+                "cover": cover,
+                "songs": songs,
+            }
+        )
     except Exception as e:
         # return useful error for debugging (remove or mask details in production)
         app.logger.exception("Error in /album_songs")
-        return jsonify(
-            {'error': 'Server error fetching album songs', 'details': str(e)}), 500
+        return (
+            jsonify({"error": "Server error fetching album songs", "details": str(e)}),
+            500,
+        )
 
 
-@app.route('/load_playlist/<int:playlist_id>')
+@app.route("/load_playlist/<int:playlist_id>")
 def load_playlist(playlist_id):
     try:
         logger.info(f"Loading playlist ID: {playlist_id}")
 
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT path, PL_name FROM Playlists WHERE id = ?",
-                       (playlist_id,))
+        cursor.execute(
+            "SELECT path, PL_name FROM Playlists WHERE id = ?", (playlist_id,)
+        )
         playlist_data = cursor.fetchone()
         conn.close()
 
         if not playlist_data:
             logger.warning(f"Playlist not found: {playlist_id}")
-            return jsonify({'error': 'Playlist not found'}), 404
+            return jsonify({"error": "Playlist not found"}), 404
 
         playlist_path, playlist_name = playlist_data
         playlist_files = parse_playlist_file(playlist_path)
 
         logger.info(
-            f"Loaded playlist '{playlist_name}' with {len(playlist_files)} files")
-        return jsonify({
-            'success' : True,
-            'playlist': playlist_files,
-            'name'    : playlist_name
-        })
+            f"Loaded playlist '{playlist_name}' with {len(playlist_files)} files"
+        )
+        return jsonify(
+            {"success": True, "playlist": playlist_files, "name": playlist_name}
+        )
 
     except sqlite3.Error as e:
         logger.error(f"Database error loading playlist {playlist_id}: {e}")
-        return jsonify({'error': 'Database error'}), 500
+        return jsonify({"error": "Database error"}), 500
     except Exception as e:
         logger.error(f"Error loading playlist {playlist_id}: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': 'Error loading playlist'}), 500
+        return jsonify({"error": "Error loading playlist"}), 500
 
 
-@app.route('/search_songs')
+@app.route("/search_songs")
 def search_songs():
     try:
-        column = request.args.get('column')
-        query = request.args.get('query')
+        column = request.args.get("column")
+        query = request.args.get("query")
         query = query.lower().replace('"', '""')
         logger.info(f"Searching songs: column={column}, query={query}")
 
         if not column or not query:
             logger.warning("Missing search parameters")
-            return jsonify({'error': 'Missing parameters'}), 400
+            return jsonify({"error": "Missing parameters"}), 400
 
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         # First try exact match
-        if column == 'song_title':
+        if column == "song_title":
             # If searching by song, include album_artist in the query
             if " - " in query and len(query) > 3:
-                logger.info(
-                    "Searching by song artist and title...")
+                logger.info("Searching by song artist and title...")
                 cursor.execute(
                     f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE artist LIKE ? AND song_title LIKE ?",
-                    (f'%{query.split(" - ")[0]}%',
-                     f'%{query.split(" - ")[1]}%',))
+                    (
+                        f'%{query.split(" - ")[0]}%',
+                        f'%{query.split(" - ")[1]}%',
+                    ),
+                )
             else:
                 cursor.execute(
                     f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE song_title LIKE ?",
-                    (f'%{query}%',))
-        elif column == 'album':
+                    (f"%{query}%",),
+                )
+        elif column == "album":
             # If searching by album, include album_artist in the query
             if " - " in query and len(query) > 3:
-                logger.info(
-                    "Searching by album artist and album title...")
+                logger.info("Searching by album artist and album title...")
                 cursor.execute(
                     f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE album_artist LIKE ? AND album LIKE ?",
-                    (f'%{query.split(" - ")[0]}%',
-                     f'%{query.split(" - ")[1]}%',))
+                    (
+                        f'%{query.split(" - ")[0]}%',
+                        f'%{query.split(" - ")[1]}%',
+                    ),
+                )
             else:
                 cursor.execute(
                     f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE album LIKE ?",
-                    (f'%{query}%',))
+                    (f"%{query}%",),
+                )
         else:
             # column = artist
             cursor.execute(
                 f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE artist LIKE ?",
-                (f'%{query}%',))
+                (f"%{query}%",),
+            )
         results = cursor.fetchall()
 
         # If no results, try fuzzy matching
         if not results:
             logger.info("No exact matches, trying fuzzy search")
             cursor.execute(
-                f"SELECT id, artist, song_title, album, path, file_name, album_artist, {column} FROM Songs")
+                f"SELECT id, artist, song_title, album, path, file_name, album_artist, {column} FROM Songs"
+            )
             all_songs = cursor.fetchall()
 
             fuzzy_matches = []
@@ -1370,13 +1445,11 @@ def search_songs():
                     if ratio > 60:  # Threshold for fuzzy matching
                         fuzzy_matches.append((song[:7], ratio))
                 except Exception as e:
-                    logger.warning(
-                        f"Error in fuzzy matching for song {song[0]}: {e}")
+                    logger.warning(f"Error in fuzzy matching for song {song[0]}: {e}")
 
             # Sort by similarity
             fuzzy_matches.sort(key=lambda x: x[1], reverse=True)
-            results = [match[0] for match in
-                       fuzzy_matches[:10]]  # Top 10 matches
+            results = [match[0] for match in fuzzy_matches[:10]]  # Top 10 matches
 
         conn.close()
 
@@ -1385,7 +1458,7 @@ def search_songs():
         albums = []
         new_results = []
         for result in results:
-            if not f'{result[6]} - {result[3]}' in albums:
+            if not f"{result[6]} - {result[3]}" in albums:
                 albums.append(result[3])
                 album_art = get_album_art(result[4])
             else:
@@ -1395,95 +1468,102 @@ def search_songs():
             new_result = tuple(result_list)
             new_results.append(new_result)
 
-        return jsonify([{
-            'id'       : r[0],
-            'artist'   : r[1],
-            'album_artist': r[6],
-            'title'    : r[2],
-            'album'    : r[3],
-            'path'     : r[4],
-            'filename' : r[5],
-            'album_art': r[7]
-        } for r in new_results])
+        return jsonify(
+            [
+                {
+                    "id": r[0],
+                    "artist": r[1],
+                    "album_artist": r[6],
+                    "title": r[2],
+                    "album": r[3],
+                    "path": r[4],
+                    "filename": r[5],
+                    "album_art": r[7],
+                }
+                for r in new_results
+            ]
+        )
 
     except sqlite3.Error as e:
         logger.error(f"Database error searching songs: {e}")
-        return jsonify({'error': 'Database error'}), 500
+        return jsonify({"error": "Database error"}), 500
     except Exception as e:
         logger.error(f"Error searching songs: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': 'Error searching songs'}), 500
+        return jsonify({"error": "Error searching songs"}), 500
 
 
-@app.route('/get_song_metadata/<path:file_path>')
+@app.route("/get_song_metadata/<path:file_path>")
 def get_song_metadata(file_path):
     try:
-        if '--NAS' in sys.argv:
+        if "--NAS" in sys.argv:
             file_path = file_path.replace("share", "/share/CACHEDEV1_DATA")
         logger.info(f"Getting metadata for: {file_path}")
 
         metadata = get_audio_metadata(file_path)
         if metadata:
             # Convert picture to base64 if exists
-            if metadata['picture'] and isinstance(metadata['picture'], bytes):
+            if metadata["picture"] and isinstance(metadata["picture"], bytes):
                 try:
-                    metadata['picture'] = base64.b64encode(
-                        metadata['picture']).decode('utf-8')
+                    metadata["picture"] = base64.b64encode(metadata["picture"]).decode(
+                        "utf-8"
+                    )
                 except Exception as e:
                     logger.warning(f"Error encoding album art: {e}")
-                    metadata['picture'] = None
+                    metadata["picture"] = None
 
             return jsonify(metadata)
         else:
             logger.warning(f"Could not read metadata for: {file_path}")
-            return jsonify({'error': 'Could not read metadata'}), 404
+            return jsonify({"error": "Could not read metadata"}), 404
 
     except Exception as e:
         logger.error(f"Error getting song metadata for {file_path}: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': 'Error reading metadata'}), 500
+        return jsonify({"error": "Error reading metadata"}), 500
 
 
-@app.route('/serve_audio/<path:file_path>')
+@app.route("/serve_audio/<path:file_path>")
 def serve_audio(file_path):
     try:
-        if '--NAS' in sys.argv:
+        if "--NAS" in sys.argv:
             file_path = file_path.replace("share", "/share/CACHEDEV1_DATA")
         logger.info(f"Serving audio file: {file_path}")
 
         if not os.path.exists(file_path):
             logger.warning(f"Audio file not found: {file_path}")
-            return jsonify({'error': 'File not found'}), 404
+            return jsonify({"error": "File not found"}), 404
 
         return send_file(file_path)
 
     except Exception as e:
         logger.error(f"Error serving audio file {file_path}: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': 'Error serving file'}), 500
+        return jsonify({"error": "Error serving file"}), 500
 
-@app.route('/dlna/serve_audio/<path:file_path>')
+
+@app.route("/dlna/serve_audio/<path:file_path>")
 def dlna_serve_audio(file_path):
     try:
         return serve_audio_via_upnp(file_path)
     except Exception as e:
         logger.error(f"Error serving audio file {file_path} via DLNA: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': 'Error serving file via DLNA'}), 500
+        return jsonify({"error": "Error serving file via DLNA"}), 500
 
 
-@app.route('/settings')
+@app.route("/settings")
 def settings():
     try:
         logger.info("Serving settings page")
-        return render_template('settings.html', settings=SETTINGS)
+        return render_template("settings.html", settings=SETTINGS)
     except Exception as e:
         logger.error(f"Error serving settings page: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': 'Error loading settings'}), 500
+        return jsonify({"error": "Error loading settings"}), 500
 
 
-@app.route('/save_settings', methods=['POST'])
+@app.route("/save_settings", methods=["POST"])
 def save_settings():
     try:
         logger.info("Saving settings")
@@ -1491,34 +1571,34 @@ def save_settings():
         global SETTINGS
         old_settings = SETTINGS.copy()
 
-        SETTINGS['crossfade_time'] = int(request.form.get('crossfade_time', 4))
-        SETTINGS['fade_in'] = int(request.form.get('fade_in', 0))
+        SETTINGS["crossfade_time"] = int(request.form.get("crossfade_time", 4))
+        SETTINGS["fade_in"] = int(request.form.get("fade_in", 0))
 
         logger.info(f"Settings updated: {old_settings} -> {SETTINGS}")
-        return redirect(url_for('index'))
+        return redirect(url_for("index"))
 
     except ValueError as e:
         logger.error(f"Invalid settings values: {e}")
-        return jsonify({'error': 'Invalid settings values'}), 400
+        return jsonify({"error": "Invalid settings values"}), 400
     except Exception as e:
         logger.error(f"Error saving settings: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': 'Error saving settings'}), 500
+        return jsonify({"error": "Error saving settings"}), 500
 
 
-@app.route('/web_ui', methods=['POST'])
+@app.route("/web_ui", methods=["POST"])
 def web_ui():
     try:
-        if os.environ.get('WERKZEUG_RUN_MAIN') is None:
+        if os.environ.get("WERKZEUG_RUN_MAIN") is None:
             webbrowser.open("http://localhost:5000")
             return "Web Interface Lunched Successfully"
     except Exception as e:
         logger.error(f"Error launching Web Interface: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': 'Error launching Web Interface'}), 500
+        return jsonify({"error": "Error launching Web Interface"}), 500
 
 
-@app.route('/desk_ui', methods=['POST'])
+@app.route("/desk_ui", methods=["POST"])
 def desk_ui():
     try:
         subprocess.run(["advanced_audio_player.exe"], timeout=3)
@@ -1530,9 +1610,9 @@ def desk_ui():
 
 
 def shutdown_server():
-    func = request.environ.get('werkzeug.server.shutdown')
+    func = request.environ.get("werkzeug.server.shutdown")
     if func is None:
-        raise RuntimeError('Not running with the Werkzeug Server')
+        raise RuntimeError("Not running with the Werkzeug Server")
     func()
 
 
@@ -1543,8 +1623,11 @@ def shutdown():
     #    abort(403, "Forbidden: only localhost may request shutdown")
 
     # Check for secret token (in header or JSON body)
-    token = request.headers.get("X-API-Key") or request.json.get(
-        "token") if request.is_json else None
+    token = (
+        request.headers.get("X-API-Key") or request.json.get("token")
+        if request.is_json
+        else None
+    )
     if token != SHUTDOWN_SECRET:
         abort(401, "Unauthorized: invalid shutdown token")
     icon.stop()
@@ -1563,17 +1646,17 @@ def shutdown():
     return f"Server killed (pid {pid})"
 
 
-@app.route('/start', methods=['POST'])
+@app.route("/start", methods=["POST"])
 def start():
     try:
         data = request.json
-        path = data.replace('/', '\\')
+        path = data.replace("/", "\\")
         subprocess.Popen(r'explorer /select,"' + path + '"', shell=True)
         return jsonify(f"Song {path} Revealed on Server")
     except Exception as e:
         logger.error(f"Error launching Desktop Interface: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': 'Error Revealing Song'}), 500
+        return jsonify({"error": "Error Revealing Song"}), 500
 
 
 def open_browser(icon, item):
@@ -1583,23 +1666,23 @@ def open_browser(icon, item):
 def open_player():
     try:
         subprocess.run(["advanced_audio_player.exe"], timeout=5)
-        show_notification("Success",
-                          "Desktop Player/Client Lunched Successfully")
+        show_notification("Success", "Desktop Player/Client Lunched Successfully")
     except Exception as e:
-        show_notification("Error!",
-                          f"Error launching Desktop Interface: {str(e)}")
+        show_notification("Error!", f"Error launching Desktop Interface: {str(e)}")
         logger.error(f"Error launching Desktop Interface: {e}")
         logger.error(traceback.format_exc())
 
 
 def add_to_startup():
-    startup_path = os.path.join(os.getenv('APPDATA'),
-                                'Microsoft\\Windows\\Start Menu\\Programs\\Startup')
+    startup_path = os.path.join(
+        os.getenv("APPDATA"), "Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+    )
     script_path = os.path.abspath(__file__)
-    shortcut_path = os.path.join(startup_path, 'FlaskApp.lnk')
+    shortcut_path = os.path.join(startup_path, "FlaskApp.lnk")
 
     if not os.path.exists(shortcut_path):
         import win32com.client
+
         shell = win32com.client.Dispatch("WScript.Shell")
         shortcut = shell.CreateShortCut(shortcut_path)
         shortcut.Targetpath = sys.executable
@@ -1607,23 +1690,25 @@ def add_to_startup():
         shortcut.WorkingDirectory = os.path.dirname(script_path)
         shortcut.IconLocation = sys.executable
         shortcut.save()
-        show_notification("Success",
-                          "Ecoserver successfully added to Auto-Start on System Boot")
+        show_notification(
+            "Success", "Ecoserver successfully added to Auto-Start on System Boot"
+        )
     else:
-        show_notification("Information",
-                          "Ecoserver is already set to Auto-Start on System Boot")
+        show_notification(
+            "Information", "Ecoserver is already set to Auto-Start on System Boot"
+        )
 
 
 def create_image():
     # Create a simple icon for the tray
-    image = Image.new('RGB', (64, 64), color=(0, 0, 0))
+    image = Image.new("RGB", (64, 64), color=(0, 0, 0))
     draw = ImageDraw.Draw(image)
     draw.rectangle((16, 16, 48, 48), fill=(255, 255, 255))
     return image
 
 
 def on_quit(icon, item):
-    if '--no-tray' not in sys.argv:
+    if "--no-tray" not in sys.argv:
         icon.stop()
     sys.exit()
 
@@ -1632,21 +1717,22 @@ def setup_tray():
     global icon
     icon = Icon("Ecoserver", title="Ecoserver is running")
     icon.icon = create_image()
-    icon.menu = Menu(MenuItem("Open in browser", open_browser),
-                     MenuItem("Open Desktop Player", open_player),
-                     MenuItem("Auto-Start on System Boot", add_to_startup),
-                     MenuItem("Quit", on_quit))
+    icon.menu = Menu(
+        MenuItem("Open in browser", open_browser),
+        MenuItem("Open Desktop Player", open_player),
+        MenuItem("Auto-Start on System Boot", add_to_startup),
+        MenuItem("Quit", on_quit),
+    )
     icon.run()
 
 
-if __name__ == '__main__':
-   # sys.stdout.reconfigure(encoding='utf-8')
+if __name__ == "__main__":
+    # sys.stdout.reconfigure(encoding='utf-8')
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    if '--no-tray' in sys.argv:
+    if "--no-tray" in sys.argv:
         print("Starting Ecoserver without system tray icon...")
     else:
-        show_notification("Ecoserver",
-                          "Ecoserver is now running in the background.")
+        show_notification("Ecoserver", "Ecoserver is now running in the background.")
 
         setup_tray()

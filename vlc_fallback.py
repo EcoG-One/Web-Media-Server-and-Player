@@ -2,8 +2,10 @@
 # Cross-platform: works on Windows, macOS, Linux when libvlc is installed.
 # Requires: pip install python-vlc
 from PySide6.QtCore import QObject, Signal, QTimer
+
 try:
     import vlc
+
     HAVE_VLC = True
 except Exception:
     vlc = None
@@ -12,8 +14,8 @@ except Exception:
 
 class VlcFallbackPlayer(QObject):
     # Signals similar to QMediaPlayer style
-    positionChanged = Signal(int)   # ms
-    durationChanged = Signal(int)   # ms
+    positionChanged = Signal(int)  # ms
+    durationChanged = Signal(int)  # ms
     playbackStateChanged = Signal(str)  # 'playing' or 'paused' or 'stopped'
     ended = Signal()
 
@@ -57,28 +59,28 @@ class VlcFallbackPlayer(QObject):
             raise RuntimeError(f"Failed to start playback: {e}")
         # start polling to pick up duration/position and ended state
         self._poll.start()
-        self.playbackStateChanged.emit('playing')
+        self.playbackStateChanged.emit("playing")
 
     def pause(self):
         if self.player:
             self.player.pause()
             # playbackStateChanged may be ambiguous; check is_playing
-            state = 'playing' if self.is_playing() else 'paused'
+            state = "playing" if self.is_playing() else "paused"
             self.playbackStateChanged.emit(state)
 
     def resume(self):
         if self.player:
             self.player.play()
-            self.playbackStateChanged.emit('playing')
+            self.playbackStateChanged.emit("playing")
 
     def stop(self):
         if self.player:
             try:
                 self.player.stop()
             except Exception as e:
-                print('namaste')  # pass
+                print("namaste")  # pass
         self._poll.stop()
-        self.playbackStateChanged.emit('stopped')
+        self.playbackStateChanged.emit("stopped")
 
     def is_playing(self):
         if not self.player:
@@ -144,16 +146,16 @@ class VlcFallbackPlayer(QObject):
             try:
                 st = self.player.get_state()
                 # vlc.State.Ended is an enum; compare by name to avoid import errors if fallback
-                if hasattr(vlc, 'State') and st == vlc.State.Ended:
+                if hasattr(vlc, "State") and st == vlc.State.Ended:
                     # stop poll to prevent repeated ended signals
                     self._poll.stop()
                     self.ended.emit()
                 # Also emit paused/playing transitions
-                if hasattr(vlc, 'State'):
+                if hasattr(vlc, "State"):
                     if st in (vlc.State.Playing,):
-                        self.playbackStateChanged.emit('playing')
+                        self.playbackStateChanged.emit("playing")
                     elif st in (vlc.State.Paused,):
-                        self.playbackStateChanged.emit('paused')
+                        self.playbackStateChanged.emit("paused")
             except Exception:
                 # If we cannot get state, just continue
                 pass

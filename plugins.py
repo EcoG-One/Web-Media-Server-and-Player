@@ -146,9 +146,7 @@ class BeetsPlugin(metaclass=abc.ABCMeta):
     the abstract methods defined here.
     """
 
-    _raw_listeners: ClassVar[dict[EventType, list[Listener]]] = defaultdict(
-        list
-    )
+    _raw_listeners: ClassVar[dict[EventType, list[Listener]]] = defaultdict(list)
     listeners: ClassVar[dict[EventType, list[Listener]]] = defaultdict(list)
     template_funcs: TFuncMap[str] | None = None
     template_fields: TFuncMap[Item] | None = None
@@ -209,8 +207,7 @@ class BeetsPlugin(metaclass=abc.ABCMeta):
     ) -> list[ImportStageFunc]:
         """Adjust all the stages in `stages` to WARNING logging level."""
         return [
-            self._set_log_level_and_params(logging.WARNING, stage)
-            for stage in stages
+            self._set_log_level_and_params(logging.WARNING, stage) for stage in stages
         ]
 
     def get_early_import_stages(self) -> list[ImportStageFunc]:
@@ -266,9 +263,7 @@ class BeetsPlugin(metaclass=abc.ABCMeta):
         """Return a dict mapping prefixes to Query subclasses."""
         return {}
 
-    def add_media_field(
-        self, name: str, descriptor: mediafile.MediaField
-    ) -> None:
+    def add_media_field(self, name: str, descriptor: mediafile.MediaField) -> None:
         """Add a field that is synchronized between media files and items.
 
         When a media field is added ``item.write()`` will set the name
@@ -582,9 +577,7 @@ def feat_tokens(for_artist: bool = True) -> str:
     feat_words = ["ft", "featuring", "feat", "feat.", "ft."]
     if for_artist:
         feat_words += ["with", "vs", "and", "con", "&"]
-    return (
-        rf"(?<=[\s(\[])(?:{'|'.join(re.escape(x) for x in feat_words)})(?=\s)"
-    )
+    return rf"(?<=[\s(\[])(?:{'|'.join(re.escape(x) for x in feat_words)})(?=\s)"
 
 
 def apply_item_changes(

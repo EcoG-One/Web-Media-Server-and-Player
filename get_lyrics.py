@@ -31,7 +31,8 @@ from unidecode import unidecode
 import plugins
 from jellyfish import levenshtein_distance
 from beets.util import as_string
-#from distance import string_dist
+
+# from distance import string_dist
 
 if TYPE_CHECKING:
     from tasks import ImportTask
@@ -147,10 +148,7 @@ def string_dist(str1: str | None, str2: str | None) -> float:
     return base_dist + penalty
 
 
-
-def sanitize_choices(
-    choices: Sequence[str], choices_all: Collection[str]
-) -> list[str]:
+def sanitize_choices(choices: Sequence[str], choices_all: Collection[str]) -> list[str]:
     """Clean up a stringlist configuration attribute: keep only choices
     elements present in choices_all, remove duplicate elements, expand '*'
     wildcard while keeping original stringlist order.
@@ -190,10 +188,12 @@ class TimeoutSession(requests.Session):
 
         return r
 
+
 USER_AGENT = "ecoserver/0.5.5"
 INSTRUMENTAL_LYRICS = "[Instrumental]"
 r_session = TimeoutSession()
 r_session.headers.update({"User-Agent": USER_AGENT})
+
 
 @atexit.register
 def close_session():
@@ -202,6 +202,7 @@ def close_session():
 
 
 # Utilities.
+
 
 def search_pairs(item):
     """Yield a pairs of artists and titles to search for.
@@ -301,9 +302,7 @@ class RequestHandler:
 
         return f"{url}?{urlencode(params)}"
 
-    def fetch_text(
-        self, url: str, params: JSONDict | None = None, **kwargs
-    ) -> str:
+    def fetch_text(self, url: str, params: JSONDict | None = None, **kwargs) -> str:
         """Return text / HTML data from the given URL.
 
         Set the encoding to None to let requests handle it because some sites
@@ -336,11 +335,13 @@ class RequestHandler:
         except requests.RequestException as exc:
             self.warn("Request error: {}", exc)
 
+
 class BackendClass(type):
     @property
     def name(cls) -> str:
         """Return lowercase name of the backend class."""
         return cls.__name__.lower()
+
 
 class Backend(RequestHandler, metaclass=BackendClass):
     def __init__(self, config, log):
@@ -351,6 +352,7 @@ class Backend(RequestHandler, metaclass=BackendClass):
         self, artist: str, title: str, album: str, length: int
     ) -> tuple[str, str] | None:
         raise NotImplementedError
+
 
 @dataclass
 @total_ordering
@@ -370,9 +372,7 @@ class LRCLyrics:
         return self.dist < other.dist
 
     @classmethod
-    def make(
-        cls, candidate: LRCLibAPI.Item, target_duration: float
-    ) -> LRCLyrics:
+    def make(cls, candidate: LRCLibAPI.Item, target_duration: float) -> LRCLyrics:
         return cls(
             target_duration,
             candidate["id"],
@@ -393,10 +393,7 @@ class LRCLyrics:
         Lyrics duration must be within the tolerance defined by
         :attr:`DURATION_DIFF_TOLERANCE`.
         """
-        return (
-            self.duration_dist
-            <= self.target_duration * self.DURATION_DIFF_TOLERANCE
-        )
+        return self.duration_dist <= self.target_duration * self.DURATION_DIFF_TOLERANCE
 
     @cached_property
     def dist(self) -> tuple[bool, float]:
@@ -420,6 +417,7 @@ class LRCLyrics:
 
         return self.plain
 
+
 class SearchResult(NamedTuple):
     artist: str
     title: str
@@ -428,6 +426,7 @@ class SearchResult(NamedTuple):
     @property
     def source(self) -> str:
         return urlparse(self.url).netloc
+
 
 class LRCLib(Backend):
     """Fetch lyrics from the LRCLib API."""
@@ -526,7 +525,6 @@ class MusiXmatch(Backend):
             return None
         return lyrics, url
 
-
     """Fetch lyrics from Genius via genius-api.
 
     Because genius doesn't allow accessing lyrics via the api, we first query
@@ -559,6 +557,7 @@ class MusiXmatch(Backend):
 
         return None
 
+
 class Html:
     collapse_space = partial(re.compile(r"(^| ) +", re.M).sub, r"\1")
     expand_br = partial(re.compile(r"\s*<br[^>]*>\s*", re.I).sub, "\n")
@@ -568,9 +567,7 @@ class Html:
     #: (paroles.net, sweetslyrics.com, lacoccinelle.net)
     merge_lines = partial(re.compile(r"</p>\s+<p[^>]*>(?!___)").sub, "\n")
     #: remove empty divs (lacoccinelle.net)
-    remove_empty_tags = partial(
-        re.compile(r"(<(div|span)[^>]*>\s*</\2>)").sub, ""
-    )
+    remove_empty_tags = partial(re.compile(r"(<(div|span)[^>]*>\s*</\2>)").sub, "")
     #: remove Google Ads tags (musica.com)
     remove_aside = partial(re.compile("<aside .+?</aside>").sub, "")
     #: remove adslot-Content_1 div from the lyrics text (paroles.net)
@@ -579,9 +576,7 @@ class Html:
         "\n",
     )
     #: remove text formatting (azlyrics.com, lacocinelle.net)
-    remove_formatting = partial(
-        re.compile(r" *</?(i|em|pre|strong)[^>]*>").sub, ""
-    )
+    remove_formatting = partial(re.compile(r" *</?(i|em|pre|strong)[^>]*>").sub, "")
 
     @classmethod
     def normalize_space(cls, text: str) -> str:
@@ -674,7 +669,6 @@ class Genius(SearchBackend):
         return None
 
 
-
 class Tekstowo(SearchBackend):
     """Fetch lyrics from Tekstowo.pl."""
 
@@ -691,9 +685,7 @@ class Tekstowo(SearchBackend):
             soup = self.get_soup(html)
             for tag in soup.select("div[class=flex-group] > a[title*=' - ']"):
                 artist, title = str(tag["title"]).split(" - ", 1)
-                yield SearchResult(
-                    artist, title, f"{self.BASE_URL}{tag['href']}"
-                )
+                yield SearchResult(artist, title, f"{self.BASE_URL}{tag['href']}")
 
         return None
 
@@ -705,6 +697,7 @@ class Tekstowo(SearchBackend):
             return lyrics_div.get_text()
 
         return None
+
 
 class BackendClass(type):
     @property
@@ -723,10 +716,9 @@ class Backend(RequestHandler, metaclass=BackendClass):
     ) -> tuple[str, str] | None:
         raise NotImplementedError
 
+
 class LyricsPlugin(RequestHandler, plugins.BeetsPlugin):
-    BACKEND_BY_NAME = {
-        b.name: b for b in [LRCLib, Genius, Tekstowo, MusiXmatch]
-    }
+    BACKEND_BY_NAME = {b.name: b for b in [LRCLib, Genius, Tekstowo, MusiXmatch]}
 
     @cached_property
     def backends(self) -> list[Backend]:
@@ -753,16 +745,13 @@ class LyricsPlugin(RequestHandler, plugins.BeetsPlugin):
                 # Musixmatch is NOT disabled by default as they are currently blocking
                 # requests with the beets user agent, but here the agent is ecoserver.
                 # To disable it by default again, uncomment the line below.
-                "sources": [
-                    n for n in self.BACKEND_BY_NAME # if n != "musixmatch"
-                ],
+                "sources": [n for n in self.BACKEND_BY_NAME],  # if n != "musixmatch"
             }
         )
         self.config["genius_api_key"].redact = True
 
         if self.config["auto"]:
             self.import_stages = [self.imported]
-
 
     def imported(self, _, task: ImportTask) -> None:
         """Import hook for fetching lyrics automatically."""
@@ -772,11 +761,7 @@ class LyricsPlugin(RequestHandler, plugins.BeetsPlugin):
     def find_lyrics(self, item: Item) -> str:
         album, length = item.album, round(item.length)
         matches = (
-            [
-                lyrics
-                for t in titles
-                if (lyrics := self.get_lyrics(a, t, album, length))
-            ]
+            [lyrics for t in titles if (lyrics := self.get_lyrics(a, t, album, length))]
             for a, titles in search_pairs(item)
         )
 
@@ -810,4 +795,3 @@ class LyricsPlugin(RequestHandler, plugins.BeetsPlugin):
                     return f"{lyrics}\n\nSource: {url}"
 
         return None
-

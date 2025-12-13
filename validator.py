@@ -1,8 +1,7 @@
 import sys
-from PySide6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QLineEdit, QLabel
-)
+from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLineEdit, QLabel
 from PySide6.QtCore import Qt
+
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -37,7 +36,9 @@ class MainWindow(QWidget):
 
         if input_text in self.valid_elements:
             # Match found
-            self.status_label.setText(f"Status: **'{input_text}' is a valid element** ✅")
+            self.status_label.setText(
+                f"Status: **'{input_text}' is a valid element** ✅"
+            )
             self.status_label.setStyleSheet("color: green; font-weight: bold;")
             # You can add logic here, like processing the input
         elif not input_text:
@@ -46,7 +47,9 @@ class MainWindow(QWidget):
             self.status_label.setStyleSheet("color: black;")
         else:
             # No match found
-            self.status_label.setText(f"Status: **'{input_text}' is NOT in the set** ❌")
+            self.status_label.setText(
+                f"Status: **'{input_text}' is NOT in the set** ❌"
+            )
             self.status_label.setStyleSheet("color: red; font-weight: bold;")
             # You could optionally clear the field: self.input_line.clear()
 
@@ -60,6 +63,7 @@ class MainWindow(QWidget):
         else:
             self.status_label.setText(f"Status: Typing... Current text: '{input_text}'")
             self.status_label.setStyleSheet("color: black;")
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

@@ -174,9 +174,7 @@ class ImportTask(BaseImportTask):
         self.should_merge_duplicates = False
         self.is_album = True
 
-    def set_choice(
-        self, choice: Action | autotag.AlbumMatch | autotag.TrackMatch
-    ):
+    def set_choice(self, choice: Action | autotag.AlbumMatch | autotag.TrackMatch):
         """Given an AlbumMatch or TrackMatch object or an action constant,
         indicates that an action has been selected for this task.
 
@@ -303,7 +301,8 @@ class ImportTask(BaseImportTask):
             self.save_progress()
         if session.config["incremental"] and not (
             # Should we skip recording to incremental list?
-            self.skip and session.config["incremental_skip_later"]
+            self.skip
+            and session.config["incremental_skip_later"]
         ):
             self.save_history()
 
@@ -379,9 +378,7 @@ class ImportTask(BaseImportTask):
         # Construct a query to find duplicates with this metadata. We
         # use a temporary Album object to generate any computed fields.
         tmp_album = library.Album(lib, **info)
-        keys: list[str] = config["import"]["duplicate_keys"][
-            "album"
-        ].as_str_seq()
+        keys: list[str] = config["import"]["duplicate_keys"]["album"].as_str_seq()
         dup_query = tmp_album.duplicates_query(keys)
 
         # Don't count albums with the same files as duplicates.
@@ -412,8 +409,7 @@ class ImportTask(BaseImportTask):
                 [i.albumartist or i.artist for i in self.items]
             )
             if freq == len(self.items) or (
-                freq > 1
-                and float(freq) / len(self.items) >= SINGLE_ARTIST_THRESH
+                freq > 1 and float(freq) / len(self.items) >= SINGLE_ARTIST_THRESH
             ):
                 # Single-artist album.
                 changes["albumartist"] = plur_albumartist
@@ -512,18 +508,13 @@ class ImportTask(BaseImportTask):
         and `replaced_albums` dictionaries.
         """
         self.replaced_items = defaultdict(list)
-        self.replaced_albums: dict[util.PathBytes, library.Album] = (
-            defaultdict()
-        )
+        self.replaced_albums: dict[util.PathBytes, library.Album] = defaultdict()
         replaced_album_ids = set()
         for item in self.imported_items():
             dup_items = list(lib.items(query=PathQuery("path", item.path)))
             self.replaced_items[item] = dup_items
             for dup_item in dup_items:
-                if (
-                    not dup_item.album_id
-                    or dup_item.album_id in replaced_album_ids
-                ):
+                if not dup_item.album_id or dup_item.album_id in replaced_album_ids:
                     continue
                 replaced_album = dup_item._cached_album
                 if replaced_album:
@@ -683,9 +674,7 @@ class SingletonImportTask(ImportTask):
             plugins.send("item_imported", lib=lib, item=item)
 
     def lookup_candidates(self, search_ids: list[str]) -> None:
-        self.candidates, self.rec = autotag.tag_item(
-            self.item, search_ids=search_ids
-        )
+        self.candidates, self.rec = autotag.tag_item(self.item, search_ids=search_ids)
 
     def find_duplicates(self, lib: library.Library) -> list[library.Item]:  # type: ignore[override] # Need splitting Singleton and Album tasks into separate classes
         """Return a list of items from `lib` that have the same artist
@@ -696,9 +685,7 @@ class SingletonImportTask(ImportTask):
         # Query for existing items using the same metadata. We use a
         # temporary `Item` object to generate any computed fields.
         tmp_item = library.Item(lib, **info)
-        keys: list[str] = config["import"]["duplicate_keys"][
-            "item"
-        ].as_str_seq()
+        keys: list[str] = config["import"]["duplicate_keys"]["item"].as_str_seq()
         dup_query = tmp_item.duplicates_query(keys)
 
         found_items = []
@@ -789,9 +776,7 @@ class SentinelImportTask(ImportTask):
         pass
 
 
-ArchiveHandler = tuple[
-    Callable[[util.StrPath], bool], Callable[[util.StrPath], Any]
-]
+ArchiveHandler = tuple[Callable[[util.StrPath], bool], Callable[[util.StrPath], Any]]
 
 
 class ArchiveImportTask(SentinelImportTask):
@@ -1047,8 +1032,7 @@ class ImportTaskFactory:
 
         if not (self.session.config["move"] or self.session.config["copy"]):
             log.warning(
-                "Archive importing requires either "
-                "'copy' or 'move' to be enabled."
+                "Archive importing requires either " "'copy' or 'move' to be enabled."
             )
             return
 
@@ -1080,9 +1064,7 @@ class ImportTaskFactory:
             elif isinstance(exc.reason, mediafile.UnreadableFileError):
                 log.warning("unreadable file: {}", util.displayable_path(path))
             else:
-                log.error(
-                    "error reading {}: {}", util.displayable_path(path), exc
-                )
+                log.error("error reading {}: {}", util.displayable_path(path), exc)
 
 
 MULTIDISC_MARKERS = (rb"dis[ck]", rb"cd")

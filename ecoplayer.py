@@ -1,15 +1,105 @@
+"""
+This module implements a media player application with a graphical user
+interface (GUI) using PySide6. It supports local and remote media playback,
+playlist management, lyrics synchronization, and various audio mixing options.
+The application also includes a welcome wizard for first-time setup and
+a variety of user-configurable settings.
+
+Dependencies:
+- PySide6: For GUI components and multimedia handling.
+- sqlite3: For local database management.
+- qdarkstyle: For dark and light themes.
+- librosa, numpy: For audio processing.
+- aiohttp, requests: For asynchronous and synchronous HTTP requests.
+- wikipedia: For fetching song/artist information.
+- dotenv: For environment variable management.
+- fuzzywuzzy: For string matching.
+- vlc: Optional dependency for VLC fallback playback.
+
+Classes:
+- `WelcomeWizard`: Implements a multi-step setup wizard for the application.
+- `AudioPlayer`: The main application class, handling the GUI and media playback.
+- `LocalMetaWorker`: A worker thread for extracting metadata from local audio files.
+- `Worker`: A generic worker thread for asynchronous operations.
+- `SynchronizedLyrics`: Handles synchronized lyrics parsing and display.
+- `LyricsDisplay`: A custom QTextEdit widget for displaying lyrics.
+- `TextEdit`: A placeholder class for additional text editing functionality.
+
+Functions:
+- `qt_message_handler`: Custom handler for Qt messages.
+- `log_player_action`, `log_worker_action`: Logging utilities for debugging.
+- `load_json`, `save_json`: Utilities for reading and writing JSON files.
+- `get_settings`: Loads application settings from a JSON file.
+
+Constants:
+- `APP_DIR`: The application directory for storing settings and databases.
+- `SETTINGS_FILE`: Path to the settings JSON file.
+- `DB_PATH`, `COVERS_DB_PATH`: Paths to the music and covers databases.
+- `audio_extensions`: Supported audio file extensions.
+- `problematic_exts`: Extensions requiring VLC fallback.
+- `playlist_extensions`: Supported playlist file extensions.
+
+Entry Point:
+- The `main` block initializes the application, loads settings, and starts
+the `AudioPlayer` GUI.
+"""
+
 import sys
 import os
 import sqlite3
 from fuzzywuzzy import fuzz
-from PySide6.QtCore import Qt, QEvent, QUrl, QTimer, QSize, QRect, Signal, QThread, Slot, QMutex
-from PySide6.QtGui import QPixmap, QTextCursor, QImage, QAction, QIcon, QKeySequence, QKeyEvent
+from PySide6.QtCore import (
+    Qt,
+    QEvent,
+    QUrl,
+    QTimer,
+    QSize,
+    QRect,
+    Signal,
+    QThread,
+    Slot,
+    QMutex,
+)
+from PySide6.QtGui import (
+    QPixmap,
+    QTextCursor,
+    QImage,
+    QAction,
+    QIcon,
+    QKeySequence,
+    QKeyEvent,
+)
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QSlider, QListWidget, QFileDialog, QTextEdit, QListWidgetItem, QMessageBox,
-    QComboBox, QSpinBox, QFormLayout, QGroupBox, QLineEdit, QInputDialog, QMenuBar,
-    QMenu, QToolBar, QStatusBar,QProgressBar, QFrame, QCheckBox, QStyle, QWidgetAction, QSizePolicy,
-    QDialog) # QMainWindow,
+    QApplication,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QPushButton,
+    QLabel,
+    QSlider,
+    QListWidget,
+    QFileDialog,
+    QTextEdit,
+    QListWidgetItem,
+    QMessageBox,
+    QComboBox,
+    QSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QLineEdit,
+    QInputDialog,
+    QMenuBar,
+    QMenu,
+    QToolBar,
+    QStatusBar,
+    QProgressBar,
+    QFrame,
+    QCheckBox,
+    QStyle,
+    QWidgetAction,
+    QSizePolicy,
+    QDialog,
+)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 import qdarkstyle
 from mediafile import MediaFile
@@ -27,10 +117,6 @@ import base64
 import webbrowser
 import wikipedia
 from qdarkstyle import DarkPalette, LightPalette
-from tomlkit.items import Null
-
-# from local_meta_worker import LocalMetaWorker
-# from sklearn.metrics import d2_absolute_error_score
 from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
 from scanworker import ScanWorker
@@ -38,34 +124,66 @@ from text import text_1, text_2, text_3, text_4, text_5, text_6, text_7, text_8
 import threading, traceback
 import time
 
-# try to import VLC fallback (optional dependency)
+# Attempt to import VLC as an optional dependency for fallback playback
 try:
     import vlc  # python-vlc wrapper
+
     HAVE_VLC = True
 except Exception:
     vlc = None
     HAVE_VLC = False
 
-# import the wrapper
+# Import the VLC fallback wrapper
 from vlc_fallback import VlcFallbackPlayer, HAVE_VLC as VLC_AVAILABLE
 
+# Load environment variables from a .env file
 load_dotenv()
 SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
+
+# Define application directories and file paths
 APP_DIR = Path.home() / "Web-Media-Server-and-Player"
 APP_DIR.mkdir(exist_ok=True)
 SETTINGS_FILE = APP_DIR / "settings.json"
-# SETTINGS_FILE  = os.path.join(os.path.expanduser('~'), 'Advanced Media Player', 'settings.json')
-# PLAYLISTS_FILE = APP_DIR / "playlists.json"
-DB_PATH = APP_DIR / 'music.db'
-COVERS_DB_PATH = APP_DIR / 'covers.db'
-MUSIC_DIR = ''
-wikipedia.set_lang("en")
-audio_extensions = {'.mp3', '.flac', '.wav', '.ape', '.ogg', '.m4a', '.aac',
-                    '.wma', '.wv', '.tta', '.tak', '.ofr', '.ofs', '.shn', '.mpp', '.mpc'}
-# extensions known to cause backend issues (use VLC fallback)
-problematic_exts = {'.ape', '.wv', '.tta', '.tak', '.ofr', '.ofs', '.shn', '.mpp', '.mpc'}
-playlist_extensions = {'.m3u', '.m3u8', '.cue', '.json'}
+DB_PATH = APP_DIR / "music.db"
+COVERS_DB_PATH = APP_DIR / "covers.db"
 
+# Supported audio file extensions
+audio_extensions = {
+    ".mp3",
+    ".flac",
+    ".wav",
+    ".ape",
+    ".ogg",
+    ".m4a",
+    ".aac",
+    ".wma",
+    ".wv",
+    ".tta",
+    ".tak",
+    ".ofr",
+    ".ofs",
+    ".shn",
+    ".mpp",
+    ".mpc",
+}
+
+# Extensions known to cause backend issues (use VLC fallback)
+problematic_exts = {
+    ".ape",
+    ".wv",
+    ".tta",
+    ".tak",
+    ".ofr",
+    ".ofs",
+    ".shn",
+    ".mpp",
+    ".mpc",
+}
+
+# Supported playlist file extensions
+playlist_extensions = {".m3u", ".m3u8", ".cue", ".json"}
+
+# Additional utility functions and classes are defined below.
 
 def qt_message_handler(msg_type, context, message):
     # Print Qt message text & context
@@ -97,6 +215,7 @@ def log_player_action(action, player=None):
         except Exception:
             pass
 
+
 def log_worker_action(action, worker=None):
     print(f"[WORKER] action={action}")
     print("  Python thread:", threading.current_thread().name)
@@ -126,17 +245,19 @@ def save_json(path: Path, obj):
     except Exception as e:
         QMessageBox.warning(w, "Error!", str(e))
 
+
 def get_settings():
     # json_data = load_json(PLAYLISTS_FILE, default={"server": "http://localhost:5000", "playlists": []})
-    default = {"server": "localhost",
-               "mix_method": "Auto",
-               "transition_duration": 4,
-               "silence_threshold_db": -46,
-               "silence_min_duration": 0.1,
-               "scan_for_lyrics": True,
-               "show_welcome": True,
-               "style": "default"
-               }
+    default = {
+        "server": "localhost",
+        "mix_method": "Auto",
+        "transition_duration": 4,
+        "silence_threshold_db": -46,
+        "silence_min_duration": 0.1,
+        "scan_for_lyrics": True,
+        "show_welcome": True,
+        "style": "default",
+    }
     json_settings = load_json(SETTINGS_FILE, default=default)
     # Ensure keys exist
     for k, v in default.items():
@@ -146,40 +267,43 @@ def get_settings():
 
 
 class ItemType(Enum):
-    PLAYLIST = 'playlist'
-    SONG = 'song'
-    ARTIST = 'artist'
-    ALBUM = 'album'
-    COVER = 'cover'
-    DIRECTORY = 'directory'
+    PLAYLIST = "playlist"
+    SONG = "song"
+    ARTIST = "artist"
+    ALBUM = "album"
+    COVER = "cover"
+    DIRECTORY = "directory"
 
     def set_item_type(self, item_type):
         if not isinstance(item_type, ItemType):
             raise ValueError("Invalid status value")
         w.status_bar.showMessage(f"Status set to: {item_type.value}")
 
+
 class ListItem:
     def __init__(self):
         super().__init__()
         self.is_remote = False
         self.item_type = ItemType
-        self.display_text ='Unknown'
-        self.route = ''
-        self.path = ''
+        self.display_text = "Unknown"
+        self.route = ""
+        self.path = ""
         self.server = w.server
-     #   self.id = int
+
+    #   self.id = int
 
     def absolute_path(self):
         if self.is_remote:
             abs_url = QUrl()
-            abs_url.setScheme('http')
+            abs_url.setScheme("http")
             abs_url.setHost(self.server)
             abs_url.setPort(5000)
-            file_path = rf'/{self.route}/{self.path}'
+            file_path = rf"/{self.route}/{self.path}"
             abs_url.setPath(file_path)
             return abs_url
         else:
             return QUrl.fromLocalFile(os.path.abspath(self.path))
+
 
 class CheckBoxAction(QWidgetAction):
     def __init__(self, parent, text):
@@ -192,6 +316,7 @@ class CheckBoxAction(QWidgetAction):
         layout.addWidget(label)
         self.widget.setLayout(layout)
         self.setDefaultWidget(self.widget)
+
 
 # --- Welcome Wizard Implementation ---
 class WelcomeWizard(QDialog):
@@ -207,7 +332,8 @@ class WelcomeWizard(QDialog):
 
     The wizard will call AudioPlayer.scan_library and AudioPlayer.enter_server as requested.
     """
-    def __init__(self, audio_player: 'AudioPlayer'):
+
+    def __init__(self, audio_player: "AudioPlayer"):
         super().__init__(audio_player)
         self.setWindowTitle("Welcome")
         self.setModal(True)
@@ -220,7 +346,8 @@ class WelcomeWizard(QDialog):
         self.label = QLabel("", self)
         self.label.setWordWrap(True)
         self.label.setStyleSheet(
-            "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+            "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
+        )
         self.layout.addWidget(self.label)
 
         # Buttons container
@@ -301,7 +428,6 @@ class WelcomeWizard(QDialog):
             self._add_button("Back", self.back_step)
             self._add_button("Next", self.next_step, default=True)
 
-
         elif self.step == 7:
             self.label.setText(text_7)
             # Add the "Don't show again" checkbox
@@ -342,7 +468,6 @@ class WelcomeWizard(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to open Connect to Remote: {e}")
 
-
     def _scan_remote(self):
         """
         Schedule scan_remote_library to be called soon on the main event loop.
@@ -352,7 +477,9 @@ class WelcomeWizard(QDialog):
         try:
             QTimer.singleShot(0, lambda: self.audio.scan_remote_library())
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to start remote library scan: {e}")
+            QMessageBox.warning(
+                self, "Error", f"Failed to start remote library scan: {e}"
+            )
 
     def finish_wizard(self):
         # Persist "don't show again" option if checked
@@ -360,7 +487,7 @@ class WelcomeWizard(QDialog):
             settings = load_json(SETTINGS_FILE, default={})
             if not isinstance(settings, dict):
                 settings = {}
-            settings['show_welcome'] = not self.dont_show_checkbox.isChecked()
+            settings["show_welcome"] = not self.dont_show_checkbox.isChecked()
             # Ensure other known settings remain (merge defaults)
             defaults = get_settings()
             for k, v in defaults.items():
@@ -370,6 +497,7 @@ class WelcomeWizard(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Could not save settings: {e}")
         self.accept()
+
 
 # --- End of Welcome Wizard Implementation ---
 
@@ -386,6 +514,7 @@ class CheckBoxAction(QWidgetAction):
         self.widget.setLayout(layout)
         self.setDefaultWidget(self.widget)
 
+
 class AudioPlayer(QWidget):
     request_search = Signal(str, str)
     request_reveal = Signal(ListItem)
@@ -400,11 +529,14 @@ class AudioPlayer(QWidget):
         if VLC_AVAILABLE:
             self.vlc_helper = VlcFallbackPlayer(self)
             self.vlc_helper.positionChanged.connect(
-                lambda pos: self._on_vlc_position_changed(pos))
+                lambda pos: self._on_vlc_position_changed(pos)
+            )
             self.vlc_helper.durationChanged.connect(
-                lambda dur: self._on_vlc_duration_changed(dur))
+                lambda dur: self._on_vlc_duration_changed(dur)
+            )
             self.vlc_helper.playbackStateChanged.connect(
-                lambda state: self._on_vlc_playback_state(state))
+                lambda state: self._on_vlc_playback_state(state)
+            )
             self.vlc_helper.ended.connect(self._on_vlc_ended)
 
         # store full settings dict for use with wizard persistence
@@ -422,7 +554,7 @@ class AudioPlayer(QWidget):
         self.pl_worker = None
         self.search_worker = None
         self.server = settings["server"]
-        self.api_url = self.remote_base = rf'http://{self.server}:5000'
+        self.api_url = self.remote_base = rf"http://{self.server}:5000"
         self.playlists = []
         self.dark_style = settings.get("style", "default")
 
@@ -430,8 +562,10 @@ class AudioPlayer(QWidget):
         self.mix_method = settings.get("mix_method", "Auto")
         self.transition_duration = settings.get("transition_duration", 4)
         self.scan_for_lyrics = settings.get("scan_for_lyrics", True)
-        self.silence_threshold_db = settings.get("silence_threshold_db", -40) # in dB
-        self.silence_min_duration = settings.get("silence_min_duration", 0.1) # in seconds
+        self.silence_threshold_db = settings.get("silence_threshold_db", -40)  # in dB
+        self.silence_min_duration = settings.get(
+            "silence_min_duration", 0.1
+        )  # in seconds
         self._silence_ms = 0
         self._fade_step = None
         self.fade_timer = None
@@ -446,15 +580,16 @@ class AudioPlayer(QWidget):
         self.lyrics_timer = QTimer(self)
         self.lyrics_timer.setInterval(200)
         self.lyrics_timer.timeout.connect(self.update_lyrics_display)
-        self.meta_data = {'album': '',
-                          'artist': '',
-                          'codec': '',
-                          'duration': 0,
-                          'lyrics': '',
-                          'picture': None,
-                          'title': '',
-                          'year': ''
-                          } # Current track metadata
+        self.meta_data = {
+            "album": "",
+            "artist": "",
+            "codec": "",
+            "duration": 0,
+            "lyrics": "",
+            "picture": None,
+            "title": "",
+            "year": "",
+        }  # Current track metadata
 
         # Layout
         layout = QVBoxLayout(self)
@@ -476,9 +611,13 @@ class AudioPlayer(QWidget):
         local_menu = QMenu("&Local", self)
         menubar.addMenu(local_menu)
 
-        self.open_action = QAction(QIcon("icons/open.png"), "&Open Playlist | Add Songs", self)
+        self.open_action = QAction(
+            QIcon("icons/open.png"), "&Open Playlist | Add Songs", self
+        )
         self.open_action.setShortcut(QKeySequence.Open)
-        self.open_action.setToolTip("Add Songs/folders and/or Playlists to playing queue")
+        self.open_action.setToolTip(
+            "Add Songs/folders and/or Playlists to playing queue"
+        )
         self.open_action.triggered.connect(self.show_playlist_menu)
         local_menu.addAction(self.open_action)
 
@@ -487,27 +626,37 @@ class AudioPlayer(QWidget):
         self.load_action.triggered.connect(self.get_local_playlists)
         local_menu.addAction(self.load_action)
 
-        self.list_songs_action = QAction(QIcon("icons/music-beam.png"), "List all &Songs", self)
+        self.list_songs_action = QAction(
+            QIcon("icons/music-beam.png"), "List all &Songs", self
+        )
         self.list_songs_action.setShortcut(QKeySequence("Ctrl+S"))
         self.list_songs_action.triggered.connect(self.get_local_songs)
         local_menu.addAction(self.list_songs_action)
 
-        self.list_artists_action = QAction(QIcon("icons/violoncello.png"), "List all &Artists", self)
+        self.list_artists_action = QAction(
+            QIcon("icons/violoncello.png"), "List all &Artists", self
+        )
         self.list_artists_action.setShortcut(QKeySequence("Ctrl+A"))
         self.list_artists_action.triggered.connect(self.get_local_artists)
         local_menu.addAction(self.list_artists_action)
 
-        self.list_albums_action = QAction(QIcon("icons/vinil.png"), "List all Al&bums", self)
+        self.list_albums_action = QAction(
+            QIcon("icons/vinil.png"), "List all Al&bums", self
+        )
         self.list_albums_action.setShortcut(QKeySequence("Ctrl+B"))
         self.list_albums_action.triggered.connect(self.get_local_albums)
         local_menu.addAction(self.list_albums_action)
 
-        self.scan_action = QAction(QIcon("icons/database-insert.png"), "Scan &Library", self)
+        self.scan_action = QAction(
+            QIcon("icons/database-insert.png"), "Scan &Library", self
+        )
         self.scan_action.setShortcut(QKeySequence("Ctrl+L"))
         self.scan_action.triggered.connect(self.scan_library)
         local_menu.addAction(self.scan_action)
 
-        self.purge_action = QAction(QIcon("icons/database-delete.png"), "P&urge Library", self)
+        self.purge_action = QAction(
+            QIcon("icons/database-delete.png"), "P&urge Library", self
+        )
         self.purge_action.setShortcut(QKeySequence("Ctrl+U"))
         self.purge_action.triggered.connect(self.purge_library)
         local_menu.addAction(self.purge_action)
@@ -522,12 +671,16 @@ class AudioPlayer(QWidget):
         self.clear_action.triggered.connect(self.clear_playlist)
         local_menu.addAction(self.clear_action)
 
-        self.local_web_action = QAction(QIcon("icons/internet.png"), "Launch &Web UI", self)
+        self.local_web_action = QAction(
+            QIcon("icons/internet.png"), "Launch &Web UI", self
+        )
         self.local_web_action.setShortcut(QKeySequence("Ctrl+W"))
         self.local_web_action.triggered.connect(self.local_web_ui)
         local_menu.addAction(self.local_web_action)
 
-        self.local_shutdown_action = QAction(QIcon("icons/power.png"), "Shutdown Lo&cal Server", self)
+        self.local_shutdown_action = QAction(
+            QIcon("icons/power.png"), "Shutdown Lo&cal Server", self
+        )
         self.local_shutdown_action.setShortcut(QKeySequence.Close)
         self.local_shutdown_action.triggered.connect(self.shutdown_local_server)
         local_menu.addAction(self.local_shutdown_action)
@@ -543,52 +696,72 @@ class AudioPlayer(QWidget):
         remote_menu = QMenu("&Remote", self)
         menubar.addMenu(remote_menu)
 
-        self.server_action = QAction(QIcon("icons/database-share.png"), "Connect to R&emote", self)
+        self.server_action = QAction(
+            QIcon("icons/database-share.png"), "Connect to R&emote", self
+        )
         self.server_action.setShortcut(QKeySequence("Ctrl+E"))
         self.server_action.triggered.connect(self.enter_server)
         remote_menu.addAction(self.server_action)
 
-        self.load_remote_action = QAction(QIcon("icons/playlistR.png"), "Load &Playlists", self)
+        self.load_remote_action = QAction(
+            QIcon("icons/playlistR.png"), "Load &Playlists", self
+        )
         self.load_remote_action.setShortcut(QKeySequence.Print)
         self.load_remote_action.triggered.connect(self.get_playlists)
         remote_menu.addAction(self.load_remote_action)
 
-        self.list_remote_songs_action = QAction(QIcon("icons/music-beamR.png"), "List all &Songs", self)
+        self.list_remote_songs_action = QAction(
+            QIcon("icons/music-beamR.png"), "List all &Songs", self
+        )
         self.list_remote_songs_action.setShortcut(QKeySequence("Ctrl+S"))
         self.list_remote_songs_action.triggered.connect(self.get_songs)
         remote_menu.addAction(self.list_remote_songs_action)
 
-        self.list_remote_artists_action = QAction(QIcon("icons/violoncelloR.png"), "List all &Artists", self)
+        self.list_remote_artists_action = QAction(
+            QIcon("icons/violoncelloR.png"), "List all &Artists", self
+        )
         self.list_remote_artists_action.setShortcut(QKeySequence("Ctrl+A"))
         self.list_remote_artists_action.triggered.connect(self.get_artists)
         remote_menu.addAction(self.list_remote_artists_action)
 
-        self.list_remote_albums_action = QAction(QIcon("icons/vinilR.png"), "List all Al&bums", self)
+        self.list_remote_albums_action = QAction(
+            QIcon("icons/vinilR.png"), "List all Al&bums", self
+        )
         self.list_remote_albums_action.setShortcut(QKeySequence("Ctrl+B"))
         self.list_remote_albums_action.triggered.connect(self.get_albums)
         remote_menu.addAction(self.list_remote_albums_action)
 
-        self.scan_remote_action = QAction(QIcon("icons/database-insertR.png"), "Scan &Library", self)
+        self.scan_remote_action = QAction(
+            QIcon("icons/database-insertR.png"), "Scan &Library", self
+        )
         self.scan_remote_action.setShortcut(QKeySequence("Ctrl+R"))
         self.scan_remote_action.triggered.connect(self.scan_remote_library)
         remote_menu.addAction(self.scan_remote_action)
 
-        self.purge_remote_action = QAction(QIcon("icons/database-deleteR.png"), "P&urge Library", self)
+        self.purge_remote_action = QAction(
+            QIcon("icons/database-deleteR.png"), "P&urge Library", self
+        )
         self.purge_remote_action.setShortcut(QKeySequence("Ctrl+U"))
         self.purge_remote_action.triggered.connect(self.purge_remote_library)
         remote_menu.addAction(self.purge_remote_action)
 
-        self.remote_web_action = QAction(QIcon("icons/internetR.png"), "Launch &Web UI", self)
+        self.remote_web_action = QAction(
+            QIcon("icons/internetR.png"), "Launch &Web UI", self
+        )
         self.remote_web_action.setShortcut(QKeySequence("Ctrl+I"))
         self.remote_web_action.triggered.connect(self.remote_web_ui)
         remote_menu.addAction(self.remote_web_action)
 
-        self.remote_desktop_action = QAction(QIcon("icons/favicon.ico"), "Launch &Desktop UI", self)
+        self.remote_desktop_action = QAction(
+            QIcon("icons/favicon.ico"), "Launch &Desktop UI", self
+        )
         self.remote_desktop_action.setShortcut(QKeySequence("Ctrl+D"))
         self.remote_desktop_action.triggered.connect(self.remote_desk_ui)
         remote_menu.addAction(self.remote_desktop_action)
 
-        self.remote_shutdown_action = QAction(QIcon("icons/powerR.png"), "S&hutdown Server", self)
+        self.remote_shutdown_action = QAction(
+            QIcon("icons/powerR.png"), "S&hutdown Server", self
+        )
         self.remote_shutdown_action.setShortcut(QKeySequence("Ctrl+C"))
         self.remote_shutdown_action.triggered.connect(self.shutdown_server)
         remote_menu.addAction(self.remote_shutdown_action)
@@ -616,7 +789,9 @@ class AudioPlayer(QWidget):
         self.light_action.triggered.connect(self.set_light_style)
         style_menu.addAction(self.light_action)
 
-        self.normal_action = QAction(QIcon("icons/normal-mode.png"), "&Default Mode", self)
+        self.normal_action = QAction(
+            QIcon("icons/normal-mode.png"), "&Default Mode", self
+        )
         self.normal_action.triggered.connect(self.set_no_style)
         style_menu.addAction(self.normal_action)
 
@@ -624,7 +799,7 @@ class AudioPlayer(QWidget):
         lyrics_menu = QMenu("&Lyrics", self)
         settings_menu.addMenu(lyrics_menu)
         self.lyrics_action = CheckBoxAction(self, "Auto download Lyrics")
-      #  self.lyrics_action.triggered.connect(self.toggle_lyrics_scan)
+        #  self.lyrics_action.triggered.connect(self.toggle_lyrics_scan)
         lyrics_menu.addAction(self.lyrics_action)
         self.lyrics_checkbox = self.lyrics_action.widget.findChild(QCheckBox)
         self.lyrics_checkbox.setChecked(self.scan_for_lyrics)
@@ -638,15 +813,15 @@ class AudioPlayer(QWidget):
         self.wizard_action.triggered.connect(self.wizard)
         help_menu.addAction(self.wizard_action)
 
-        self.instructions_action = QAction(QIcon("icons/user-guide.png"),
-                                           "&Instructions", self)
+        self.instructions_action = QAction(
+            QIcon("icons/user-guide.png"), "&Instructions", self
+        )
         self.instructions_action.triggered.connect(self.show_instructions)
         help_menu.addAction(self.instructions_action)
 
         self.about_action = QAction(QIcon("icons/user.png"), "&About", self)
         self.about_action.triggered.connect(self.show_about_dialog)
         help_menu.addAction(self.about_action)
-
 
         # Add action to toolbar
         toolbar.addSeparator()
@@ -662,7 +837,7 @@ class AudioPlayer(QWidget):
         toolbar.addAction(self.local_web_action)
         toolbar.addAction(self.local_shutdown_action)
         toolbar.addSeparator()
-      # Spacer
+        # Spacer
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         toolbar.addWidget(spacer)
@@ -670,9 +845,9 @@ class AudioPlayer(QWidget):
         toolbar.addAction(self.dark_action)
         toolbar.addAction(self.light_action)
         toolbar.addAction(self.normal_action)
-      #  toolbar.addAction(self.lyrics_action)
+        #  toolbar.addAction(self.lyrics_action)
         toolbar.addSeparator()
-      # Spacer
+        # Spacer
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         toolbar.addWidget(spacer)
@@ -700,11 +875,13 @@ class AudioPlayer(QWidget):
         # Audio/Player
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
-        self.audio_output.setVolume(1.0)  # or any value between 0.0 (mute) to 1.0 (full volume)
+        self.audio_output.setVolume(
+            1.0
+        )  # or any value between 0.0 (mute) to 1.0 (full volume)
         self.player.setAudioOutput(self.audio_output)
-     #   self.buffer = QAudioBufferOutput(self)
-     #   self.player.setAudioBufferOutput(self.buffer)
-     #  self.buffer.bufferAvailable.connect(self.on_buffer)
+        #   self.buffer = QAudioBufferOutput(self)
+        #   self.player.setAudioBufferOutput(self.buffer)
+        #  self.buffer.bufferAvailable.connect(self.on_buffer)
         self.next_player = None  # For mixing with next track
         self.next_output = None
 
@@ -741,13 +918,13 @@ class AudioPlayer(QWidget):
         self.sort = QPushButton("Sort")
         self.sort.setFixedSize(QSize(60, 26))
         self.playlist_widget.setDragDropMode(QListWidget.InternalMove)
-        self.playlist_widget.itemClicked.connect(
-            self.play_selected_item)
-       # self.playlist_widget.itemDoubleClicked.connect(
-           # self.play_selected_track)
+        self.playlist_widget.itemClicked.connect(self.play_selected_item)
+        # self.playlist_widget.itemDoubleClicked.connect(
+        # self.play_selected_track)
         self.playlist_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.playlist_widget.customContextMenuRequested.connect(
-            self.show_playlist_context_menu)
+            self.show_playlist_context_menu
+        )
 
         # Drag-and-drop support
         self.setAcceptDrops(True)
@@ -759,8 +936,10 @@ class AudioPlayer(QWidget):
         self.album_art.setFixedSize(256, 256)
         self.album_art.setScaledContents(True)
         self.album_art.setPixmap(
-            QPixmap("static/images/default_album_art.png") if os.path.exists(
-                "static/images/default_album_art.png") else QPixmap())
+            QPixmap("static/images/default_album_art.png")
+            if os.path.exists("static/images/default_album_art.png")
+            else QPixmap()
+        )
         self.title_label = QLabel("Title --")
         self.title_label.setWordWrap(True)
         self.title_label.setFixedWidth(256)
@@ -775,15 +954,17 @@ class AudioPlayer(QWidget):
         self.codec_label = QLabel("Codec --")
 
         self.text = QTextEdit(readOnly=True)
-       # self.text_label = QLabel("Artist and Song Info:")
+        # self.text_label = QLabel("Artist and Song Info:")
         self.btn_info = QPushButton("Push for Artist and Song Info.")
         self.btn_info.setFixedSize(QSize(256, 26))
 
-        self.time_label = QPushButton("--:--"); self.time_label.setFlat(True)
+        self.time_label = QPushButton("--:--")
+        self.time_label.setFlat(True)
         self.time_label.setCursor(Qt.PointingHandCursor)
         self.time_label.clicked.connect(self.toggle_time_display)
-        self.slider = QSlider(Qt.Horizontal); self.slider.setRange(0, 100)
-      #  self.slider.sliderMoved.connect(self.seek_position) replaced by slider released
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(0, 100)
+        #  self.slider.sliderMoved.connect(self.seek_position) replaced by slider released
         self.slider.sliderMoved.connect(self.on_slider_moved)
         self.slider.sliderReleased.connect(self.on_slider_released)
         self._slider_moving = False
@@ -791,11 +972,12 @@ class AudioPlayer(QWidget):
         # StatusBar
         self.status_bar = QStatusBar()
         self.status_bar.showMessage(
-            "Welcome!☺️ Drag-and-drop Playlists or/and Songs to Playlist queue to start the music 🎵.")
-       # self.wc_label = QLabel("To start the music, Drag-and-drop Playlists or/and Songs to Queue pane.")
-       # self.status_bar.addPermanentWidget(self.wc_label)
+            "Welcome!☺️ Drag-and-drop Playlists or/and Songs to Playlist queue to start the music 🎵."
+        )
+        # self.wc_label = QLabel("To start the music, Drag-and-drop Playlists or/and Songs to Queue pane.")
+        # self.status_bar.addPermanentWidget(self.wc_label)
 
-        image_path = 'static/images/buttons.png'
+        image_path = "static/images/buttons.png"
         tile_width = 1650
         tile_height = 1650
         self.sub_images = self.split_image(image_path, tile_width, tile_height)
@@ -806,9 +988,10 @@ class AudioPlayer(QWidget):
             self.prev_button.setIcon(QIcon(pixmap))
             self.prev_button.setIconSize(QSize(50, 50))
         else:
-           # self.prev_button.setEnabled(False)
+            # self.prev_button.setEnabled(False)
             self.prev_button.setIcon(
-                self.style().standardIcon(QStyle.SP_MediaSkipBackward))
+                self.style().standardIcon(QStyle.SP_MediaSkipBackward)
+            )
         self.prev_button.setFixedSize(QSize(50, 50))
         self.play_button = QPushButton()
         if self.sub_images:
@@ -816,9 +999,8 @@ class AudioPlayer(QWidget):
             self.play_button.setIcon(QIcon(pixmap))
             self.play_button.setIconSize(QSize(50, 50))
         else:
-           # self.play_button.setEnabled(False)
-            self.play_button.setIcon(
-                self.style().standardIcon(QStyle.SP_MediaPlay))
+            # self.play_button.setEnabled(False)
+            self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.play_button.setFixedSize(QSize(50, 50))
         self.next_button = QPushButton()
         if self.sub_images:
@@ -826,9 +1008,10 @@ class AudioPlayer(QWidget):
             self.next_button.setIcon(QIcon(pixmap))
             self.next_button.setIconSize(QSize(50, 50))
         else:
-         #   self.next_button.setEnabled(False)
+            #   self.next_button.setEnabled(False)
             self.next_button.setIcon(
-                self.style().standardIcon(QStyle.SP_MediaSkipForward))
+                self.style().standardIcon(QStyle.SP_MediaSkipForward)
+            )
         self.next_button.setFixedSize(QSize(50, 50))
         self.prev_button.clicked.connect(self.prev_track)
         self.play_button.clicked.connect(self.toggle_play_pause)
@@ -853,16 +1036,16 @@ class AudioPlayer(QWidget):
         mix_form = QFormLayout()
         mix_form.addRow("Mix Method:", self.mix_method_combo)
         mix_form.addRow("Transition:", self.transition_spin)
-     #   mix_form.addRow(self.silence_check)
+        #   mix_form.addRow(self.silence_check)
         mix_group = QGroupBox("Mixing Options")
         mix_group.setFixedSize(QSize(180, 80))
         mix_group.setLayout(mix_form)
 
         gap_killer_group = QGroupBox("Auto Mix")
-     #   gap_killer_group.setFixedSize(QSize(180, 80))
+        #   gap_killer_group.setFixedSize(QSize(180, 80))
         gap_box = QHBoxLayout()
-      #  self.chk_gap = QCheckBox("ON")
-       # self.chk_gap.setChecked(True)
+        #  self.chk_gap = QCheckBox("ON")
+        # self.chk_gap.setChecked(True)
         self.silence_db = QSlider(Qt.Horizontal)
         self.silence_db.setRange(-60, -20)
         self.silence_db.setValue(-46)
@@ -870,7 +1053,7 @@ class AudioPlayer(QWidget):
         self.silence_dur.setRange(1, 50)
         self.silence_dur.setValue(5)
         self.gap_status = QLabel("Monitoring")
-       # gap_box.addWidget(self.chk_gap)
+        # gap_box.addWidget(self.chk_gap)
         gap_box.addWidget(QLabel("Threshold (dB):"))
         gap_box.addWidget(self.silence_db, 1)
         gap_box.addWidget(QLabel("Min Silence (x100ms):"))
@@ -900,10 +1083,8 @@ class AudioPlayer(QWidget):
         metadata_layout.addWidget(self.btn_info)
         metadata_layout.addWidget(self.text)
 
-
         info_layout.addLayout(meta_layout)
         info_layout.addLayout(metadata_layout)
-
 
         progress_layout = QHBoxLayout()
         progress_layout.addWidget(self.time_label)
@@ -927,11 +1108,16 @@ class AudioPlayer(QWidget):
         mixer_layout.addLayout(reveal)
         left_layout.addLayout(mixer_layout)
 
-
         playlist_layout = QVBoxLayout()
-        shuffle_box.addWidget(self.playlist_label, )
-        shuffle_box.addWidget(self.btn_shuffle, )
-        shuffle_box.addWidget(self.sort, )
+        shuffle_box.addWidget(
+            self.playlist_label,
+        )
+        shuffle_box.addWidget(
+            self.btn_shuffle,
+        )
+        shuffle_box.addWidget(
+            self.sort,
+        )
         playlist_layout.addLayout(shuffle_box)
         playlist_layout.addWidget(self.playlist_widget)
 
@@ -950,7 +1136,6 @@ class AudioPlayer(QWidget):
 
         self.setLayout(layout)
 
-
         # Connections
         self.btn_local.clicked.connect(self.on_local)
         self.btn_go.clicked.connect(self.on_go)
@@ -967,12 +1152,13 @@ class AudioPlayer(QWidget):
         self.slider.sliderPressed.connect(lambda: self.player.pause())
         self.slider.sliderReleased.connect(lambda: self.player.play())
         self.silence_db.valueChanged.connect(
-            lambda v: setattr(self, "silence_threshold_db", v))
+            lambda v: setattr(self, "silence_threshold_db", v)
+        )
         self.silence_dur.valueChanged.connect(
-            lambda v: setattr(self, "silence_min_duration", v / 10.0))
+            lambda v: setattr(self, "silence_min_duration", v / 10.0)
+        )
         self.reveal_btn.clicked.connect(self.reveal_current)
         self.player.errorOccurred.connect(self.handle_error)
-
 
         # For mixing (transition to next track)
         self.player.positionChanged.connect(self.check_for_mix_transition)
@@ -989,18 +1175,20 @@ class AudioPlayer(QWidget):
             self.set_no_style()
 
         for item in self.playlists:
-            self.playlist_widget.addItem(item['name'])
+            self.playlist_widget.addItem(item["name"])
 
         # Launch welcome wizard automatically if enabled in settings
         try:
-            if self.settings.get('show_welcome', True):
+            if self.settings.get("show_welcome", True):
                 wizard = WelcomeWizard(self)
                 if self.dark_style == "dark":
                     wizard.label.setStyleSheet(
-                        "font-size: 12px; color: white; background: 19232D; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+                        "font-size: 12px; color: white; background: 19232D; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
+                    )
                 else:
                     wizard.label.setStyleSheet(
-                        "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+                        "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
+                    )
                 wizard.exec()
         except Exception:
             pass
@@ -1017,25 +1205,29 @@ class AudioPlayer(QWidget):
 
         for top in range(0, img_height, tile_height):
             for left in range(0, img_width, tile_width):
-                rect = QRect(left, top, min(tile_width, img_width - left),
-                             min(tile_height, img_height - top))
+                rect = QRect(
+                    left,
+                    top,
+                    min(tile_width, img_width - left),
+                    min(tile_height, img_height - top),
+                )
                 sub_img = image.copy(rect)
                 sub_images.append(sub_img)
         return sub_images
-
 
     def set_dark_style(self):
         self.dark_style = "dark"
         # setup stylesheet
         app.setStyleSheet(qdarkstyle.load_stylesheet(palette=DarkPalette))
         self.lyrics_display.setStyleSheet(
-            "color: black; font-size: 18px; background: #E0F0FF; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+            "color: black; font-size: 18px; background: #E0F0FF; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
+        )
         self.playlist_widget.setStyleSheet(
             "QListView::item:selected{ background-color: blue;};"
         )
-        dark_image_path = 'static/images/buttons_dark.jpg'
-      #  self.sub_images.load(dark_image_path)
-     #   self.lbl.setPixmap(self.sub_images)
+        dark_image_path = "static/images/buttons_dark.jpg"
+        #  self.sub_images.load(dark_image_path)
+        #   self.lbl.setPixmap(self.sub_images)
         tile_width = 1650
         tile_height = 1650
         self.sub_images = self.split_image(dark_image_path, tile_width, tile_height)
@@ -1046,15 +1238,15 @@ class AudioPlayer(QWidget):
             self.prev_button.setIconSize(QSize(50, 50))
         else:
             self.prev_button.setIcon(
-                self.style().standardIcon(QStyle.SP_MediaSkipBackward))
+                self.style().standardIcon(QStyle.SP_MediaSkipBackward)
+            )
         self.prev_button.setFixedSize(QSize(50, 50))
         if self.sub_images:
             pixmap = QPixmap.fromImage(self.sub_images[0])
             self.play_button.setIcon(QIcon(pixmap))
             self.play_button.setIconSize(QSize(50, 50))
         else:
-            self.play_button.setIcon(
-                self.style().standardIcon(QStyle.SP_MediaPlay))
+            self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.play_button.setFixedSize(QSize(50, 50))
         if self.sub_images:
             pixmap = QPixmap.fromImage(self.sub_images[3])
@@ -1063,36 +1255,36 @@ class AudioPlayer(QWidget):
         else:
             #   self.next_button.setEnabled(False)
             self.next_button.setIcon(
-                self.style().standardIcon(QStyle.SP_MediaSkipForward))
+                self.style().standardIcon(QStyle.SP_MediaSkipForward)
+            )
         self.next_button.setFixedSize(QSize(50, 50))
-
 
     def set_light_style(self):
         self.dark_style = "light"
         # setup stylesheet
         app.setStyleSheet(qdarkstyle.load_stylesheet(palette=LightPalette))
         self.playlist_widget.setStyleSheet(
-            "QListView::item:selected{ background-color: lightblue;}; ")
-        image_path = 'static/images/buttons_light.jpg'
+            "QListView::item:selected{ background-color: lightblue;}; "
+        )
+        image_path = "static/images/buttons_light.jpg"
         tile_width = 1650
         tile_height = 1650
-        self.sub_images = self.split_image(image_path, tile_width,
-                                           tile_height)
+        self.sub_images = self.split_image(image_path, tile_width, tile_height)
         if self.sub_images:
             pixmap = QPixmap.fromImage(self.sub_images[2])
             self.prev_button.setIcon(QIcon(pixmap))
             self.prev_button.setIconSize(QSize(50, 50))
         else:
             self.prev_button.setIcon(
-                self.style().standardIcon(QStyle.SP_MediaSkipBackward))
+                self.style().standardIcon(QStyle.SP_MediaSkipBackward)
+            )
         self.prev_button.setFixedSize(QSize(50, 50))
         if self.sub_images:
             pixmap = QPixmap.fromImage(self.sub_images[0])
             self.play_button.setIcon(QIcon(pixmap))
             self.play_button.setIconSize(QSize(50, 50))
         else:
-            self.play_button.setIcon(
-                self.style().standardIcon(QStyle.SP_MediaPlay))
+            self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.play_button.setFixedSize(QSize(50, 50))
         if self.sub_images:
             pixmap = QPixmap.fromImage(self.sub_images[3])
@@ -1101,9 +1293,9 @@ class AudioPlayer(QWidget):
         else:
             #   self.next_button.setEnabled(False)
             self.next_button.setIcon(
-                self.style().standardIcon(QStyle.SP_MediaSkipForward))
+                self.style().standardIcon(QStyle.SP_MediaSkipForward)
+            )
         self.next_button.setFixedSize(QSize(50, 50))
-
 
     def set_no_style(self):
         self.dark_style = "default"
@@ -1118,26 +1310,25 @@ class AudioPlayer(QWidget):
             "border-width: 2px; "
             "border-style: inset;"
         )
-        image_path = 'static/images/buttons.jpg'
+        image_path = "static/images/buttons.jpg"
         tile_width = 1650
         tile_height = 1650
-        self.sub_images = self.split_image(image_path, tile_width,
-                                           tile_height)
+        self.sub_images = self.split_image(image_path, tile_width, tile_height)
         if self.sub_images:
             pixmap = QPixmap.fromImage(self.sub_images[2])
             self.prev_button.setIcon(QIcon(pixmap))
             self.prev_button.setIconSize(QSize(50, 50))
         else:
             self.prev_button.setIcon(
-                self.style().standardIcon(QStyle.SP_MediaSkipBackward))
+                self.style().standardIcon(QStyle.SP_MediaSkipBackward)
+            )
         self.prev_button.setFixedSize(QSize(50, 50))
         if self.sub_images:
             pixmap = QPixmap.fromImage(self.sub_images[0])
             self.play_button.setIcon(QIcon(pixmap))
             self.play_button.setIconSize(QSize(50, 50))
         else:
-            self.play_button.setIcon(
-                self.style().standardIcon(QStyle.SP_MediaPlay))
+            self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.play_button.setFixedSize(QSize(50, 50))
         if self.sub_images:
             pixmap = QPixmap.fromImage(self.sub_images[3])
@@ -1146,7 +1337,8 @@ class AudioPlayer(QWidget):
         else:
             #   self.next_button.setEnabled(False)
             self.next_button.setIcon(
-                self.style().standardIcon(QStyle.SP_MediaSkipForward))
+                self.style().standardIcon(QStyle.SP_MediaSkipForward)
+            )
         self.next_button.setFixedSize(QSize(50, 50))
 
     def toggle_lyrics_scan(self):
@@ -1158,17 +1350,18 @@ class AudioPlayer(QWidget):
         state = "enabled" if self.scan_for_lyrics else "disabled"
         self.status_bar.showMessage(f"Lyrics scanning {state}")
 
-
     def wizard(self):
         """Launch the welcome/setup wizard"""
         try:
             wizard = WelcomeWizard(self)
             if self.dark_style == "dark":
                 wizard.label.setStyleSheet(
-                    "font-size: 12px; color: white; background: 19232D; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+                    "font-size: 12px; color: white; background: 19232D; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
+                )
             else:
                 wizard.label.setStyleSheet(
-                    "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+                    "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
+                )
             wizard.exec()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to launch wizard: {e}")
@@ -1177,12 +1370,13 @@ class AudioPlayer(QWidget):
     def init_database(self):
         """Initialize the database with proper error handling"""
         try:
-           # self.status_bar.showMessage("Initializing database...")
+            # self.status_bar.showMessage("Initializing database...")
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
 
             # Create Songs table
-            cursor.execute('''
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS Songs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     path CHAR(255) NOT NULL,
@@ -1194,16 +1388,19 @@ class AudioPlayer(QWidget):
                     album CHAR(120),
                     year SMALLINT
                 )
-            ''')
+            """
+            )
 
             # Create Playlists table
-            cursor.execute('''
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS Playlists (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     path CHAR(255) NOT NULL,
                     PL_name CHAR(120) NOT NULL
                 )
-            ''')
+            """
+            )
 
             conn.commit()
             conn.close()
@@ -1211,30 +1408,34 @@ class AudioPlayer(QWidget):
             cursor = conn.cursor()
 
             # Create Album Art table
-            cursor.execute('''
+            cursor.execute(
+                """
                         CREATE TABLE IF NOT EXISTS Covers (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             album CHAR(120) NOT NULL,
                             album_artist CHAR(120) NOT NULL,
                             cover TEXT
                         )
-                    ''')
+                    """
+            )
 
             conn.commit()
             conn.close()
-         #   self.status_bar.showMessage("Databases initialized successfully", 4000)
+        #   self.status_bar.showMessage("Databases initialized successfully", 4000)
 
         except sqlite3.Error as e:
-            QMessageBox.critical(self, "Database Error",f"Database initialization failed: {str(e)}")
+            QMessageBox.critical(
+                self, "Database Error", f"Database initialization failed: {str(e)}"
+            )
             raise
         except Exception as e:
-            QMessageBox.critical(self, "Error",
-                f"Unexpected error during database initialization: {e}")
+            QMessageBox.critical(
+                self, "Error", f"Unexpected error during database initialization: {e}"
+            )
             raise
 
-
     def on_finished(self, added_songs, added_playlists, scan_errors):
-        '''UI cleanup and a short status message.'''
+        """UI cleanup and a short status message."""
         if self.progress:
             self.status_bar.removeWidget(self.progress)
             self.progress = None
@@ -1251,7 +1452,9 @@ class AudioPlayer(QWidget):
         # Update the status message:
         self.status_bar.showMessage(
             f"Scan complete. Found {added_songs} audio files, {added_playlists} "
-            f"playlists and encountered {scan_errors} errors.", 8000)
+            f"playlists and encountered {scan_errors} errors.",
+            8000,
+        )
 
         # Clear references so GC can collect after deleteLater runs
         self.scan_worker = None
@@ -1264,31 +1467,31 @@ class AudioPlayer(QWidget):
         self.scan_worker.moveToThread(self.scan_thread)
 
         # Lifecycle wiring
-        self.scan_worker.finished.connect(self.scan_thread.quit,
-                                          type=Qt.QueuedConnection)
-        self.scan_worker.finished.connect(self.scan_worker.deleteLater,
-                                          type=Qt.QueuedConnection)
-        self.scan_thread.finished.connect(self.scan_thread.deleteLater,
-                                          type=Qt.QueuedConnection)
+        self.scan_worker.finished.connect(
+            self.scan_thread.quit, type=Qt.QueuedConnection
+        )
+        self.scan_worker.finished.connect(
+            self.scan_worker.deleteLater, type=Qt.QueuedConnection
+        )
+        self.scan_thread.finished.connect(
+            self.scan_thread.deleteLater, type=Qt.QueuedConnection
+        )
 
-        self.scan_thread.started.connect(self.scan_worker.run,
-                                         type=Qt.QueuedConnection)
+        self.scan_thread.started.connect(self.scan_worker.run, type=Qt.QueuedConnection)
 
         # Connect worker signals -> main-thread slots (explicit slots below)
-        self.scan_worker.started.connect(self.on_scan_started,
-                                         type=Qt.QueuedConnection)
-        self.scan_worker.folder_scanned.connect(self.on_folder_scanned,
-                                                type=Qt.QueuedConnection)
-        self.scan_worker.warning.connect(self.on_worker_warning,
-                                         type=Qt.QueuedConnection)
-        self.scan_worker.status.connect(self.on_worker_status,
-                                        type=Qt.QueuedConnection)
-        self.scan_worker.error.connect(self.on_worker_error,
-                                       type=Qt.QueuedConnection)
+        self.scan_worker.started.connect(self.on_scan_started, type=Qt.QueuedConnection)
+        self.scan_worker.folder_scanned.connect(
+            self.on_folder_scanned, type=Qt.QueuedConnection
+        )
+        self.scan_worker.warning.connect(
+            self.on_worker_warning, type=Qt.QueuedConnection
+        )
+        self.scan_worker.status.connect(self.on_worker_status, type=Qt.QueuedConnection)
+        self.scan_worker.error.connect(self.on_worker_error, type=Qt.QueuedConnection)
 
         # Keep the UI-handling finished slot
-        self.scan_worker.finished.connect(self.on_finished,
-                                          type=Qt.QueuedConnection)
+        self.scan_worker.finished.connect(self.on_finished, type=Qt.QueuedConnection)
 
         self.scan_thread.start()
 
@@ -1318,7 +1521,6 @@ class AudioPlayer(QWidget):
         # Always runs in main thread (QueuedConnection)
         QMessageBox.critical(self, "Error", msg)
 
-
     def stop_scan(self):
         """Stop the ongoing scan operation"""
         if self.scan_worker is None or self.scan_thread is None:
@@ -1326,7 +1528,7 @@ class AudioPlayer(QWidget):
         # Ask the worker to stop
         try:
             self.scan_worker.stop()  # sets internal _stopped flag
-           # log_worker_action("stop")
+        # log_worker_action("stop")
         except Exception:
             pass
 
@@ -1336,7 +1538,9 @@ class AudioPlayer(QWidget):
         except Exception:
             pass
         try:
-            self.scan_thread.wait(timeout=5000)  # wait up to 5s (or call without timeout)
+            self.scan_thread.wait(
+                timeout=5000
+            )  # wait up to 5s (or call without timeout)
         except Exception:
             try:
                 self.scan_thread.wait()
@@ -1345,45 +1549,45 @@ class AudioPlayer(QWidget):
 
         self.status_bar.showMessage("Scan operation stopped by user", 4000)
 
-
-
     @Slot(dict)
     def on_server_reply(self, data: dict):
         """Handle successful playlist retrieval completion"""
-        if 'error' in data:
-            QMessageBox.warning(self, "Scan Error", data['error'])
+        if "error" in data:
+            QMessageBox.warning(self, "Scan Error", data["error"])
         self.status_bar.repaint()
 
-     #   status_code = data['status']
-        if data['status'] == 200:
-            self.server = data['API_URL']
+        #   status_code = data['status']
+        if data["status"] == 200:
+            self.server = data["API_URL"]
             self.playlist_widget.clear()
-            self.api_url = self.remote_base = f'http://{self.server}:5000'
-            save_json(SETTINGS_FILE, {"server"              : self.server,
-                                      "mix_method"          : self.mix_method,
-                                      "transition_duration" : self.transition_duration,
-                                      "silence_threshold_db": self.silence_threshold_db,
-                                      "silence_min_duration": self.silence_min_duration,
-                                      "scan_for_lyrics"     : self.scan_for_lyrics
-                                      })
+            self.api_url = self.remote_base = f"http://{self.server}:5000"
+            save_json(
+                SETTINGS_FILE,
+                {
+                    "server": self.server,
+                    "mix_method": self.mix_method,
+                    "transition_duration": self.transition_duration,
+                    "silence_threshold_db": self.silence_threshold_db,
+                    "silence_min_duration": self.silence_min_duration,
+                    "scan_for_lyrics": self.scan_for_lyrics,
+                },
+            )
             self.setWindowTitle(
-                f"Ultimate Media Player. Current Server: {self.api_url}")
-            self.status_bar.showMessage(
-                f'Remote Server is now: {self.api_url}', 8000)
-            QMessageBox.information(self, 'Success!',
-                                    f'Remote Server is now: {self.api_url}')
+                f"Ultimate Media Player. Current Server: {self.api_url}"
+            )
+            self.status_bar.showMessage(f"Remote Server is now: {self.api_url}", 8000)
+            QMessageBox.information(
+                self, "Success!", f"Remote Server is now: {self.api_url}"
+            )
         else:
-            QMessageBox.warning(self, 'Error', data['status'])
-
-
+            QMessageBox.warning(self, "Error", data["status"])
 
     def on_server_error(self, error_message):
         """Handle server check error"""
-        if error_message == '':
-            error_message = f'Remote Server not responding.\nMake sure the Server is Up and Connected'
+        if error_message == "":
+            error_message = f"Remote Server not responding.\nMake sure the Server is Up and Connected"
         QMessageBox.critical(self, "Error", error_message)
         self.status_bar.repaint()
-
 
     def cleanup_server(self):
         """Clean up after scan completion"""
@@ -1397,21 +1601,24 @@ class AudioPlayer(QWidget):
         self.server_worker = None
 
     def enter_server(self):
-        server, ok_pressed = QInputDialog.getText(self, "Input",
-                                                "Enter Remote Server name or IP:",
-                                                QLineEdit.Normal, "")
-        if ok_pressed and server != '':
-            self.status_bar.showMessage(f'Please Wait, testing connection with server: {server}')
-         #   self.status_bar.clearMessage()
+        server, ok_pressed = QInputDialog.getText(
+            self, "Input", "Enter Remote Server name or IP:", QLineEdit.Normal, ""
+        )
+        if ok_pressed and server != "":
+            self.status_bar.showMessage(
+                f"Please Wait, testing connection with server: {server}"
+            )
+            #   self.status_bar.clearMessage()
             self.progress = QProgressBar()
-            self.progress.setStyleSheet("::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+            self.progress.setStyleSheet(
+                "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}"
+            )
             self.progress.setRange(0, 0)  # Indeterminate progress
             self.status_bar.addPermanentWidget(self.progress)
             self.status_bar.update()
 
-            self.server_worker = Worker('server', server)
-            self.server_worker.work_completed.connect(
-                self.on_server_reply)
+            self.server_worker = Worker("server", server)
+            self.server_worker.work_completed.connect(self.on_server_reply)
             self.server_worker.work_error.connect(self.on_server_error)
             self.server_worker.finished.connect(self.cleanup_server)
 
@@ -1420,10 +1627,11 @@ class AudioPlayer(QWidget):
                 self.server_worker.start()
             except Exception as e:
                 self.status_bar.clearMessage()
-                QMessageBox.warning(self, 'Error',
-                                  f'Server {server} not responding.\nMake sure the Server is Up and Connected')
-
-
+                QMessageBox.warning(
+                    self,
+                    "Error",
+                    f"Server {server} not responding.\nMake sure the Server is Up and Connected",
+                )
 
     def scan_remote_library(self):
         """async scan_remote_library"""
@@ -1434,7 +1642,7 @@ class AudioPlayer(QWidget):
             "Input",
             "Enter the Remote Absolute Path of Folder to Scan:",
             QLineEdit.Normal,
-            ""
+            "",
         )
 
         if not (ok and folder_path):
@@ -1442,13 +1650,14 @@ class AudioPlayer(QWidget):
 
         # Update status bar and show progress
         self.status_bar.showMessage(
-            'Scanning your Music Library. Please Wait, it might take some time depending on the library size'
+            "Scanning your Music Library. Please Wait, it might take some time depending on the library size"
         )
 
         # Create and configure progress bar
         self.progress = QProgressBar()
         self.progress.setStyleSheet(
-            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}"
+        )
         self.progress.setRange(0, 0)  # Indeterminate progress
         self.status_bar.addPermanentWidget(self.progress)
         self.status_bar.update()
@@ -1467,12 +1676,12 @@ class AudioPlayer(QWidget):
         """Handle successful scan completion"""
         if self.scan_worker:
             self.scan_worker.mutex.unlock()
-        if 'error' in data:
-            QMessageBox.warning(self, "Scan Error", data['error'])
-        elif 'answer' in data:
-            QMessageBox.warning(self, "Scan Error", data['answer']['error'])
+        if "error" in data:
+            QMessageBox.warning(self, "Scan Error", data["error"])
+        elif "answer" in data:
+            QMessageBox.warning(self, "Scan Error", data["answer"]["error"])
         else:
-            QMessageBox.information(self, "Success", data['message'])
+            QMessageBox.information(self, "Success", data["message"])
         self.status_bar.repaint()
 
     def on_scan_error(self, error_message):
@@ -1492,7 +1701,6 @@ class AudioPlayer(QWidget):
             self.scan_worker.deleteLater()
             self.scan_worker = None
 
-
     def purge_remote_library(self):
         """async purge remote library"""
 
@@ -1502,7 +1710,7 @@ class AudioPlayer(QWidget):
             "Input",
             "Enter the Remote Absolute Path of Folder to Purge:",
             QLineEdit.Normal,
-            ""
+            "",
         )
 
         if not (ok and folder_path):
@@ -1510,13 +1718,14 @@ class AudioPlayer(QWidget):
 
         # Update status bar and show progress
         self.status_bar.showMessage(
-            'Scanning your Music Library for deleted files. Please Wait, it might take some time depending on the library size'
+            "Scanning your Music Library for deleted files. Please Wait, it might take some time depending on the library size"
         )
 
         # Create and configure progress bar
         self.progress = QProgressBar()
         self.progress.setStyleSheet(
-            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}"
+        )
         self.progress.setRange(0, 0)  # Indeterminate progress
         self.status_bar.addPermanentWidget(self.progress)
         self.status_bar.update()
@@ -1535,12 +1744,12 @@ class AudioPlayer(QWidget):
         """Handle successful Purge completion"""
         if self.purge_worker:
             self.purge_worker.mutex.unlock()
-        if 'error' in data:
-            QMessageBox.warning(self, "Purge Error", data['error'])
-        elif 'answer' in data:
-            QMessageBox.warning(self, "Purge Error", data['answer']['error'])
+        if "error" in data:
+            QMessageBox.warning(self, "Purge Error", data["error"])
+        elif "answer" in data:
+            QMessageBox.warning(self, "Purge Error", data["answer"]["error"])
         else:
-            QMessageBox.information(self, "Success", data['message'])
+            QMessageBox.information(self, "Success", data["message"])
         self.status_bar.repaint()
 
     def on_purge_error(self, error_message):
@@ -1565,22 +1774,23 @@ class AudioPlayer(QWidget):
             resp = requests.post(
                 "http://localhost:5000/shutdown",
                 headers={"X-API-Key": SHUTDOWN_SECRET},
-                json={}
+                json={},
             )
             self.status_bar.showMessage(resp.text)
             self.status_bar.repaint()
         except Exception as e:
-            QMessageBox.warning(self, "Error",
-                                "Failed to shutdown Local Server."
-                                "\nMake Sure the Server is Up")
-
+            QMessageBox.warning(
+                self,
+                "Error",
+                "Failed to shutdown Local Server." "\nMake Sure the Server is Up",
+            )
 
     def shutdown_server(self):
         try:
             resp = requests.post(
                 f"{self.api_url}/shutdown",
                 headers={"X-API-Key": SHUTDOWN_SECRET},
-                json={}
+                json={},
             )
             message = resp.text.replace("\n", "")
             message = message.replace("{", "")
@@ -1588,32 +1798,38 @@ class AudioPlayer(QWidget):
             self.status_bar.showMessage(message)
             self.status_bar.repaint()
         except Exception as e:
-            if 'An existing connection was forcibly closed by the remote host' in str(e):
+            if "An existing connection was forcibly closed by the remote host" in str(
+                e
+            ):
                 self.status_bar.showMessage("Remote server successfully Shut Down!")
             else:
-                QMessageBox.warning(self, "Error",
-                                f"Failed to shutdown Remote Server @ "
-                                f"{self.api_url}:\nMake Sure the Server is Up")
-
+                QMessageBox.warning(
+                    self,
+                    "Error",
+                    f"Failed to shutdown Remote Server @ "
+                    f"{self.api_url}:\nMake Sure the Server is Up",
+                )
 
     def save_current_playlist(self):
         if not self.playlist:
-            QMessageBox.information(self, "Playlists",
-                                    "No current queue to save.")
+            QMessageBox.information(self, "Playlists", "No current queue to save.")
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Current Playlist", "",
-            "Jason Files (*.json);;Playlist Files (*.m3u8);;All Files (*)"
+            self,
+            "Save Current Playlist",
+            "",
+            "Jason Files (*.json);;Playlist Files (*.m3u8);;All Files (*)",
         )
         if path.endswith("json"):
             pl = []
             for song in self.playlist:
-                jsong = {'is_remote': song.is_remote,
-                         'item_type': song.item_type,
-                         'display_text': song.display_text,
-                         'route': song.route,
-                         'path': song.path,
-                         'server': song.server
+                jsong = {
+                    "is_remote": song.is_remote,
+                    "item_type": song.item_type,
+                    "display_text": song.display_text,
+                    "route": song.route,
+                    "path": song.path,
+                    "server": song.server,
                 }
                 pl.append(jsong)
             with open(path, "w") as f:
@@ -1622,25 +1838,23 @@ class AudioPlayer(QWidget):
             try:
                 with open(path, "w", encoding="utf-8") as f:
                     for item in self.playlist:
-                        f.write(item.path + '\n')
+                        f.write(item.path + "\n")
                     f.write("# Playlist created with EcoG's Ultimate Audio Player")
                 self.status_bar.showMessage(f"Saved: {path}")
             except Exception as e:
-                QMessageBox.warning(self, "Error",
-                                    f"Could not save file:\n{str(e)}")
-
+                QMessageBox.warning(self, "Error", f"Could not save file:\n{str(e)}")
 
     def show_instructions(self):
         self.instructions = TextEdit()
         if self.dark_style == "dark":
             self.instructions.setStyleSheet(
-                "font-size: 12px; color: white; background: #19232D; color: white; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+                "font-size: 12px; color: white; background: #19232D; color: white; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
+            )
         else:
             self.instructions.setStyleSheet(
-                "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+                "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
+            )
         self.instructions.show()
-
-
 
     def show_about_dialog(self):
         QMessageBox.about(
@@ -1653,66 +1867,62 @@ class AudioPlayer(QWidget):
             "<font size=1>Icons by <a href='https://www.flaticon.com/authors/freepik' "
             "style='text-decoration: none; color: #0000FF;'>Freepik</a> "
             "from <a href='https://www.flaticon.com/' "
-            "style='text-decoration: none; color: #0000FF;'>www.flaticon.com</a></font>"
+            "style='text-decoration: none; color: #0000FF;'>www.flaticon.com</a></font>",
         )
-
-
 
     def on_go(self):
         col = self.combo.currentText()
         q = self.search.text().strip()
         if q:
             self.is_local = False
-            self.status_bar.showMessage(
-                f'Searching for {col} {q}. Please Wait...')
+            self.status_bar.showMessage(f"Searching for {col} {q}. Please Wait...")
             self.progress = QProgressBar()
             self.progress.setStyleSheet(
-                "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+                "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}"
+            )
             self.progress.setRange(0, 0)  # Indeterminate progress
             self.status_bar.addPermanentWidget(self.progress)
             self.status_bar.update()
             self.search_tracks(col, q)
-
 
     def on_local(self):
         col = self.combo.currentText()
         q = self.search.text().strip()
         if q:
             self.is_local = True
-            self.status_bar.showMessage(
-                f'Searching for {col} {q}. Please Wait...')
+            self.status_bar.showMessage(f"Searching for {col} {q}. Please Wait...")
             self.progress = QProgressBar()
             self.progress.setStyleSheet(
-                "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+                "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}"
+            )
             self.progress.setRange(0, 0)  # Indeterminate progress
             self.status_bar.addPermanentWidget(self.progress)
             self.status_bar.update()
             self.search_tracks(col, q)
 
-
     def get_album_art(self, path):
         img_data = None
         try:
             audio = MediaFile(path)
-            if audio is not None and hasattr(audio, 'tags'):
+            if audio is not None and hasattr(audio, "tags"):
                 tags = audio.tags
-                if 'APIC:' in tags:
-                    img_data = tags['APIC:'].data
-                elif hasattr(tags, 'get') and tags.get('covr'):
-                    img_data = tags['covr'][0]
-                elif hasattr(audio, 'pictures') and audio.pictures:
+                if "APIC:" in tags:
+                    img_data = tags["APIC:"].data
+                elif hasattr(tags, "get") and tags.get("covr"):
+                    img_data = tags["covr"][0]
+                elif hasattr(audio, "pictures") and audio.pictures:
                     img_data = audio.pictures[0].data
             if img_data:
                 try:
-                    album_art = base64.b64encode(img_data).decode('utf-8')
+                    album_art = base64.b64encode(img_data).decode("utf-8")
                 except Exception as e:
-                    QMessageBox.warning(self, "Error", f"Error encoding album art: {str(e)}")
+                    QMessageBox.warning(
+                        self, "Error", f"Error encoding album art: {str(e)}"
+                    )
                     album_art = None
                 return album_art
         except Exception as e:
             self.status_bar.showMessage("Artwork extraction error:" + str(e))
-
-
 
     def search_tracks(self, column: str, query: str):
         if not column or not query:
@@ -1724,36 +1934,56 @@ class AudioPlayer(QWidget):
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
                 # First try exact match
-                if column == 'song_title':
+                if column == "song_title":
                     # If searching by song, include album_artist in the query
                     if " - " in query and len(query) > 3:
-                        self.status_bar.showMessage("Searching by song artist and title...")
-                        cursor.execute(f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE artist LIKE ? AND song_title LIKE ?",
-                        (f'%{query.split(" - ")[0]}%', f'%{query.split(" - ")[1]}%',))
+                        self.status_bar.showMessage(
+                            "Searching by song artist and title..."
+                        )
+                        cursor.execute(
+                            f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE artist LIKE ? AND song_title LIKE ?",
+                            (
+                                f'%{query.split(" - ")[0]}%',
+                                f'%{query.split(" - ")[1]}%',
+                            ),
+                        )
                     else:
-                        cursor.execute(f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE song_title LIKE ?",
-                        (f'%{query}%',))
-                elif column == 'album':
+                        cursor.execute(
+                            f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE song_title LIKE ?",
+                            (f"%{query}%",),
+                        )
+                elif column == "album":
                     # If searching by album, include album_artist in the query
                     if " - " in query and len(query) > 3:
-                        self.status_bar.showMessage("Searching by album artist and album title...")
-                        cursor.execute(f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE album_artist LIKE ? AND album LIKE ?",
-                        (f'%{query.split(" - ")[0]}%', f'%{query.split(" - ")[1]}%',))
+                        self.status_bar.showMessage(
+                            "Searching by album artist and album title..."
+                        )
+                        cursor.execute(
+                            f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE album_artist LIKE ? AND album LIKE ?",
+                            (
+                                f'%{query.split(" - ")[0]}%',
+                                f'%{query.split(" - ")[1]}%',
+                            ),
+                        )
                     else:
-                        cursor.execute(f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE album LIKE ?",
-                        (f'%{query}%',))
+                        cursor.execute(
+                            f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE album LIKE ?",
+                            (f"%{query}%",),
+                        )
                 else:
                     # column = artist
                     cursor.execute(
                         f"SELECT id, artist, song_title, album, path, file_name, album_artist FROM Songs WHERE artist LIKE ?",
-                        (f'%{query}%',))
+                        (f"%{query}%",),
+                    )
                 results = cursor.fetchall()
 
                 # If no results, try fuzzy matching
                 if not results:
                     self.status_bar.showMessage("No exact matches, trying fuzzy search")
                     cursor.execute(
-                        f"SELECT id, artist, song_title, album, path, file_name, album_artist, {column} FROM Songs")
+                        f"SELECT id, artist, song_title, album, path, file_name, album_artist, {column} FROM Songs"
+                    )
                     all_songs = cursor.fetchall()
 
                     fuzzy_matches = []
@@ -1764,38 +1994,41 @@ class AudioPlayer(QWidget):
                                 fuzzy_matches.append((song[:7], ratio))
                         except Exception as e:
                             self.status_bar.showMessage(
-                                f"Error in fuzzy matching for song {song[0]}: {e}")
+                                f"Error in fuzzy matching for song {song[0]}: {e}"
+                            )
 
                     # Sort by similarity
                     fuzzy_matches.sort(key=lambda x: x[1], reverse=True)
-                    results = [match[0] for match in
-                               fuzzy_matches[:10]]  # Top 10 matches
+                    results = [
+                        match[0] for match in fuzzy_matches[:10]
+                    ]  # Top 10 matches
 
                 conn.close()
                 self.status_bar.showMessage(f"Search returned {len(results)} results")
             except sqlite3.Error as e:
-                QMessageBox.critical(self, "Error",
-                                     f"Database error searching songs: {str(e)}")
+                QMessageBox.critical(
+                    self, "Error", f"Database error searching songs: {str(e)}"
+                )
                 return
             try:
                 search_results = []
                 for r in results:
                     search_result = {
-                        'id'       : r[0],
-                        'artist'   : r[1],
-                        'title'    : r[2],
-                        'album'    : r[3],
-                        'path'     : r[4],
-                        'filename' : r[5],
-                        'album_artist': r[6]
+                        "id": r[0],
+                        "artist": r[1],
+                        "title": r[2],
+                        "album": r[3],
+                        "path": r[4],
+                        "filename": r[5],
+                        "album_artist": r[6],
                     }
                     if search_result:
                         search_results.append(search_result)
                 albums = []
                 songs = {}
                 for s in search_results:
-                    album = s['album']
-                    album_artist = s['album_artist']
+                    album = s["album"]
+                    album_artist = s["album_artist"]
                     if album not in albums:
                         albums.append(album)
                         songs[album] = []
@@ -1804,12 +2037,14 @@ class AudioPlayer(QWidget):
                 conn = sqlite3.connect(COVERS_DB_PATH)
                 cursor = conn.cursor()
                 for album in enumerate(albums):
-                    album_artist = songs[album[1]][0]['album_artist']
-                    path = songs[album[1]][0]['path']
+                    album_artist = songs[album[1]][0]["album_artist"]
+                    path = songs[album[1]][0]["path"]
                     if album[1].find('"') != -1:
                         album_art = self.get_album_art(path)
                     else:
-                        cursor.execute(f'SELECT cover FROM Covers WHERE album = "{album[1]}" AND album_artist = "{album_artist}"')
+                        cursor.execute(
+                            f'SELECT cover FROM Covers WHERE album = "{album[1]}" AND album_artist = "{album_artist}"'
+                        )
                         album_art = cursor.fetchone()
                         if album_art is None:
                             album_art = self.get_album_art(path)
@@ -1821,13 +2056,13 @@ class AudioPlayer(QWidget):
                 conn.close()
                 self.on_search_completed({"search_result": (covers, songs)})
             except Exception as e:
-                QMessageBox.critical(self, "Error",f"Search Error: {str(e)}")
+                QMessageBox.critical(self, "Error", f"Search Error: {str(e)}")
                 # Remove progress bar and clear status
             if self.progress:
                 self.status_bar.removeWidget(self.progress)
             self.status_bar.clearMessage()
-        else: # Remote search
-            params = {"column":column, "query":query}
+        else:  # Remote search
+            params = {"column": column, "query": query}
             url = f"{self.api_url}/search_songs"
 
             # Create and configure worker thread
@@ -1839,7 +2074,6 @@ class AudioPlayer(QWidget):
             # Start the async operation
             self.search_worker.start()
             self.search_worker.mutex.lock()
-
 
     def on_search_completed(self, result):
         if self.search_worker:
@@ -1858,7 +2092,7 @@ class AudioPlayer(QWidget):
                 albums = []
                 songs = {}
                 for s in data:
-                    album = s['album']
+                    album = s["album"]
                     if album not in albums:
                         albums.append(album)
                         songs[album] = []
@@ -1869,36 +2103,36 @@ class AudioPlayer(QWidget):
 
             for album in songs.keys():
                 if is_remote:
-                    album_art = songs[album][0]['album_art']
+                    album_art = songs[album][0]["album_art"]
                 else:
                     album_art = covers[album]
                 album_songs = songs[album]
-                album_artist = album_songs[0]['album_artist']
+                album_artist = album_songs[0]["album_artist"]
                 if self.sort_albums:
                     self.add_album(album_art, album_artist, album)
                 for track in album_songs:
                     song = ListItem()
                     song.is_remote = is_remote
-                    song.item_type = 'song_title' # or self.combo.currentText()
+                    song.item_type = "song_title"  # or self.combo.currentText()
                     song.path = track["path"]
-                    song.display_text =f"{track['artist']} - {track['title']} ({track['album']})"
+                    song.display_text = (
+                        f"{track['artist']} - {track['title']} ({track['album']})"
+                    )
                     self.playlist.append(song)
                     item = QListWidgetItem(song.display_text)
                     self.playlist_widget.addItem(item)
         else:
             col = self.combo.currentText()
             q = self.search.text().strip()
-            self.status_bar.showMessage(
-                f'{col} {q} was not found on Server')
-            QMessageBox.information(self, 'Sorry 😞',
-                                    f'{col} {q} was not found on Server')
-
+            self.status_bar.showMessage(f"{col} {q} was not found on Server")
+            QMessageBox.information(
+                self, "Sorry 😞", f"{col} {q} was not found on Server"
+            )
 
     def on_search_error(self, error_message):
         """Handle search error"""
         QMessageBox.critical(self, "Error", error_message)
         self.status_bar.repaint()
-
 
     def cleanup_search(self):
         """Clean up after search completion"""
@@ -1912,11 +2146,13 @@ class AudioPlayer(QWidget):
             self.search_worker.deleteLater()
             self.search_worker = None
 
-
     def do_shuffle(self):
         if self.playlist and len(self.playlist) > 1:
-            self.playlist = [song for song in self.playlist if
-                             not isinstance(song, QListWidgetItem) and song.item_type != 'cover']
+            self.playlist = [
+                song
+                for song in self.playlist
+                if not isinstance(song, QListWidgetItem) and song.item_type != "cover"
+            ]
             shuffle(self.playlist)
             self.playlist_widget.clear()
             self.current_index = -1
@@ -1926,8 +2162,11 @@ class AudioPlayer(QWidget):
 
     def do_sort(self):
         if self.playlist and len(self.playlist) > 1:
-            self.playlist = [song for song in self.playlist if
-                             not isinstance(song, QListWidgetItem) and song.item_type != 'cover']
+            self.playlist = [
+                song
+                for song in self.playlist
+                if not isinstance(song, QListWidgetItem) and song.item_type != "cover"
+            ]
             self.playlist.sort(key=lambda x: x.display_text)
 
             self.playlist_widget.clear()
@@ -1936,12 +2175,11 @@ class AudioPlayer(QWidget):
                 item = QListWidgetItem(song.display_text)
                 self.playlist_widget.addItem(item)
 
-
-
     # --- Mixing/transition config slots ---
 
-    def detect_low_intensity_segments(self, audio_path, threshold_db=-46,
-                                      frame_duration=0.1):
+    def detect_low_intensity_segments(
+        self, audio_path, threshold_db=-46, frame_duration=0.1
+    ):
         # Load audio file
         y, sr = librosa.load(audio_path, sr=None)
         duration = librosa.get_duration(y=y, sr=sr)
@@ -1969,7 +2207,7 @@ class AudioPlayer(QWidget):
             if len(frame) == 0:
                 continue
 
-            rms = np.sqrt(np.mean(frame ** 2))
+            rms = np.sqrt(np.mean(frame**2))
             db = 20 * np.log10(rms + 1e-10)  # Avoid log(0)
 
             if db < threshold_db:
@@ -1980,7 +2218,6 @@ class AudioPlayer(QWidget):
             transition_duration = 0.1  # Minimum transition duration
 
         return transition_duration
-
 
     def set_mix_method(self, method):
         self.mix_method = method
@@ -2035,18 +2272,18 @@ class AudioPlayer(QWidget):
                 return
             next_song = self.playlist[next_idx]
         if next_song.is_remote:
-            next_song.route = 'serve_audio'
+            next_song.route = "serve_audio"
 
         self.next_player = QMediaPlayer()
         self.next_output = QAudioOutput()
         self.next_player.setAudioOutput(self.next_output)
         self.next_player.setSource(next_song.absolute_path())
-#        self.next_player.setSource(QUrl.fromLocalFile(next_path))
+        #        self.next_player.setSource(QUrl.fromLocalFile(next_path))
         self.next_output.setVolume(0)
         self.slider.setValue(0)
-     #   log_player_action("play", self.player)
+        #   log_player_action("play", self.player)
         self.next_player.play()
-       # self.load_lyrics(next_path)
+        # self.load_lyrics(next_path)
         self.lyrics_timer.start()
         self.playlist_widget.setCurrentRow(next_idx)
         self.fade_timer = QTimer()
@@ -2057,7 +2294,7 @@ class AudioPlayer(QWidget):
         def fade():
             global old_player
             self._fade_step += 1
-         #   print(self._fade_step, fade_steps)
+            #   print(self._fade_step, fade_steps)
             frac = self._fade_step / fade_steps
 
             if mode == "auto":
@@ -2071,6 +2308,7 @@ class AudioPlayer(QWidget):
             elif mode == "smooth":
                 # S-curve fade for less abrupt transitions
                 import math
+
                 curve = (1 - math.cos(frac * math.pi)) / 2  # S-curve 0...1
                 self.audio_output.setVolume(max(0, 1.0 - curve))
                 self.next_output.setVolume(min(1.0, curve))
@@ -2084,7 +2322,7 @@ class AudioPlayer(QWidget):
                 if self._fade_step == 1:
                     self.next_player.setPosition(1000)  # start 1s in
                 if frac < 0.5:
-                    self.audio_output.setVolume(max(0, 1.0 - 2*frac))
+                    self.audio_output.setVolume(max(0, 1.0 - 2 * frac))
                     self.next_output.setVolume(0.0)
                 else:
                     self.audio_output.setVolume(0.0)
@@ -2095,21 +2333,21 @@ class AudioPlayer(QWidget):
                 self.next_output.setVolume(1.0)
 
             if self._fade_step >= fade_steps:
-             #  Fade complete, switching tracks
+                #  Fade complete, switching tracks
                 self.fade_timer.stop()
-             #  Ensure old player is stopped and safely deleted
-                old_player = getattr(self, 'player', None)
-                old_output = getattr(self, 'audio_output', None)
+                #  Ensure old player is stopped and safely deleted
+                old_player = getattr(self, "player", None)
+                old_output = getattr(self, "audio_output", None)
 
                 # Stop the old player from main thread (safe)
                 if old_player is not None:
                     try:
                         old_player.stop()
-                     #   log_player_action("stop", self.player)
+                    #   log_player_action("stop", self.player)
                     except Exception:
                         pass
-               # self.audio_output.setVolume(1.0)
-               # self.player.stop()
+                # self.audio_output.setVolume(1.0)
+                # self.player.stop()
                 if old_player is not None:
                     try:
                         old_player.positionChanged.disconnect(self.update_slider)
@@ -2121,12 +2359,14 @@ class AudioPlayer(QWidget):
                         pass
                     try:
                         old_player.mediaStatusChanged.disconnect(
-                            self.media_status_changed)
+                            self.media_status_changed
+                        )
                     except Exception:
                         pass
                     try:
                         old_player.playbackStateChanged.disconnect(
-                            self.update_play_button)
+                            self.update_play_button
+                        )
                     except Exception:
                         pass
                     try:
@@ -2135,25 +2375,32 @@ class AudioPlayer(QWidget):
                         pass
                     try:
                         old_player.positionChanged.disconnect(
-                            self.check_for_mix_transition)
+                            self.check_for_mix_transition
+                        )
                     except Exception:
                         pass
-                  # Switch to next player
+                    # Switch to next player
                     self.player = self.next_player
                     self.audio_output = self.next_output
 
-                self.player.positionChanged.connect(self.update_slider,
-                                                    type=Qt.AutoConnection)
-                self.player.durationChanged.connect(self.update_duration,
-                                                    type=Qt.AutoConnection)
-                self.player.mediaStatusChanged.connect(
-                    self.media_status_changed, type=Qt.AutoConnection)
-                self.player.playbackStateChanged.connect(
-                    self.update_play_button, type=Qt.AutoConnection)
-                self.player.errorOccurred.connect(self.handle_error,
-                                                  type=Qt.AutoConnection)
                 self.player.positionChanged.connect(
-                    self.check_for_mix_transition, type=Qt.AutoConnection)
+                    self.update_slider, type=Qt.AutoConnection
+                )
+                self.player.durationChanged.connect(
+                    self.update_duration, type=Qt.AutoConnection
+                )
+                self.player.mediaStatusChanged.connect(
+                    self.media_status_changed, type=Qt.AutoConnection
+                )
+                self.player.playbackStateChanged.connect(
+                    self.update_play_button, type=Qt.AutoConnection
+                )
+                self.player.errorOccurred.connect(
+                    self.handle_error, type=Qt.AutoConnection
+                )
+                self.player.positionChanged.connect(
+                    self.check_for_mix_transition, type=Qt.AutoConnection
+                )
 
                 if old_player is not None:
                     # make sure deletion runs in the object's thread (main thread) using deleteLater()
@@ -2219,17 +2466,17 @@ class AudioPlayer(QWidget):
     def load_track(self, idx, auto_play=True):
         if 0 <= idx < len(self.playlist):
             file = self.playlist[idx]
-            if file.item_type != 'song_title':
+            if file.item_type != "song_title":
                 idx += 1
                 if 0 <= idx < len(self.playlist):
                     file = self.playlist[idx]
                     self.playlist_widget.setCurrentRow(idx)
                 else:
                     return
-           # path = file.path
+            # path = file.path
             self.current_index = idx
             if file.is_remote:
-                file.route = 'serve_audio'
+                file.route = "serve_audio"
             media_url = file.absolute_path()
 
             if self.vlc_helper and self.vlc_helper.is_playing():
@@ -2239,7 +2486,7 @@ class AudioPlayer(QWidget):
                 # use VLC fallback
                 self._start_vlc_play(file, idx)
             else:
-               # codec_context.pkt_timebase = media.time_base
+                # codec_context.pkt_timebase = media.time_base
                 self.player.setSource(media_url)
                 self.player.play()
                 self.playlist_widget.setCurrentRow(idx)
@@ -2295,16 +2542,16 @@ class AudioPlayer(QWidget):
             return True
         return super().eventFilter(source, event)
 
-
     def get_basic_metadata(self, file_path):
         song_title = os.path.basename(file_path)
-        artist = 'Unknown Artist'
-        album = 'Unknown Album'
+        artist = "Unknown Artist"
+        album = "Unknown Album"
         try:
             file = MediaFile(file_path)
             if file is None:
                 self.status_bar.showMessage(
-                    f"Could not read audio file: {file_path}. Make sure the file exists.")
+                    f"Could not read audio file: {file_path}. Make sure the file exists."
+                )
                 return None
 
             # Get basic metadata
@@ -2317,15 +2564,16 @@ class AudioPlayer(QWidget):
 
         return f"{artist} - {song_title} ({album})"
 
-
-
     def show_playlist_menu(self, pos=None):
         menu = QFileDialog(self)
         menu.setFileMode(QFileDialog.ExistingFiles)
-        menu.setNameFilters([
-            "Audio files (*.mp3 *.flac *.ogg *.wav *.m4a *.aac *.wma *.opus)",
-            "Playlists (*.m3u *.m3u8 *.cue *.json)",
-            "All files (*)"])
+        menu.setNameFilters(
+            [
+                "Audio files (*.mp3 *.flac *.ogg *.wav *.m4a *.aac *.wma *.opus)",
+                "Playlists (*.m3u *.m3u8 *.cue *.json)",
+                "All files (*)",
+            ]
+        )
         if menu.exec():
             songs = []
             for track in menu.selectedFiles():
@@ -2347,52 +2595,64 @@ class AudioPlayer(QWidget):
                     songs.append(song)
             self.add_files(songs)
 
-
     def add_files(self, files):
         if self.progress:
             self.status_bar.removeWidget(self.progress)
         self.progress = QProgressBar()
         self.progress.setStyleSheet(
-            "::chunk {background-color: green; width: 8px; margin: 0.5px;}")
+            "::chunk {background-color: green; width: 8px; margin: 0.5px;}"
+        )
         self.progress.setRange(0, 0)  # Indeterminate progress
         self.status_bar.addPermanentWidget(self.progress)
-        self.status_bar.showMessage('adding files')
+        self.status_bar.showMessage("adding files")
         self.status_bar.update()
-        self.status_bar.showMessage('Now adding the files. Please Wait...')
+        self.status_bar.showMessage("Now adding the files. Please Wait...")
         for f in files:
-            if f.item_type == "playlist": # if os.path.isfile(f):
+            if f.item_type == "playlist":  # if os.path.isfile(f):
                 ext = Path(f.path).suffix.lower()
-                if ext in ['.m3u', '.m3u8']:
+                if ext in [".m3u", ".m3u8"]:
                     pl = self.load_m3u_playlist(f.path)
                     self.playlist += pl
                     for i in pl:
-                        item = QListWidgetItem(i.display_text)  # QListWidgetItem(os.path.basename(i))
+                        item = QListWidgetItem(
+                            i.display_text
+                        )  # QListWidgetItem(os.path.basename(i))
                         self.playlist_widget.addItem(item)
-                    self.playlist_label.setText(f'Playlist: {f.display_text}')
-                elif ext == '.cue':
+                    self.playlist_label.setText(f"Playlist: {f.display_text}")
+                elif ext == ".cue":
                     pl = self.load_cue_playlist(f.path)
                     self.playlist += pl
                     for i in pl:
                         item = QListWidgetItem(os.path.basename(i.display_text))
                         self.playlist_widget.addItem(item)
                     self.playlist_label.setText(
-                        f'Playlist: {os.path.basename(f.display_text)}')
-                elif ext == '.json':
+                        f"Playlist: {os.path.basename(f.display_text)}"
+                    )
+                elif ext == ".json":
                     pl = self.load_json_playlist(f.path)
                     self.playlist += pl
                     for i in pl:
-                        item = QListWidgetItem(i.display_text)  # QListWidgetItem(os.path.basename(i))
+                        item = QListWidgetItem(
+                            i.display_text
+                        )  # QListWidgetItem(os.path.basename(i))
                         self.playlist_widget.addItem(item)
-                    self.playlist_label.setText(f'Playlist: {f.display_text}')
+                    self.playlist_label.setText(f"Playlist: {f.display_text}")
                 else:
-                    QMessageBox.warning(self, "Error!",
-                                        f"Unsupported playlist format: {ext}")
+                    QMessageBox.warning(
+                        self, "Error!", f"Unsupported playlist format: {ext}"
+                    )
                     continue
-            elif f.item_type == "song_title" or f.item_type == 'artist' or f.item_type == 'album':  # if ext in audio_extensions:
+            elif (
+                f.item_type == "song_title"
+                or f.item_type == "artist"
+                or f.item_type == "album"
+            ):  # if ext in audio_extensions:
                 self.playlist.append(f)
-                item = QListWidgetItem(f.display_text) # item = QListWidgetItem(os.path.basename(f))
+                item = QListWidgetItem(
+                    f.display_text
+                )  # item = QListWidgetItem(os.path.basename(f))
                 self.playlist_widget.addItem(item)
-            elif f.item_type == 'directory': # os.path.isdir(f):
+            elif f.item_type == "directory":  # os.path.isdir(f):
                 self.load_dir(f)
             self.status_bar.update()
         if self.progress:
@@ -2400,28 +2660,30 @@ class AudioPlayer(QWidget):
         self.status_bar.clearMessage()
         self.status_bar.update()
         if self.playlist:
-            if self.current_index == -1 and self.playlist[-1].item_type == 'song_title':
+            if self.current_index == -1 and self.playlist[-1].item_type == "song_title":
                 self.load_track(0)
         else:
-            QMessageBox.warning(self, "Error!", "No valid audio files found in selection.")
-
+            QMessageBox.warning(
+                self, "Error!", "No valid audio files found in selection."
+            )
 
     def load_m3u_playlist(self, path):
         songs = []
         try:
-            with open(path, 'r', encoding='utf-8-sig') as f:
+            with open(path, "r", encoding="utf-8-sig") as f:
                 lines = f.readlines()
         except UnicodeDecodeError:
             # Try with ANSI encoding if UTF-8 fails
             try:
-                with open(path, 'r', encoding='ANSI') as f:
+                with open(path, "r", encoding="ANSI") as f:
                     lines = f.readlines()
             except UnicodeDecodeError:
                 try:
                     # Try to guess the encoding if UTF-8 and ANSI fail
                     from charset_normalizer import from_path
+
                     result = from_path(path).best()
-                    with open(path, 'r', encoding=result.encoding) as f:
+                    with open(path, "r", encoding=result.encoding) as f:
                         lines = f.readlines()
                 except Exception as e:
                     QMessageBox.critical(self, "Error!", str(e))
@@ -2448,30 +2710,32 @@ class AudioPlayer(QWidget):
     def load_cue_playlist(self, path):
         songs = []
         try:
-            with open(path, 'r', encoding='utf-8-sig') as f:
+            with open(path, "r", encoding="utf-8-sig") as f:
                 lines = f.readlines()
         except UnicodeDecodeError:
             # Try with ANSI encoding if UTF-8 fails
             try:
-                with open(path, 'r', encoding='ANSI') as f:
+                with open(path, "r", encoding="ANSI") as f:
                     lines = f.readlines()
             except UnicodeDecodeError:
                 try:
                     # Try to guess the encoding if UTF-8 and ANSI fail
                     from charset_normalizer import from_path
+
                     result = from_path(path).best()
-                    with open(path, 'r', encoding=result.encoding) as f:
+                    with open(path, "r", encoding=result.encoding) as f:
                         lines = f.readlines()
                 except Exception as e:
                     QMessageBox.critical(self, "Error!", str(e))
                     return songs
         if lines:
             for line in lines:
-                if re.match('^FILE .(.*). (.*)$', line):
+                if re.match("^FILE .(.*). (.*)$", line):
                     file_path = line[6:-7]
                     if not os.path.isabs(file_path):
                         file_path = os.path.abspath(
-                            os.path.join(os.path.dirname(path), file_path))
+                            os.path.join(os.path.dirname(path), file_path)
+                        )
                     song = ListItem()
                     song.item_type = "song_title"
                     song.path = file_path
@@ -2480,25 +2744,27 @@ class AudioPlayer(QWidget):
                     songs.append(song)
         return songs
 
-
     def load_json_playlist(self, path):
         songs = []
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             for entry in data:
                 song = ListItem()
-                song.is_remote = entry.get('is_remote', False)
-                song.item_type = entry.get('item_type', 'song_title')
-                song.display_text = entry.get('display_text', os.path.basename(entry.get('path', 'Unknown')))
-                song.route = entry.get('route', '')
-                song.path = entry.get('path', '')
-                song.server = entry.get('server', '')
+                song.is_remote = entry.get("is_remote", False)
+                song.item_type = entry.get("item_type", "song_title")
+                song.display_text = entry.get(
+                    "display_text", os.path.basename(entry.get("path", "Unknown"))
+                )
+                song.route = entry.get("route", "")
+                song.path = entry.get("path", "")
+                song.server = entry.get("server", "")
                 songs.append(song)
         except Exception as e:
-            QMessageBox.critical(self, "Error!", f"Error loading JSON playlist: {str(e)}")
+            QMessageBox.critical(
+                self, "Error!", f"Error loading JSON playlist: {str(e)}"
+            )
         return songs
-
 
     def load_dir(self, directory):
         scan_errors = 0
@@ -2521,27 +2787,34 @@ class AudioPlayer(QWidget):
                     song.is_remote = False
                     songs.append(song)
                 except Exception as e:
-                    QMessageBox.critical(self, "Error!", f"Error processing file {file}: {e}")
+                    QMessageBox.critical(
+                        self, "Error!", f"Error processing file {file}: {e}"
+                    )
                     scan_errors += 1
-        self.status_bar.showMessage(
-            f"Scan complete. Found {len(songs)} files ")
+        self.status_bar.showMessage(f"Scan complete. Found {len(songs)} files ")
         if scan_errors > 0:
-            QMessageBox.critical(self, "Error!", f"Encountered {scan_errors} errors during directory scanning")
+            QMessageBox.critical(
+                self,
+                "Error!",
+                f"Encountered {scan_errors} errors during directory scanning",
+            )
 
         self.add_files(songs)
-
 
     def add_albums(self, albums):
         if self.progress:
             self.status_bar.removeWidget(self.progress)
         self.progress = QProgressBar()
         self.progress.setStyleSheet(
-            "::chunk {background-color: green; width: 8px; margin: 0.5px;}")
+            "::chunk {background-color: green; width: 8px; margin: 0.5px;}"
+        )
         self.progress.setRange(0, 0)  # Indeterminate progress
         self.status_bar.addPermanentWidget(self.progress)
-        self.status_bar.showMessage('adding albums')
+        self.status_bar.showMessage("adding albums")
         self.status_bar.update()
-        self.status_bar.showMessage('Songs found, now shorting them in Albums. Please Wait...')
+        self.status_bar.showMessage(
+            "Songs found, now shorting them in Albums. Please Wait..."
+        )
         for album in albums:
             self.add_album(album)
             for song in albums[album]:
@@ -2557,16 +2830,13 @@ class AudioPlayer(QWidget):
         if self.current_index == -1 and self.playlist:
             self.load_track(0)
 
-
-
     def add_album(self, data, album_artist=None, album=None):
-      #  if 0 > self.current_index >= len(self.playlist) - 1:
-         #   return
+        #  if 0 > self.current_index >= len(self.playlist) - 1:
+        #   return
         if not data:
-            self.status_bar.showMessage(
-                "Metadata fetch error:")
+            self.status_bar.showMessage("Metadata fetch error:")
             return
-    #    self.album_meta_data = data[0]
+        #    self.album_meta_data = data[0]
         item = QListWidgetItem()
         item.setSizeHint(QSize(256, 256))
         self.playlist_widget.addItem(item)
@@ -2575,32 +2845,35 @@ class AudioPlayer(QWidget):
         self.album_only_art.setScaledContents(True)
         self.playlist_widget.setItemWidget(item, self.album_only_art)
         cover = ListItem()
-        cover.item_type = 'cover'
+        cover.item_type = "cover"
         cover.display_text = f"{album_artist} - {album}"
         self.playlist.append(cover)
         try:
-            if data != '':
+            if data != "":
                 img_bytes = base64.b64decode(data)
                 img = QImage.fromData(img_bytes)
                 pix = QPixmap.fromImage(img)
                 self.album_only_art.setPixmap(
-                    pix.scaled(self.album_art.size(), Qt.KeepAspectRatio,
-                               Qt.SmoothTransformation)
+                    pix.scaled(
+                        self.album_art.size(),
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    )
                 )
             else:
                 self.album_only_art.setPixmap(
-                    QPixmap(
-                        "static/images/default_album_art.png") if os.path.exists(
-                        "static/images/default_album_art.png") else QPixmap())
+                    QPixmap("static/images/default_album_art.png")
+                    if os.path.exists("static/images/default_album_art.png")
+                    else QPixmap()
+                )
             return
         except Exception as e:
             self.album_only_art.setPixmap(
-                QPixmap(
-                    "static/images/default_album_art.png") if os.path.exists(
-                    "static/images/default_album_art.png") else QPixmap())
-            self.status_bar.showMessage(
-                "Base64 album art decode error:" + str(e))
-
+                QPixmap("static/images/default_album_art.png")
+                if os.path.exists("static/images/default_album_art.png")
+                else QPixmap()
+            )
+            self.status_bar.showMessage("Base64 album art decode error:" + str(e))
 
     def play_selected_track(self, item):
         idx = self.playlist_widget.row(item)
@@ -2608,10 +2881,12 @@ class AudioPlayer(QWidget):
 
     def show_playlist_context_menu(self, pos):
         from PySide6.QtWidgets import QMenu
+
         menu = QMenu(self.playlist_widget)
         menu.setStyleSheet(
             "background-color: lightGrey; border-color: darkGray; "
-            "border-width: 2px; border-style: outset;")
+            "border-width: 2px; border-style: outset;"
+        )
         scan_action = menu.addAction("Scan Library")
         get_action = menu.addAction("Load Playlists")
         add_action = menu.addAction("Add Files")
@@ -2636,7 +2911,7 @@ class AudioPlayer(QWidget):
             del self.playlist[row]
             # Adjust current_index if necessary
             if row == self.current_index:
-                self.player.stop()  #("stop", self.player)
+                self.player.stop()  # ("stop", self.player)
                 empty = QUrl()
                 self.player.setSource(empty)
                 self.current_index = -1
@@ -2648,14 +2923,16 @@ class AudioPlayer(QWidget):
     def clear_playlist(self):
         self.playlist_widget.clear()
         self.playlist.clear()
-        self.playlist_label.setText('Queue:')
+        self.playlist_label.setText("Queue:")
         self.player.stop()
-        empty =QUrl()
+        empty = QUrl()
         self.player.setSource(empty)
         self.current_index = -1
         self.album_art.setPixmap(
-            QPixmap("static/images/default_album_art.png") if os.path.exists(
-                "static/images/default_album_art.png") else QPixmap())
+            QPixmap("static/images/default_album_art.png")
+            if os.path.exists("static/images/default_album_art.png")
+            else QPixmap()
+        )
         self.title_label.setText("Title --")
         self.artist_label.setText("Artist --")
         self.album_label.setText("Album --")
@@ -2673,33 +2950,36 @@ class AudioPlayer(QWidget):
         """
         Sets album art using metadata JSON if provided (remote), otherwise falls back to local extraction.
         """
-        if self.meta_data and 'picture' in self.meta_data and self.meta_data[
-                'picture']:
+        if self.meta_data and "picture" in self.meta_data and self.meta_data["picture"]:
             if self.is_remote_file(file):
-                img_bytes = base64.b64decode(self.meta_data['picture'])
+                img_bytes = base64.b64decode(self.meta_data["picture"])
             else:
-                img_bytes = self.meta_data['picture']
+                img_bytes = self.meta_data["picture"]
             try:
                 img = QImage.fromData(img_bytes)
                 pix = QPixmap.fromImage(img)
                 self.album_art.setPixmap(
-                    pix.scaled(self.album_art.size(), Qt.KeepAspectRatio,
-                               Qt.SmoothTransformation)
+                    pix.scaled(
+                        self.album_art.size(),
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    )
                 )
                 return
             except Exception as e:
                 self.album_art.setPixmap(
-                    QPixmap(
-                        "static/images/default_album_art.png") if os.path.exists(
-                        "static/images/default_album_art.png") else QPixmap())
-                self.status_bar.showMessage(
-                    "Base64 album art decode error:" + str(e))
+                    QPixmap("static/images/default_album_art.png")
+                    if os.path.exists("static/images/default_album_art.png")
+                    else QPixmap()
+                )
+                self.status_bar.showMessage("Base64 album art decode error:" + str(e))
         else:
             # Fallback image
             self.album_art.setPixmap(
-                QPixmap(
-                    "static/images/default_album_art.png") if os.path.exists(
-                    "static/images/default_album_art.png") else QPixmap())
+                QPixmap("static/images/default_album_art.png")
+                if os.path.exists("static/images/default_album_art.png")
+                else QPixmap()
+            )
         return
 
     def load_lyrics(self, file):
@@ -2709,12 +2989,14 @@ class AudioPlayer(QWidget):
 
     def update_lyrics_display(self):
         if self.lyrics and self.lyrics.lines:
-            idx = self.lyrics.get_current_line(
-                self.player.position()) if self.lyrics.is_synchronized() else -1
+            idx = (
+                self.lyrics.get_current_line(self.player.position())
+                if self.lyrics.is_synchronized()
+                else -1
+            )
             self.lyrics_display.highlight_line(idx)
         else:
             self.lyrics_display.setText("No lyrics found.")
-
 
     def prev_track(self):
         if self.current_index > 0:
@@ -2740,7 +3022,7 @@ class AudioPlayer(QWidget):
                 next_path = self.playlist[next_idx]
             if not (0 <= next_idx < len(self.playlist)):
                 return
-           # self.playlist_widget.setCurrentRow(next_idx)
+            # self.playlist_widget.setCurrentRow(next_idx)
             self.load_track(next_idx)
 
     def toggle_play_pause(self):
@@ -2760,9 +3042,11 @@ class AudioPlayer(QWidget):
         if self.sub_images:
             if self.vlc_active:
                 playing = self.vlc_helper.is_playing() if self.vlc_helper else False
-                pixmap = QPixmap.fromImage(
-                    self.sub_images[1]) if playing else QPixmap.fromImage(
-                    self.sub_images[0])
+                pixmap = (
+                    QPixmap.fromImage(self.sub_images[1])
+                    if playing
+                    else QPixmap.fromImage(self.sub_images[0])
+                )
                 self.play_button.setIcon(QIcon(pixmap))
                 return
             # else QMediaPlayer path: existing code (unchanged)
@@ -2774,12 +3058,12 @@ class AudioPlayer(QWidget):
             return
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.play_button.setIcon(
-                self.style().standardIcon(
-                    QStyle.StandardPixmap.SP_MediaPause))
+                self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause)
+            )
         else:
             self.play_button.setIcon(
-                self.style().standardIcon(
-                    QStyle.StandardPixmap.SP_MediaPlay))
+                self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
+            )
 
     def keyPressEvent(self, event: QKeyEvent):
         key = event.key()
@@ -2800,8 +3084,8 @@ class AudioPlayer(QWidget):
             self.slider.setValue(value)
             self.slider.blockSignals(False)
             # Call on_buffer if within last 10 seconds
-      #      if duration - position <= 10000:
-       #         self.on_buffer(self.buffer)
+        #      if duration - position <= 10000:
+        #         self.on_buffer(self.buffer)
         self.update_time_label(position, duration)
 
     def on_slider_moved(self, value):
@@ -2840,24 +3124,30 @@ class AudioPlayer(QWidget):
     def media_status_changed(self, status):
         if status == QMediaPlayer.EndOfMedia:
             # If a cue_next was scheduled, play that track
-            if hasattr(self, '_cue_next') and self._cue_next is not None:
+            if hasattr(self, "_cue_next") and self._cue_next is not None:
                 next_idx = self._cue_next
                 self._cue_next = None
                 self.load_track(next_idx)
         #    else:
-         #       self.next_track()
+        #       self.next_track()
 
     def handle_error(self, error, error_string):
         self.player.errorOccurred.disconnect(self.handle_error)
         if error != QMediaPlayer.NoError:
-            if QMessageBox.question(self, "Error!",
-                "Playback Error: " + error_string + " Continue to next track?") == QMessageBox.Yes:
+            if (
+                QMessageBox.question(
+                    self,
+                    "Error!",
+                    "Playback Error: " + error_string + " Continue to next track?",
+                )
+                == QMessageBox.Yes
+            ):
                 self.next_track()
             else:
                 self.clear_playlist()
         self.player.errorOccurred.connect(self.handle_error)
 
-            # self.update_play_button()
+        # self.update_play_button()
 
     def _uses_vlc_for_path(self, path: str) -> bool:
         # determine if path should use VLC fallback
@@ -2882,7 +3172,7 @@ class AudioPlayer(QWidget):
         except Exception as e:
             print(str(e))
             pass
-       # path = file.path
+        # path = file.path
         # if remote, use absolute URL
         media_url = file.absolute_path().toString()
         self.vlc_active = True
@@ -2920,13 +3210,12 @@ class AudioPlayer(QWidget):
         # schedule next track immediate
         self._mixing_next = False
         # call next_track logic (same as QMediaPlayer EndOfMedia)
-        if hasattr(self, '_cue_next') and self._cue_next is not None:
+        if hasattr(self, "_cue_next") and self._cue_next is not None:
             next_idx = self._cue_next
             self._cue_next = None
             self.load_track(next_idx)
         else:
             self.next_track()
-
 
     def move_to_top(self):
         cursor = self.text.textCursor()
@@ -2937,33 +3226,35 @@ class AudioPlayer(QWidget):
     def on_receive_metadata(self, data):
         file = self.playlist[self.current_index]
         if not data:
-            self.status_bar.showMessage(
-                "Remote metadata fetch error:")
+            self.status_bar.showMessage("Remote metadata fetch error:")
         else:
-            if 'error' in data['retrieved_metadata']:
-                self.status_bar.showMessage(f'Error retrieving metadata: {data["retrieved_metadata"]["error"]}')
+            if "error" in data["retrieved_metadata"]:
+                self.status_bar.showMessage(
+                    f'Error retrieving metadata: {data["retrieved_metadata"]["error"]}'
+                )
             else:
-                self.meta_data = data['retrieved_metadata'].copy()
-                title = self.meta_data.get('title', file.display_text)
-                artist = self.meta_data.get('artist', "--")
-                album = self.meta_data.get('album', "--")
-                year = self.meta_data.get('year', "--")
-                codec = self.meta_data.get('codec', "--").replace('audio/', '')
+                self.meta_data = data["retrieved_metadata"].copy()
+                title = self.meta_data.get("title", file.display_text)
+                artist = self.meta_data.get("artist", "--")
+                album = self.meta_data.get("album", "--")
+                year = self.meta_data.get("year", "--")
+                codec = self.meta_data.get("codec", "--").replace("audio/", "")
                 if self.mix_method == "Auto":
                     self.transition_duration = self.meta_data.get(
-                        'transition_duration', 5)
+                        "transition_duration", 5
+                    )
                     self.set_transition_duration(self.transition_duration)
-              #  self.set_album_art(path)
+                #  self.set_album_art(path)
 
                 self.set_metadata_label()
-             #   self.year_label.setText('Year: ' + str(self.meta_data['year']))
-             #   self.codec_label.setText(codec)
+                #   self.year_label.setText('Year: ' + str(self.meta_data['year']))
+                #   self.codec_label.setText(codec)
                 self.load_lyrics(file)
                 self.set_album_art(file)
                 # update metadata text label
                 if self.meta_data:
                     for key in self.meta_data:
-                        if key != 'picture' and key != 'lyrics':
+                        if key != "picture" and key != "lyrics":
                             if self.meta_data[key]:
                                 self.text.append(f"{key}: {self.meta_data[key]}")
                 self.move_to_top()
@@ -3016,28 +3307,31 @@ class AudioPlayer(QWidget):
         r128_track_gain = file.r128_track_gain
         samplerate = file.samplerate
         track = file.track
-        year = file.year """
+        year = file.year"""
         try:
             if self.mix_method == "Auto":
                 self.transition_duration = self.detect_low_intensity_segments(
-                    file_path, threshold_db=self.silence_threshold_db,
-                    frame_duration=0.1)
+                    file_path,
+                    threshold_db=self.silence_threshold_db,
+                    frame_duration=0.1,
+                )
                 self.set_transition_duration(self.transition_duration)
         except Exception as e:
             self.transition_duration = 5
             self.meta_worker.work_message.emit(
-                f"Error extracting transition duration from {file_path}: {str(e)}")
+                f"Error extracting transition duration from {file_path}: {str(e)}"
+            )
         metadata = {
-            'artist'             : 'Unknown Artist',
-            'album_artist'       : 'Unknown Album Artist',
-            'title'              : os.path.basename(file_path),
-            'album'              : 'Unknown Album',
-            'year'               : '---',
-            'duration'           : '---',
-            'lyrics'             : None,
-            'codec'              : '',
-            'picture'            : None,
-            'transition_duration': self.transition_duration
+            "artist": "Unknown Artist",
+            "album_artist": "Unknown Album Artist",
+            "title": os.path.basename(file_path),
+            "album": "Unknown Album",
+            "year": "---",
+            "duration": "---",
+            "lyrics": None,
+            "codec": "",
+            "picture": None,
+            "transition_duration": self.transition_duration,
         }
         try:
             file = MediaFile(file_path)
@@ -3046,19 +3340,19 @@ class AudioPlayer(QWidget):
             album = file.album
             albumartist = file.albumartist
             if file.samplerate:
-                samplerate = str(file.samplerate/1000) + 'kHz'
+                samplerate = str(file.samplerate / 1000) + "kHz"
             else:
-                samplerate = ''
+                samplerate = ""
             if file.bitrate:
-                bitrate = str(round(file.bitrate/1000))
+                bitrate = str(round(file.bitrate / 1000))
             else:
-                bitrate = ''
-            if file.format == 'MP3':
-                bitdepth = bitrate + 'kbps '
+                bitrate = ""
+            if file.format == "MP3":
+                bitdepth = bitrate + "kbps "
             elif file.bitdepth:
-                bitdepth = str(file.bitdepth) + 'bit '
+                bitdepth = str(file.bitdepth) + "bit "
             else:
-                bitdepth = ''
+                bitdepth = ""
             if file.channels:
                 if file.channels == 2:
                     channels = "Stereo "
@@ -3068,7 +3362,7 @@ class AudioPlayer(QWidget):
                 channels = None
             composer = file.composer
             if file.date:
-                date = file.date.strftime('%d/%m/%Y')
+                date = file.date.strftime("%d/%m/%Y")
             else:
                 date = None
             encoder_info = file.encoder_info
@@ -3076,17 +3370,19 @@ class AudioPlayer(QWidget):
             codec = file.format
             genre = file.genre
             if file.length:
-                duration = f"{(file.length // 60):.0f}:" + "{:06.3F}".format(file.length % 60)
+                duration = f"{(file.length // 60):.0f}:" + "{:06.3F}".format(
+                    file.length % 60
+                )
             else:
-                duration = '---'
+                duration = "---"
             if file.original_date:
-                original_date = file.original_date.strftime('%d/%m/%Y')
+                original_date = file.original_date.strftime("%d/%m/%Y")
             else:
                 original_date = None
             if file.year:
                 year = str(file.year)
             else:
-                year = '---'
+                year = "---"
             if file.original_year:
                 original_year = str(file.original_year)
                 year = original_year
@@ -3107,53 +3403,64 @@ class AudioPlayer(QWidget):
             lyrics = file.lyrics
 
             metadata = {
-                'artist'            : artist or 'Unknown Artist',
-                'album_artist'      : albumartist or artist or 'Unknown Album Artist',
-                'title'             : title or os.path.basename(file_path),
-                'album'             : album or 'Unknown Album',
-                'year'              : year or '---',
-                'duration'          : duration,
-                'bitdepth'          : bitdepth,
-                'bitrate'           : bitrate,
-                'channels'          : channels,
-                'composer'          : composer,
-                'date'              : date,
-                'encoder_info'      : encoder_info,
-                'encoder_settings'  : encoder_settings,
-                'genre'             : genre,
-                'lyrics'            : lyrics,
-                'original_date'     : original_date,
-                'original_year'     : original_year,
-                'r128_album_gain'   : r128_album_gain,
-                'r128_track_gain'   : r128_track_gain,
-                'samplerate'        : samplerate,
-                'track'             : track,
-                'codec'             : codec + ' ' + channels
-                                       + bitdepth + samplerate,
-                'picture'           : file.art,
-                'transition_duration': self.transition_duration or 5
+                "artist": artist or "Unknown Artist",
+                "album_artist": albumartist or artist or "Unknown Album Artist",
+                "title": title or os.path.basename(file_path),
+                "album": album or "Unknown Album",
+                "year": year or "---",
+                "duration": duration,
+                "bitdepth": bitdepth,
+                "bitrate": bitrate,
+                "channels": channels,
+                "composer": composer,
+                "date": date,
+                "encoder_info": encoder_info,
+                "encoder_settings": encoder_settings,
+                "genre": genre,
+                "lyrics": lyrics,
+                "original_date": original_date,
+                "original_year": original_year,
+                "r128_album_gain": r128_album_gain,
+                "r128_track_gain": r128_track_gain,
+                "samplerate": samplerate,
+                "track": track,
+                "codec": codec + " " + channels + bitdepth + samplerate,
+                "picture": file.art,
+                "transition_duration": self.transition_duration or 5,
             }
         except Exception as e:
-            self.meta_worker.work_message.emit(f"Error extracting metadata from {file_path}: {str(e)}")
+            self.meta_worker.work_message.emit(
+                f"Error extracting metadata from {file_path}: {str(e)}"
+            )
             return metadata
-        self.meta_worker.work_message.emit(f"Successfully extracted metadata from: {file_path}")
-        if metadata['lyrics'] is None and self.scan_for_lyrics:
+        self.meta_worker.work_message.emit(
+            f"Successfully extracted metadata from: {file_path}"
+        )
+        if metadata["lyrics"] is None and self.scan_for_lyrics:
             try:
                 lyr = LyricsPlugin()
-                metadata['lyrics'] = lyr.get_lyrics(metadata['artist'],
-                                                    metadata['title'],
-                                                    metadata['album'],
-                                                    file.length)
-                if metadata['lyrics'] != "":
+                metadata["lyrics"] = lyr.get_lyrics(
+                    metadata["artist"],
+                    metadata["title"],
+                    metadata["album"],
+                    file.length,
+                )
+                if metadata["lyrics"] != "":
                     lrc_path = os.path.splitext(file_path)[0] + ".lrc"
-                    with open(lrc_path, "w", encoding='utf-8-sig') as f:
-                        f.write(metadata['lyrics'])
+                    with open(lrc_path, "w", encoding="utf-8-sig") as f:
+                        f.write(metadata["lyrics"])
             except NotImplementedError as e:
-                self.meta_worker.work_message.emit(f"Cannot Find lyrics for {file_path}: {str(e)}")
-                metadata['lyrics'] = f"Cannot Find lyrics for '{metadata['title']}' by {metadata['artist']}."
+                self.meta_worker.work_message.emit(
+                    f"Cannot Find lyrics for {file_path}: {str(e)}"
+                )
+                metadata["lyrics"] = (
+                    f"Cannot Find lyrics for '{metadata['title']}' by {metadata['artist']}."
+                )
             except Exception as e:
-                self.meta_worker.work_message.emit(f"Error reading lyrics from {file_path}: {str(e)}")
-                metadata['lyrics'] = "--"
+                self.meta_worker.work_message.emit(
+                    f"Error reading lyrics from {file_path}: {str(e)}"
+                )
+                metadata["lyrics"] = "--"
         return metadata
 
     def update_metadata(self, index):
@@ -3164,10 +3471,9 @@ class AudioPlayer(QWidget):
 
         if file.is_remote:
             url = rf"http://{file.server}:5000/get_song_metadata/{file.path}"
-            self.meta_worker = Worker('meta', url)
+            self.meta_worker = Worker("meta", url)
         else:
-            self.meta_worker = LocalMetaWorker(file.path,
-                                               self.get_audio_metadata)
+            self.meta_worker = LocalMetaWorker(file.path, self.get_audio_metadata)
             self.meta_worker.work_message.connect(self.on_metadata_message)
 
         self.meta_worker.work_completed.connect(self.on_receive_metadata)
@@ -3182,57 +3488,66 @@ class AudioPlayer(QWidget):
         self.status_bar.repaint()
 
     def set_metadata_label(self):
-        '''Sets metadata labels'''
+        """Sets metadata labels"""
         if not self.meta_data or "error" in self.meta_data:
-          #  path = self.playlist[self.current_index].path
-            title = self.playlist[self.current_index].display_text #  os.path.basename(path)
+            #  path = self.playlist[self.current_index].path
+            title = self.playlist[
+                self.current_index
+            ].display_text  #  os.path.basename(path)
             artist = album = year = codec = "--"
-            self.title_label.setText('Title: ' + title)
-            self.artist_label.setText('Artist: ' + artist)
-            self.album_label.setText('Album: ' + album)
-            self.year_label.setText('Year: ' + year)
-            self.codec_label.setText('Codec: ' + codec)
+            self.title_label.setText("Title: " + title)
+            self.artist_label.setText("Artist: " + artist)
+            self.album_label.setText("Album: " + album)
+            self.year_label.setText("Year: " + year)
+            self.codec_label.setText("Codec: " + codec)
             return
 
-        title = self.meta_data['title']
-        artist = self.meta_data['artist']
-        album = self.meta_data['album']
-        year = self.meta_data['year']
-        duration = self.meta_data['duration']
-        codec = self.meta_data['codec']
+        title = self.meta_data["title"]
+        artist = self.meta_data["artist"]
+        album = self.meta_data["album"]
+        year = self.meta_data["year"]
+        duration = self.meta_data["duration"]
+        codec = self.meta_data["codec"]
 
         self.codec_label.setText(codec)
-        self.title_label.setText('Title: ' + title)
-        self.artist_label.setText('Artist: ' + artist)
-        self.album_label.setText('Album: ' + album)
-        self.year_label.setText('Year: ' + year)
+        self.title_label.setText("Title: " + title)
+        self.artist_label.setText("Artist: " + artist)
+        self.album_label.setText("Album: " + album)
+        self.year_label.setText("Year: " + year)
         if isinstance(duration, int):
             duration = str(duration)
-        self.duration_label.setText('Duration: ' + duration)
-        self.codec_label.setText('Codec: ' + codec)
-
-
+        self.duration_label.setText("Duration: " + duration)
+        self.codec_label.setText("Codec: " + codec)
 
     def get_info(self):
         if not self.meta_data:
             return
-        title = self.meta_data.get('song_title', None)
-        artist = self.meta_data.get('artist', None)
-        album = self.meta_data.get('album', None)
+        title = self.meta_data.get("song_title", None)
+        artist = self.meta_data.get("artist", None)
+        album = self.meta_data.get("album", None)
         summ = self.get_wiki_summary(artist)
         self.text.clear()
         self.text.append(summ)
         summ = self.get_wiki_summary(f"{title} ({artist} song)")
-        if summ == f"No results for '{title} ({artist} song)'." or summ == f"No suitable article found for '{title} ({artist} song)'":
-            summ = self.get_wiki_summary(f'{title} (record)')
-        if summ == f"No results for '{title} (record)'." or summ == f"No suitable article found for '{title} (record)'":
+        if (
+            summ == f"No results for '{title} ({artist} song)'."
+            or summ == f"No suitable article found for '{title} ({artist} song)'"
+        ):
+            summ = self.get_wiki_summary(f"{title} (record)")
+        if (
+            summ == f"No results for '{title} (record)'."
+            or summ == f"No suitable article found for '{title} (record)'"
+        ):
             summ = self.get_wiki_summary(title)
-        if summ == f"No results for '{title}'." or summ == f"No suitable article found for '{title}'":
-            summ = self.get_wiki_summary(f'{album} ({artist} album)')
+        if (
+            summ == f"No results for '{title}'."
+            or summ == f"No suitable article found for '{title}'"
+        ):
+            summ = self.get_wiki_summary(f"{album} ({artist} album)")
         self.text.append(summ)
         self.move_to_top()
-       # self.text.append('\nMetadata:')
 
+    # self.text.append('\nMetadata:')
 
     def get_wiki_summary(self, entry: str, max_results: int = 3) -> str:
         """
@@ -3257,44 +3572,64 @@ class AudioPlayer(QWidget):
         except Exception as e:
             return f"Error: {e}"
 
-
     @staticmethod
     def format_time(ms):
         s = ms // 1000
         m, s = divmod(s, 60)
         return f"{m:02}:{s:02}"
 
-
-
     def extract_audio_info(self):
         path = self.playlist[self.current_index]
         if self.is_remote_file(path):
             try:
-                if self.meta_data and 'codec' in self.meta_data and self.meta_data[
-                    'codec']:
-                    codec = self.meta_data.get('codec')
+                if (
+                    self.meta_data
+                    and "codec" in self.meta_data
+                    and self.meta_data["codec"]
+                ):
+                    codec = self.meta_data.get("codec")
                     return codec
             except Exception as e:
                 self.status_bar.showMessage("Remote metadata fetch error: " + str(e))
         else:
             audio = MediaFile(self.playlist[self.current_index])
             if not audio:
-                self.status_bar.showMessage(f"{audio} is not an audio file, or it is unsupported or corrupted.")
+                self.status_bar.showMessage(
+                    f"{audio} is not an audio file, or it is unsupported or corrupted."
+                )
                 return None
 
             # Codec
-            codec = audio.mime[0] if hasattr(audio,
-                                             'mime') and audio.mime else audio.__class__.__name__
+            codec = (
+                audio.mime[0]
+                if hasattr(audio, "mime") and audio.mime
+                else audio.__class__.__name__
+            )
 
             # Sample rate and bitrate
-            sample_rate = getattr(audio.info, 'sample_rate', None)
-            bits = getattr(audio.info, 'bits_per_sample', None)
-            bitrate = getattr(audio.info, 'bitrate', None)
-            if codec == 'audio/mp3':
-                return codec + ' ' + str(sample_rate/1000) + 'kHz ' + str(round(bitrate/1000)) + 'kbps'
+            sample_rate = getattr(audio.info, "sample_rate", None)
+            bits = getattr(audio.info, "bits_per_sample", None)
+            bitrate = getattr(audio.info, "bitrate", None)
+            if codec == "audio/mp3":
+                return (
+                    codec
+                    + " "
+                    + str(sample_rate / 1000)
+                    + "kHz "
+                    + str(round(bitrate / 1000))
+                    + "kbps"
+                )
             else:
-                return codec + ' ' + str(sample_rate/1000) + 'kHz/' + str(round(bits)) + 'bits  ' + str(round(bitrate/1000)) + 'kbps'
-
+                return (
+                    codec
+                    + " "
+                    + str(sample_rate / 1000)
+                    + "kHz/"
+                    + str(round(bits))
+                    + "bits  "
+                    + str(round(bitrate / 1000))
+                    + "kbps"
+                )
 
     def selectDirectoryDialog(self):
         file_dialog = QFileDialog(self)
@@ -3312,12 +3647,10 @@ class AudioPlayer(QWidget):
             return
         # Update status bar and show progress
         self.status_bar.showMessage(
-            'Scanning your Music Library. Please Wait, it might take some time depending on the library size'
+            "Scanning your Music Library. Please Wait, it might take some time depending on the library size"
         )
 
         self.start_scan(folder_path)
-
-
 
     def delete_missing_songs(self):
         """Delete missing audio files and covers to databases"""
@@ -3339,36 +3672,44 @@ class AudioPlayer(QWidget):
                 if not os.path.exists(path):
                     songs_to_delete.append(song_id)
                     self.status_bar.showMessage(
-                        f"File deleted externally, removing from DB: {path}")
+                        f"File deleted externally, removing from DB: {path}"
+                    )
                     deleted_songs += 1
 
                 # Perform the deletion (if any)
             try:
                 if songs_to_delete:
                     for song_id in songs_to_delete:
-                        cursor.execute(f"SELECT DISTINCT album FROM Songs WHERE id = ?", (song_id,))
+                        cursor.execute(
+                            f"SELECT DISTINCT album FROM Songs WHERE id = ?", (song_id,)
+                        )
                         covers_to_delete.extend(cursor.fetchall())
                     # The '?' allows safe parameter passing for multiple values
                     while len(songs_to_delete) > 999:
-                        placeholders = ', '.join(['?'] * 999)
+                        placeholders = ", ".join(["?"] * 999)
                         sql = f"DELETE FROM Songs WHERE id IN ({placeholders})"
                         cursor.execute(sql, songs_to_delete[:999])
                         for item in range(999):
                             songs_to_delete.pop(0)
 
-                    placeholders = ', '.join(['?'] * len(songs_to_delete))
+                    placeholders = ", ".join(["?"] * len(songs_to_delete))
                     sql = f"DELETE FROM Songs WHERE id IN ({placeholders})"
                     cursor.execute(sql, songs_to_delete)
                 # Delete duplicates
-                cursor.execute('''
+                cursor.execute(
+                    """
                     DELETE FROM Songs WHERE ROWID NOT IN (SELECT MIN(ROWID) FROM Songs GROUP BY path);
-                ''')
+                """
+                )
             except sqlite3.Error as e:
-                QMessageBox.critical(self, "Error", f"Database error deleting songs from db: {str(e)}")
+                QMessageBox.critical(
+                    self, "Error", f"Database error deleting songs from db: {str(e)}"
+                )
                 errors += 1
             except Exception as e:
-                QMessageBox.critical(self, "Error",
-                    f"Unexpected error deleting songs from db: {str(e)}")
+                QMessageBox.critical(
+                    self, "Error", f"Unexpected error deleting songs from db: {str(e)}"
+                )
                 errors += 1
 
             conn.commit()
@@ -3377,20 +3718,25 @@ class AudioPlayer(QWidget):
                 conn = sqlite3.connect(COVERS_DB_PATH)
                 cursor = conn.cursor()
                 cursor.execute(
-                    f"DELETE FROM Covers WHERE album IN ({covers_to_delete})")
+                    f"DELETE FROM Covers WHERE album IN ({covers_to_delete})"
+                )
                 conn.commit()
                 conn.close()
             if deleted_songs > 0:
                 self.status_bar.showMessage(
-                f"Successfully deleted {deleted_songs} songs from database")
+                    f"Successfully deleted {deleted_songs} songs from database"
+                )
             if errors > 0:
-                QMessageBox.critical(self, "Error",
-                    f"Encountered {errors} errors while deleting songs")
+                QMessageBox.critical(
+                    self, "Error", f"Encountered {errors} errors while deleting songs"
+                )
 
             return deleted_songs
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error deleting songs from database: {str(e)}")
+            QMessageBox.critical(
+                self, "Error", f"Error deleting songs from database: {str(e)}"
+            )
             return 0
 
     def delete_missing_playlists(self):
@@ -3412,47 +3758,63 @@ class AudioPlayer(QWidget):
                 if not os.path.exists(path):
                     playlists_to_delete.append(playlist_id)
                     self.status_bar.showMessage(
-                        f"Playlist deleted externally, removing from DB: {path}")
+                        f"Playlist deleted externally, removing from DB: {path}"
+                    )
                     deleted_playlists += 1
 
             # 3. Perform the deletion (if any)
             try:
                 if playlists_to_delete:
                     # The '?' allows safe parameter passing for multiple values
-                    placeholders = ', '.join(['?'] * len(playlists_to_delete))
+                    placeholders = ", ".join(["?"] * len(playlists_to_delete))
                     sql = f"DELETE FROM Playlists WHERE id IN ({placeholders})"
                     cursor.execute(sql, playlists_to_delete)
                 # Delete duplicates
-                cursor.execute('''
+                cursor.execute(
+                    """
                                 DELETE FROM Playlists WHERE ROWID NOT IN (SELECT MIN(ROWID) FROM Playlists GROUP BY path);
-                            ''')
+                            """
+                )
             except sqlite3.Error as e:
-                QMessageBox.critical(self, "Error",
-                    f"Database error deleting playlists from db: {str(e)}")
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Database error deleting playlists from db: {str(e)}",
+                )
                 errors += 1
             except Exception as e:
-                QMessageBox.critical(self, "Error",
-                    f"Unexpected error deleting playlists from db: {str(e)}")
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Unexpected error deleting playlists from db: {str(e)}",
+                )
                 errors += 1
 
             conn.commit()
             conn.close()
             if deleted_playlists > 0:
                 self.status_bar.showMessage(
-                f"Successfully deleted {deleted_playlists} playlists from database", 4)
+                    f"Successfully deleted {deleted_playlists} playlists from database",
+                    4,
+                )
             else:
                 self.status_bar.showMessage(
-                                        f"No playlists were deleted from database", 4)
+                    f"No playlists were deleted from database", 4
+                )
             if errors > 0:
-                QMessageBox.critical(self, "Error",
-                    f"Encountered {errors} errors while deleting playlists")
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Encountered {errors} errors while deleting playlists",
+                )
 
             return deleted_playlists
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error deleting playlists from database: {str(e)}")
+            QMessageBox.critical(
+                self, "Error", f"Error deleting playlists from database: {str(e)}"
+            )
             return 0
-
 
     def purge_library(self):
         folder_path = self.selectDirectoryDialog()
@@ -3460,12 +3822,13 @@ class AudioPlayer(QWidget):
             return
         # Update status bar and show progress
         self.status_bar.showMessage(
-            'Scanning your Music Library for deleted songs and playlists. '
-            'Please Wait, it might take some time depending on the library size'
+            "Scanning your Music Library for deleted songs and playlists. "
+            "Please Wait, it might take some time depending on the library size"
         )
         self.progress = QProgressBar()
         self.progress.setStyleSheet(
-            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}"
+        )
         self.progress.setRange(0, 0)  # Indeterminate progress
         self.status_bar.addPermanentWidget(self.progress)
         self.status_bar.update()
@@ -3478,17 +3841,17 @@ class AudioPlayer(QWidget):
             deleted_playlists = self.delete_missing_playlists()
 
             if deleted_songs == 0 and deleted_playlists == 0:
-                success_msg = ('No missing/duplicate songs and playlists were found.\n'
-                               'No deletions were made')
+                success_msg = (
+                    "No missing/duplicate songs and playlists were found.\n"
+                    "No deletions were made"
+                )
             else:
-                success_msg = f'Successfully deleted {deleted_songs} songs and {deleted_playlists} playlists from the database.'
+                success_msg = f"Successfully deleted {deleted_songs} songs and {deleted_playlists} playlists from the database."
             self.status_bar.removeWidget(self.progress)
-            QMessageBox.information(self, 'info',  success_msg)
-
+            QMessageBox.information(self, "info", success_msg)
 
         except Exception as e:
-            QMessageBox.critical(self, "Error",f"Error during library purge: {str(e)}")
-
+            QMessageBox.critical(self, "Error", f"Error during library purge: {str(e)}")
 
     def get_local_playlists(self):
         self.playlist_widget.clear()
@@ -3499,36 +3862,36 @@ class AudioPlayer(QWidget):
         playlists = cursor.fetchall()
         conn.close()
 
-       # return jsonify([{'id': p[0], 'name': p[1]} for p in playlists])
+        # return jsonify([{'id': p[0], 'name': p[1]} for p in playlists])
 
         try:
-           # pls = []
+            # pls = []
             self.clear_playlist()
             for item in playlists:
                 pl = ListItem()
                 pl.item_type = "playlist"
                 pl.display_text = os.path.basename(item[1])
                 pl.path = item[1]
-                pl.api_url = ''
+                pl.api_url = ""
                 pl.is_remote = False
                 pl.id = item[0]
                 self.playlist.append(pl)
                 self.playlist_widget.addItem(item[1])
-            self.playlist_label.setText('Local Playlists: ')
+            self.playlist_label.setText("Local Playlists: ")
             self.status_bar.clearMessage()
         except Exception as e:
             self.status_bar.clearMessage()
             QMessageBox.critical(self, "Error", str(e))
 
-
-
     def get_playlists(self):
-        self.playlist_label.setText('Loading Playlists from Server')
+        self.playlist_label.setText("Loading Playlists from Server")
         self.status_bar.showMessage(
-            'Loading Playlists from Server. Please Wait, it might take some time...')
+            "Loading Playlists from Server. Please Wait, it might take some time..."
+        )
         self.progress = QProgressBar()
         self.progress.setStyleSheet(
-            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}"
+        )
         self.progress.setRange(0, 0)  # Indeterminate progress
         self.status_bar.addPermanentWidget(self.progress)
         self.status_bar.update()
@@ -3544,41 +3907,42 @@ class AudioPlayer(QWidget):
         self.playlists_worker.start()
         self.playlists_worker.mutex.lock()
 
-
     @Slot(dict)
     def receive_playlists(self, data: dict):
         """Handle successful playlist retrieval completion"""
         if self.playlists_worker:
             self.playlists_worker.mutex.unlock()
-        if 'error' in data:
-            QMessageBox.warning(self, "Error", data['error'])
+        if "error" in data:
+            QMessageBox.warning(self, "Error", data["error"])
         self.status_bar.repaint()
 
         try:
             self.clear_playlist()
-            playlists = data['retrieved_playlists']
+            playlists = data["retrieved_playlists"]
             for item in playlists:
                 pl = ListItem()
                 pl.item_type = "playlist"
-                pl.display_text = os.path.basename(item['name'])
-                pl.path = item['name']
+                pl.display_text = os.path.basename(item["name"])
+                pl.path = item["name"]
                 pl.api_url = self.api_url
                 pl.is_remote = True
-                pl.id = item['id']
+                pl.id = item["id"]
                 self.playlist.append(pl)
                 self.playlist_widget.addItem(pl.display_text)
-            self.playlist_label.setText('Playlists from Server: ')
+            self.playlist_label.setText("Playlists from Server: ")
             self.status_bar.clearMessage()
         except Exception as e:
             self.status_bar.clearMessage()
-            QMessageBox.critical(self, "Error",
-                                 "Server Search error: Make sure the Server is Up and Connected")
-
+            QMessageBox.critical(
+                self,
+                "Error",
+                "Server Search error: Make sure the Server is Up and Connected",
+            )
 
     def on_playlists_error(self, error_message):
         """Handle error"""
-        if error_message == '':
-            error_message = f'Remote Server not responding.\nMake sure the Server is Up and Connected'
+        if error_message == "":
+            error_message = f"Remote Server not responding.\nMake sure the Server is Up and Connected"
         QMessageBox.critical(self, "Error", error_message)
         self.status_bar.repaint()
 
@@ -3605,12 +3969,14 @@ class AudioPlayer(QWidget):
 
     def get_local(self, query):
         self.is_local = True
-        self.playlist_label.setText('Getting local song list')
+        self.playlist_label.setText("Getting local song list")
         self.status_bar.showMessage(
-            'Getting local song list. Please Wait, it might take some time...')
+            "Getting local song list. Please Wait, it might take some time..."
+        )
         self.progress = QProgressBar()
         self.progress.setStyleSheet(
-            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}"
+        )
         self.progress.setRange(0, 0)  # Indeterminate progress
         self.status_bar.addPermanentWidget(self.progress)
         self.status_bar.update()
@@ -3632,12 +3998,14 @@ class AudioPlayer(QWidget):
                 results = cursor.fetchall()
                 conn.close()
                 self.status_bar.showMessage(
-                    f"Retrieved {len(results)} {query}s. Creating {query} list.")
+                    f"Retrieved {len(results)} {query}s. Creating {query} list."
+                )
             else:
                 conn = sqlite3.connect(COVERS_DB_PATH)
                 cursor = conn.cursor()
                 cursor.execute(
-                    f"SELECT album, album_artist, cover FROM Covers ORDER BY album")
+                    f"SELECT album, album_artist, cover FROM Covers ORDER BY album"
+                )
                 covers = cursor.fetchall()
                 conn.close()
                 for c in covers:
@@ -3649,14 +4017,15 @@ class AudioPlayer(QWidget):
                         album_art.setIcon(QIcon(pix))
                     else:
                         album_art.setIcon(
-                            QPixmap(
-                                "static/images/default_album_art.png") if os.path.exists(
-                                "static/images/default_album_art.png") else QPixmap())
+                            QPixmap("static/images/default_album_art.png")
+                            if os.path.exists("static/images/default_album_art.png")
+                            else QPixmap()
+                        )
                     self.playlist_widget.setIconSize(QSize(256, 256))
                     album = ListItem()
-                    album.item_type = 'album'
+                    album.item_type = "album"
                     album.is_remote = False
-                    album.display_text = f'{c[1]} - {c[0]}'
+                    album.display_text = f"{c[1]} - {c[0]}"
                     album_item = QListWidgetItem(album.display_text)
                     self.playlist_widget.addItem(album_art)
                     self.playlist_widget.addItem(album_item)
@@ -3665,13 +4034,14 @@ class AudioPlayer(QWidget):
                     self.playlist.append(album)
 
                 self.status_bar.showMessage(
-                    f"Retrieved {len(covers)} {query}s. Creating {query} list.")
+                    f"Retrieved {len(covers)} {query}s. Creating {query} list."
+                )
 
             if query != "album":
                 for r in results:
                     song = ListItem()
                     #   self.get_audio_metadata(r[4])
-                    if query == 'song_title':
+                    if query == "song_title":
                         song.display_text = f"{r[1]} - {r[2]} ({r[3]})"
                         song.path = r[4]
                     elif query == "artist":
@@ -3679,41 +4049,42 @@ class AudioPlayer(QWidget):
                     song.is_remote = False
                     song.item_type = query
                     files.append(song)
-            self.playlist_label.setText(f'{query} List: ')
+            self.playlist_label.setText(f"{query} List: ")
 
         except sqlite3.Error as e:
-            QMessageBox.critical(self, "Error",
-                                 f"Database error getting query: {str(e)}")
+            QMessageBox.critical(
+                self, "Error", f"Database error getting query: {str(e)}"
+            )
         except Exception as e:
-            QMessageBox.critical(self, "Error",
-                                 f"Error getting query: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Error getting query: {str(e)}")
 
         # Remove progress bar and clear status
         if self.progress:
             self.status_bar.removeWidget(self.progress)
         self.status_bar.clearMessage()
         self.status_bar.update()
-        self.status_bar.showMessage('List loaded. Enjoy!')
+        self.status_bar.showMessage("List loaded. Enjoy!")
         if files:
             self.add_files(files)
 
     def get_list(self, query):
         self.is_local = False
         self.remote_base = self.api_url
-        self.playlist_label.setText(
-            f'Getting {query} list from Server. Please Wait...')
+        self.playlist_label.setText(f"Getting {query} list from Server. Please Wait...")
         self.status_bar.showMessage(
-            f'Getting {query} list from Server. Please Wait, it might take '
-            'some time...')
+            f"Getting {query} list from Server. Please Wait, it might take "
+            "some time..."
+        )
         self.progress = QProgressBar()
         self.progress.setStyleSheet(
-            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}")
+            "::chunk {background-color: magenta; width: 8px; margin: 0.5px;}"
+        )
         self.progress.setRange(0, 0)  # Indeterminate progress
         self.status_bar.addPermanentWidget(self.progress)
         self.status_bar.update()
         self.playlist_widget.clear()
         self.playlist.clear()
-        self.songs_worker = Worker(query, f'{self.api_url}/get_all')
+        self.songs_worker = Worker(query, f"{self.api_url}/get_all")
         self.songs_worker.work_completed.connect(self.receive_list)
         self.songs_worker.work_error.connect(self.on_songs_error)
         self.songs_worker.finished.connect(self.cleanup_songs)
@@ -3731,59 +4102,63 @@ class AudioPlayer(QWidget):
             self.songs_worker.mutex.unlock()
         else:
             self.is_local = True
-        if 'error' in retrieved:
-            QMessageBox.warning(self, "Error", retrieved['error'])
+        if "error" in retrieved:
+            QMessageBox.warning(self, "Error", retrieved["error"])
         self.status_bar.update()
 
         try:
             self.clear_playlist()
             files = []
-            data = retrieved['retrieved']
+            data = retrieved["retrieved"]
             if "path" in data[0].keys():
                 for file in data:
                     song = ListItem()
                     song.is_remote = not self.is_local
-                    song.item_type = 'song_title'
+                    song.item_type = "song_title"
                     song.path = file["path"]
-                    song.display_text = f"{file['artist']} - {file['title']} ({file['album']})"
+                    song.display_text = (
+                        f"{file['artist']} - {file['title']} ({file['album']})"
+                    )
                     files.append(song)
-                self.playlist_label.setText('Songs List: ')
+                self.playlist_label.setText("Songs List: ")
             elif "artist" in data[0].keys():
                 #  files = list(itertools.repeat("artist", len(self.songs)))
                 for file in data:
                     song = ListItem()
                     song.is_remote = not self.is_local
-                    song.item_type = 'artist'
-                    song.path = ''
-                    song.display_text = file['artist']
+                    song.item_type = "artist"
+                    song.path = ""
+                    song.display_text = file["artist"]
                     files.append(song)
-                self.playlist_label.setText('Artists List: ')
+                self.playlist_label.setText("Artists List: ")
             elif "album" in data[0].keys():
                 #  files = list(itertools.repeat("album", len(self.songs)))
                 for file in data:
                     song = ListItem()
                     song.is_remote = not self.is_local
-                    song.item_type = 'album'
-                    song.path = ''
+                    song.item_type = "album"
+                    song.path = ""
                     song.display_text = f"{file['album'][1]} - {file['album'][0]}"
                     files.append(song)
-                self.playlist_label.setText('Album List: ')
+                self.playlist_label.setText("Album List: ")
 
             #  self.playlist_label.setText('Songs List: ')
             self.status_bar.clearMessage()
 
             self.add_files(files)
-            self.status_bar.showMessage(
-                'List loaded. Enjoy!')
+            self.status_bar.showMessage("List loaded. Enjoy!")
         except Exception as e:
             self.status_bar.clearMessage()
-            QMessageBox.critical(self, "Error",
-                                 f"Server error: {str(e)} \nMake sure the Server is Up and Connected")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Server error: {str(e)} \nMake sure the Server is Up and Connected",
+            )
 
     def on_songs_error(self, error_message):
         """Handle error"""
-        if error_message == '':
-            error_message = f'Remote Server not responding.\nMake sure the Server is Up and Connected'
+        if error_message == "":
+            error_message = f"Remote Server not responding.\nMake sure the Server is Up and Connected"
         QMessageBox.critical(self, "Error", error_message)
         self.status_bar.repaint()
 
@@ -3811,11 +4186,11 @@ class AudioPlayer(QWidget):
     def on_pl_completed(self, pl_data):
         if self.pl_worker:
             self.pl_worker.mutex.unlock()
-        data = pl_data['pl']
-        if data and data['success']:
+        data = pl_data["pl"]
+        if data and data["success"]:
             songs = []
             idx = self.playlist_widget.currentRow()
-            playlist_name = data['name']
+            playlist_name = data["name"]
             for line in data["playlist"]:
                 line = line.strip()
                 song = ListItem()
@@ -3828,8 +4203,7 @@ class AudioPlayer(QWidget):
             self.clear_playlist()
             self.add_files(songs)
             self.playlist_label.setText(f"Playlist: {playlist_name}")
-            self.status_bar.showMessage(
-                f'Playlist {playlist_name} loaded. Enjoy!')
+            self.status_bar.showMessage(f"Playlist {playlist_name} loaded. Enjoy!")
 
     def on_pl_error(self, error_message):
         """Handle playlist error"""
@@ -3854,23 +4228,25 @@ class AudioPlayer(QWidget):
             self.status_bar.showMessage(f"Parsing playlist: {playlist_path}")
 
             if not os.path.exists(playlist_path):
-                QMessageBox.critical(self, 'error',
-                                     f"Playlist file does not exist: {playlist_path}")
+                QMessageBox.critical(
+                    self, "error", f"Playlist file does not exist: {playlist_path}"
+                )
                 return []
 
             playlist = []
             playlist_dir = os.path.dirname(playlist_path)
             line_count = 0
             ext = Path(playlist_path).suffix.lower()
-            if ext in ['.m3u', '.m3u8']:
+            if ext in [".m3u", ".m3u8"]:
                 lines = self.load_m3u_playlist(playlist_path)
-            elif ext == '.cue':
+            elif ext == ".cue":
                 lines = self.load_cue_playlist(playlist_path)
-            elif ext == '.json':
+            elif ext == ".json":
                 lines = self.load_json_playlist(playlist_path)
             else:
-                QMessageBox.warning(self, "Error!",
-                                    f"Unsupported playlist format: {ext}")
+                QMessageBox.warning(
+                    self, "Error!", f"Unsupported playlist format: {ext}"
+                )
                 return
 
             for line in lines:
@@ -3879,22 +4255,31 @@ class AudioPlayer(QWidget):
                     if os.path.exists(line.path):
                         playlist.append(line)
                         self.status_bar.showMessage(
-                            f"Added to playlist: {line.display_text}")
+                            f"Added to playlist: {line.display_text}"
+                        )
                     else:
-                        QMessageBox.critical(self, "warning",
-                                             f"File not found in playlist (line {line_count}): {line.display_text}")
+                        QMessageBox.critical(
+                            self,
+                            "warning",
+                            f"File not found in playlist (line {line_count}): {line.display_text}",
+                        )
 
                 except Exception as e:
-                    QMessageBox.critical(self, "warning",
-                                         f"Error processing playlist line {line_count}: {e}")
+                    QMessageBox.critical(
+                        self,
+                        "warning",
+                        f"Error processing playlist line {line_count}: {e}",
+                    )
 
             self.status_bar.showMessage(
-                f"Parsed playlist with {len(playlist)} valid files")
+                f"Parsed playlist with {len(playlist)} valid files"
+            )
             return playlist
 
         except Exception as e:
-            QMessageBox.critical(self, "error",
-                                 f"Error parsing playlist {playlist_path}: {e}")
+            QMessageBox.critical(
+                self, "error", f"Error parsing playlist {playlist_path}: {e}"
+            )
             return []
 
     def play_selected_item(self):
@@ -3903,7 +4288,7 @@ class AudioPlayer(QWidget):
         file = self.playlist[idx]
         try:
             if file.item_type == "cover":
-                self.search_tracks('album', file.display_text)
+                self.search_tracks("album", file.display_text)
         except AttributeError:
             idx += 1
             if 0 <= idx < len(self.playlist):
@@ -3913,15 +4298,15 @@ class AudioPlayer(QWidget):
             else:
                 return
         # item_ext = Path(item.text()).suffix
-        if file.item_type == 'artist':
-            self.search_tracks('artist', file.display_text)
-        elif file.item_type == 'album':
-            dash = file.display_text.find(' - ')
-            self.search_tracks('album', file.display_text[dash + 3:])
+        if file.item_type == "artist":
+            self.search_tracks("artist", file.display_text)
+        elif file.item_type == "album":
+            dash = file.display_text.find(" - ")
+            self.search_tracks("album", file.display_text[dash + 3 :])
             return
-        elif file.item_type == 'song_title':
+        elif file.item_type == "song_title":
             self.play_selected_track(item)
-        elif file.item_type == 'playlist':
+        elif file.item_type == "playlist":
             playlist_id = file.id
             if not file.is_remote:
                 try:
@@ -3929,54 +4314,63 @@ class AudioPlayer(QWidget):
                     cursor = conn.cursor()
                     cursor.execute(
                         "SELECT path, PL_name FROM Playlists WHERE id = ?",
-                        (playlist_id,))
+                        (playlist_id,),
+                    )
                     playlist_data = cursor.fetchone()
                     conn.close()
 
                     if not playlist_data:
-                        QMessageBox.critical(self, 'error',
-                                             f"Playlist not found: {playlist_id}")
+                        QMessageBox.critical(
+                            self, "error", f"Playlist not found: {playlist_id}"
+                        )
                         return
 
                     playlist_path, playlist_name = playlist_data
                     playlist_files = self.parse_playlist_file(playlist_path)
 
                     self.status_bar.showMessage(
-                        f"Loaded playlist '{playlist_name}' with {len(playlist_files)} files")
+                        f"Loaded playlist '{playlist_name}' with {len(playlist_files)} files"
+                    )
                     data = {
-                        'success' : True,
-                        'playlist': playlist_files,
-                        'name'    : playlist_name
+                        "success": True,
+                        "playlist": playlist_files,
+                        "name": playlist_name,
                     }
 
                 except sqlite3.Error as e:
-                    QMessageBox.critical(self, 'error',
-                                         f"Database error loading playlist {playlist_id}: {e}")
+                    QMessageBox.critical(
+                        self,
+                        "error",
+                        f"Database error loading playlist {playlist_id}: {e}",
+                    )
                     return
                 except Exception as e:
-                    QMessageBox.critical(self, 'error',
-                                         f"Error loading playlist {playlist_id}: {e}")
+                    QMessageBox.critical(
+                        self, "error", f"Error loading playlist {playlist_id}: {e}"
+                    )
                     return
 
                 if data:
                     songs = []
                     idx = self.playlist_widget.currentRow()
-                    playlist_name = data['name']
+                    playlist_name = data["name"]
                     for song in data["playlist"]:
                         songs.append(song)
                     self.clear_playlist()
                     self.add_files(songs)
-                    self.playlist_label.setText(
-                        f"Playlist: {playlist_name}")
+                    self.playlist_label.setText(f"Playlist: {playlist_name}")
                     self.status_bar.showMessage(
-                        f'Playlist {playlist_name} loaded. Enjoy!')
+                        f"Playlist {playlist_name} loaded. Enjoy!"
+                    )
             else:
                 self.status_bar.showMessage(
-                    'Loading Playlist from Server. Please Wait, it might take some time...')
+                    "Loading Playlist from Server. Please Wait, it might take some time..."
+                )
 
                 # Create and configure worker thread
-                self.pl_worker = Worker('pl',
-                                        f"{self.api_url}/load_playlist/{playlist_id}")
+                self.pl_worker = Worker(
+                    "pl", f"{self.api_url}/load_playlist/{playlist_id}"
+                )
                 self.pl_worker.work_completed.connect(self.on_pl_completed)
                 self.pl_worker.work_error.connect(self.on_pl_error)
                 self.pl_worker.finished.connect(self.cleanup_pl)
@@ -3991,20 +4385,20 @@ class AudioPlayer(QWidget):
             return
 
     def local_web_ui(self):
-        if os.environ.get(f'WERKZEUG_RUN_MAIN') is None:
+        if os.environ.get(f"WERKZEUG_RUN_MAIN") is None:
             webbrowser.open(self.api_url)
 
     def remote_web_ui(self):
         try:
             r = requests.post(f"{self.api_url}/web_ui")
-            QMessageBox.information(self, 'info', r.text)
+            QMessageBox.information(self, "info", r.text)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
     def remote_desk_ui(self):
         try:
             r = requests.post(f"{self.api_url}/desk_ui")
-            QMessageBox.information(self, 'info', r.text)
+            QMessageBox.information(self, "info", r.text)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
@@ -4018,8 +4412,7 @@ class AudioPlayer(QWidget):
         else:
             self.status_bar.showMessage(result["answer"])
             self.status_bar.update()
-            QMessageBox.information(self, 'Info:',
-                                    result["answer"])
+            QMessageBox.information(self, "Info:", result["answer"])
 
     def on_start_error(self, error_message):
         """Handle error"""
@@ -4046,13 +4439,15 @@ class AudioPlayer(QWidget):
         if song.is_remote:
             folder_path = song.path
             self.status_bar.showMessage(
-                'Trying to reveal Song in remote server. '
-                'Please Wait, it might take some time...')
+                "Trying to reveal Song in remote server. "
+                "Please Wait, it might take some time..."
+            )
 
             # Create and configure progress bar
             self.progress = QProgressBar()
             self.progress.setStyleSheet(
-                "::chunk {background-color: green; width: 8px; margin: 0.5px;}")
+                "::chunk {background-color: green; width: 8px; margin: 0.5px;}"
+            )
             self.progress.setRange(0, 0)  # Indeterminate progress
             self.status_bar.addPermanentWidget(self.progress)
             self.status_bar.update()
@@ -4077,13 +4472,18 @@ class AudioPlayer(QWidget):
                 os.system(f'xdg-open "{os.path.dirname(song.path)}"')
 
     def quit(self):
-        save_json(SETTINGS_FILE, {"server"              : self.server,
-                                  "mix_method"          : self.mix_method,
-                                  "transition_duration" : self.transition_duration,
-                                  "silence_threshold_db": self.silence_threshold_db,
-                                  "silence_min_duration": self.silence_min_duration,
-                                  "scan_for_lyrics"     : self.scan_for_lyrics,
-                                  "style"               : self.dark_style                                     })
+        save_json(
+            SETTINGS_FILE,
+            {
+                "server": self.server,
+                "mix_method": self.mix_method,
+                "transition_duration": self.transition_duration,
+                "silence_threshold_db": self.silence_threshold_db,
+                "silence_min_duration": self.silence_min_duration,
+                "scan_for_lyrics": self.scan_for_lyrics,
+                "style": self.dark_style,
+            },
+        )
         self.close()
 
 
@@ -4093,7 +4493,8 @@ class LocalMetaWorker(QThread):
     Expects an extractor callable that takes a single file_path arg and
     returns the metadata dict (same structure as get_audio_metadata).
     """
-    work_completed = Signal(dict)   # Emits {'retrieved_metadata': metadata}
+
+    work_completed = Signal(dict)  # Emits {'retrieved_metadata': metadata}
     work_error = Signal(str)
     work_message = Signal(str)
 
@@ -4108,7 +4509,7 @@ class LocalMetaWorker(QThread):
             # Call the provided extractor (this will perform heavy work)
             metadata = self.extractor_callable(self.file_path)
             # Emit in same structure as your remote meta worker
-            self.work_completed.emit({'retrieved_metadata': metadata})
+            self.work_completed.emit({"retrieved_metadata": metadata})
         except Exception as e:
             self.work_error.emit(str(e))
 
@@ -4157,28 +4558,26 @@ class Worker(QThread):
             asyncio.set_event_loop(loop)
 
             # Run the async scan
-            if self.api_url.endswith('scan_library'):
+            if self.api_url.endswith("scan_library"):
                 result = loop.run_until_complete(self.scan_library_async())
-            elif self.api_url.endswith('start'):
-                result = loop.run_until_complete(
-                    self.reveal_remote_song_async())
+            elif self.api_url.endswith("start"):
+                result = loop.run_until_complete(self.reveal_remote_song_async())
             elif self.folder_path is None:
                 result = loop.run_until_complete(self.get_playlists_async())
             elif isinstance(self.folder_path, dict):
                 result = loop.run_until_complete(self.search_async())
             elif isinstance(self.folder_path, tuple):
                 result = loop.run_until_complete(self.purge_library_async())
-            elif self.folder_path == 'meta':
+            elif self.folder_path == "meta":
                 result = loop.run_until_complete(self.get_metadata_async())
-            elif self.folder_path in {'song_title', 'artist', 'album'}:
+            elif self.folder_path in {"song_title", "artist", "album"}:
                 result = loop.run_until_complete(self.get_songs_async())
-            elif self.folder_path == 'pl':
+            elif self.folder_path == "pl":
                 result = loop.run_until_complete(self.get_pl_async())
-            elif self.folder_path == 'server':
+            elif self.folder_path == "server":
                 result = loop.run_until_complete(self.check_server_async())
             else:
-                raise ValueError(
-                    f"Unknown folder_path value: {self.folder_path}")
+                raise ValueError(f"Unknown folder_path value: {self.folder_path}")
 
             # Emit success signal
             self.work_completed.emit(result)
@@ -4199,8 +4598,7 @@ class Worker(QThread):
         """
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                    self.api_url,
-                    json={'folder_path': self.folder_path}
+                self.api_url, json={"folder_path": self.folder_path}
             ) as response:
                 if response.status == 200:
                     return await response.json()
@@ -4214,8 +4612,8 @@ class Worker(QThread):
         """
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                    f"{self.api_url}/purge_library",
-                    json={'folder_path': self.folder_path[1]}
+                f"{self.api_url}/purge_library",
+                json={"folder_path": self.folder_path[1]},
             ) as response:
                 if response.status == 200:
                     return await response.json()
@@ -4228,8 +4626,7 @@ class Worker(QThread):
         with the API endpoint for searching the library.
         """
         async with aiohttp.ClientSession() as session:
-            async with session.get(self.api_url,
-                                   params=self.folder_path) as response:
+            async with session.get(self.api_url, params=self.folder_path) as response:
                 if response.status == 200:
                     search_result = await response.json()
                     result = {"search_result": search_result}
@@ -4244,15 +4641,14 @@ class Worker(QThread):
         """
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                    f"{self.api_url}/get_playlists", timeout=5
+                f"{self.api_url}/get_playlists", timeout=5
             ) as response:
                 if response.status == 200:
                     retrieved_playlists = await response.json()
-                    result = {'retrieved_playlists': retrieved_playlists}
+                    result = {"retrieved_playlists": retrieved_playlists}
                     return result
                 else:
-                    raise Exception(
-                        f"Failed to fetch playlists: {response.status}")
+                    raise Exception(f"Failed to fetch playlists: {response.status}")
 
     async def get_songs_async(self):
         """
@@ -4260,15 +4656,15 @@ class Worker(QThread):
         to interact with the API endpoint for fetching songs.
         """
         async with aiohttp.ClientSession() as session:
-            async with session.get(self.api_url, params={
-                "query": self.folder_path}) as response:
+            async with session.get(
+                self.api_url, params={"query": self.folder_path}
+            ) as response:
                 if response.status == 200:
                     retrieved = await response.json()
-                    result = {'retrieved': retrieved}
+                    result = {"retrieved": retrieved}
                     return result
                 else:
-                    raise Exception(
-                        f"Failed to fetch songs: {response.status}")
+                    raise Exception(f"Failed to fetch songs: {response.status}")
 
     async def get_pl_async(self):
         """
@@ -4279,11 +4675,10 @@ class Worker(QThread):
             async with session.get(self.api_url) as response:
                 if response.status == 200:
                     retrieved_playlist = await response.json()
-                    result = {'pl': retrieved_playlist}
+                    result = {"pl": retrieved_playlist}
                     return result
                 else:
-                    raise Exception(
-                        f"Failed to fetch playlist: {response.status}")
+                    raise Exception(f"Failed to fetch playlist: {response.status}")
 
     async def get_metadata_async(self):
         """
@@ -4294,22 +4689,23 @@ class Worker(QThread):
             async with session.get(self.api_url) as response:
                 if response.status == 200:
                     retrieved_metadata = await response.json()
-                    result = {'retrieved_metadata': retrieved_metadata}
+                    result = {"retrieved_metadata": retrieved_metadata}
                     return result
                 elif response.status == 404:
-                    retrieved_metadata = {'album'   : '',
-                                          'artist'  : '',
-                                          'codec'   : 'audio/flac 44.1kHz/16bits  860kbps',
-                                          'duration': 0,
-                                          'lyrics'  : '',
-                                          'picture' : None,
-                                          'title'   : 'Not Found',
-                                          'year'    : ''}
-                    result = {'retrieved_metadata': retrieved_metadata}
+                    retrieved_metadata = {
+                        "album": "",
+                        "artist": "",
+                        "codec": "audio/flac 44.1kHz/16bits  860kbps",
+                        "duration": 0,
+                        "lyrics": "",
+                        "picture": None,
+                        "title": "Not Found",
+                        "year": "",
+                    }
+                    result = {"retrieved_metadata": retrieved_metadata}
                     return result
                 else:
-                    raise Exception(
-                        f"Failed to fetch metadata: {response.status}")
+                    raise Exception(f"Failed to fetch metadata: {response.status}")
 
     async def check_server_async(self):
         """
@@ -4317,11 +4713,12 @@ class Worker(QThread):
         Uses aiohttp to interact with the API endpoint for server validation.
         """
         async with aiohttp.ClientSession() as session:
-            async with session.get(f'http://{self.api_url}:5000',
-                                   timeout=3) as response:
+            async with session.get(
+                f"http://{self.api_url}:5000", timeout=3
+            ) as response:
                 if response.status == 200:
                     status = response.status
-                    return {'status': status, 'API_URL': self.api_url}
+                    return {"status": status, "API_URL": self.api_url}
                 else:
                     raise Exception(f"Server check failed: {response.status}")
 
@@ -4331,16 +4728,13 @@ class Worker(QThread):
         Uses aiohttp to interact with the API endpoint for revealing the song.
         """
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                    self.api_url,
-                    json=self.folder_path) as response:
+            async with session.post(self.api_url, json=self.folder_path) as response:
                 if response.status == 200:
                     answer = await response.json()
-                    result = {'answer': answer}
+                    result = {"answer": answer}
                     return result
                 else:
-                    raise Exception(
-                        f"Failed to fetch songs: {response.status}")
+                    raise Exception(f"Failed to fetch songs: {response.status}")
 
 
 class SynchronizedLyrics:
@@ -4350,10 +4744,9 @@ class SynchronizedLyrics:
         self.raw_lyrics = ""
 
         try:
-            if w.meta_data and 'lyrics' in w.meta_data and w.meta_data[
-                'lyrics']:
+            if w.meta_data and "lyrics" in w.meta_data and w.meta_data["lyrics"]:
                 #       data = r.json()
-                self.raw_lyrics = w.meta_data['lyrics']
+                self.raw_lyrics = w.meta_data["lyrics"]
             else:
                 self.raw_lyrics = "--"
         except Exception as e:
@@ -4368,11 +4761,10 @@ class SynchronizedLyrics:
         for line in lyrics_text.splitlines():
             matches = list(time_tag.finditer(line))
             if matches:
-                lyric = time_tag.sub('', line).strip()
+                lyric = time_tag.sub("", line).strip()
                 for m in matches:
                     min, sec, ms = m.groups()
-                    total_ms = int(min) * 60 * 1000 + int(sec) * 1000 + int(
-                        ms or 0)
+                    total_ms = int(min) * 60 * 1000 + int(sec) * 1000 + int(ms or 0)
                     self.times.append(total_ms)
                     self.lines.append(lyric)
             elif line.strip():
@@ -4396,7 +4788,8 @@ class LyricsDisplay(QTextEdit):
         super().__init__(*args, **kwargs)
         self.setReadOnly(True)
         self.setStyleSheet(
-            "font-size: 18px; background: #E0F0FF; border-width: 2px; border-color: #7A7EA8; border-style: inset;")
+            "font-size: 18px; background: #E0F0FF; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
+        )
         self.current_line_idx = -1
         self.lines = []
         self.is_synchronized = False
@@ -4447,10 +4840,11 @@ class TextEdit(QWidget):
         self.setLayout(layout)
         self.instructions_edit.setText(text_8)
 
+
 if __name__ == "__main__":
-  #  qInstallMessageHandler(qt_message_handler)
+    #  qInstallMessageHandler(qt_message_handler)
     app = QApplication(sys.argv)
-    app.setWindowIcon(QIcon('static/images/favicon.ico'))
+    app.setWindowIcon(QIcon("static/images/favicon.ico"))
     settings = get_settings()
     w = AudioPlayer(settings)
     sys.exit(app.exec())
