@@ -27,6 +27,8 @@ import base64
 import webbrowser
 import wikipedia
 from qdarkstyle import DarkPalette, LightPalette
+from tomlkit.items import Null
+
 # from local_meta_worker import LocalMetaWorker
 # from sklearn.metrics import d2_absolute_error_score
 from get_lyrics import LyricsPlugin
@@ -2634,8 +2636,9 @@ class AudioPlayer(QWidget):
             del self.playlist[row]
             # Adjust current_index if necessary
             if row == self.current_index:
-                self.player.stop()
-               #("stop", self.player)
+                self.player.stop()  #("stop", self.player)
+                empty = QUrl()
+                self.player.setSource(empty)
                 self.current_index = -1
                 self.lyrics_display.clear()
                 self.update_play_button()
@@ -2647,6 +2650,8 @@ class AudioPlayer(QWidget):
         self.playlist.clear()
         self.playlist_label.setText('Queue:')
         self.player.stop()
+        empty =QUrl()
+        self.player.setSource(empty)
         self.current_index = -1
         self.album_art.setPixmap(
             QPixmap("static/images/default_album_art.png") if os.path.exists(

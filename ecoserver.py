@@ -20,11 +20,14 @@ import librosa
 import numpy as np
 from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
+from dlna_server import serve_audio_via_upnp
+from ecoserver_dlna_blueprint import dlna_bp
 if '--no-tray' not in sys.argv:
     from pystray import Icon, MenuItem, Menu
     from plyer import notification
 
 app = Flask(__name__)
+app.register_blueprint(dlna_bp, url_prefix="/dlna")
 
 load_dotenv()
 secret_key = os.getenv("SECRET_KEY")
@@ -1459,6 +1462,15 @@ def serve_audio(file_path):
         logger.error(traceback.format_exc())
         return jsonify({'error': 'Error serving file'}), 500
 
+@app.route('/dlna/serve_audio/<path:file_path>')
+def dlna_serve_audio(file_path):
+    try:
+        return serve_audio_via_upnp(file_path)
+    except Exception as e:
+        logger.error(f"Error serving audio file {file_path} via DLNA: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': 'Error serving file via DLNA'}), 500
+
 
 @app.route('/settings')
 def settings():
@@ -1628,7 +1640,7 @@ def setup_tray():
 
 
 if __name__ == '__main__':
-    sys.stdout.reconfigure(encoding='utf-8')
+   # sys.stdout.reconfigure(encoding='utf-8')
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
     if '--no-tray' in sys.argv:
