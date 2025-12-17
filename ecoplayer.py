@@ -573,6 +573,7 @@ class AudioPlayer(QWidget):
         self.setWindowTitle(f"Ultimate Media Player. Current Server: {self.api_url}")
         self.resize(1200, 800)
         self.playlist = []
+        self.empty = QUrl()
         self.current_index = -1
         self.show_remaining = False
         self.sort_albums = True
@@ -1179,7 +1180,7 @@ class AudioPlayer(QWidget):
 
         # Launch welcome wizard automatically if enabled in settings
         try:
-            if self.settings.get("show_welcome", True):
+            if self.settings.get("show_welcome", True) and len(sys.argv) == 1:
                 wizard = WelcomeWizard(self)
                 if self.dark_style == "dark":
                     wizard.label.setStyleSheet(
@@ -2912,8 +2913,7 @@ class AudioPlayer(QWidget):
             # Adjust current_index if necessary
             if row == self.current_index:
                 self.player.stop()  # ("stop", self.player)
-                empty = QUrl()
-                self.player.setSource(empty)
+                self.player.setSource(self.empty)
                 self.current_index = -1
                 self.lyrics_display.clear()
                 self.update_play_button()
@@ -2925,8 +2925,7 @@ class AudioPlayer(QWidget):
         self.playlist.clear()
         self.playlist_label.setText("Queue:")
         self.player.stop()
-        empty = QUrl()
-        self.player.setSource(empty)
+        self.player.setSource(self.empty)
         self.current_index = -1
         self.album_art.setPixmap(
             QPixmap("static/images/default_album_art.png")
@@ -3168,6 +3167,7 @@ class AudioPlayer(QWidget):
         # stop QMediaPlayer if it's active
         try:
             self.player.stop()
+            self.player.setSource(self.empty)
             self.cleanup_metadata()
         except Exception as e:
             print(str(e))
@@ -4841,10 +4841,79 @@ class TextEdit(QWidget):
         self.instructions_edit.setText(text_8)
 
 
+def _process_startup_args(player: AudioPlayer, args):
+    """
+    Handle command-line paths passed by Windows Explorer double-click.
+    - playlist files (extensions in `playlist_extensions`) are parsed and added.
+    - audio files (extensions in `audio_extensions`) are added and played.
+    - directories are scanned/added via existing `load_dir`.
+    Note: this opens files in the same new instance. For single-instance behavior,
+    a separate IPC mechanism is required.
+    """
+    if not args:
+        return
+
+    paths = [Path(a) for a in args if a and a.strip()]
+    for p in paths:
+        try:
+            # Directory: use existing folder scan helper
+            if p.exists() and p.is_dir():
+                try:
+                    player.load_dir(str(p))
+                except Exception:
+                    # Fallback: add files by walking
+                    files = [str(f) for f in p.rglob("*") if f.suffix.lower() in audio_extensions]
+                    if files:
+                        player.add_files(files)
+                        if player.current_index == -1 and player.playlist:
+                            player.load_track(0, auto_play=True)
+                continue
+
+            # Playlist file: parse and add songs
+            if p.suffix.lower() in playlist_extensions:
+                try:
+                    songs = player.parse_playlist_file(str(p))
+                    if songs:
+                        player.add_files(songs)
+                        # start playing first valid song if player is idle
+                        if player.current_index == -1 and player.playlist:
+                            player.load_track(0, auto_play=True)
+                except Exception:
+                    continue
+                continue
+
+            # Audio file: add and play
+            if p.suffix.lower() in audio_extensions:
+                song = ListItem()
+                song.item_type = "song_title"
+                song.display_text = os.path.basename(str(p))
+                song.path = str(p)
+                song.is_remote = False
+                player.add_files([song])
+                # play the last added entry
+                if player.current_index == -1 and player.playlist:
+                    idx = len(player.playlist) - 1
+                    player.load_track(idx, auto_play=True)
+                continue
+
+        except Exception as e:
+            print(str(e))
+            # Keep startup robust: ignore any problematic path
+            continue
+
 if __name__ == "__main__":
     #  qInstallMessageHandler(qt_message_handler)
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon("static/images/favicon.ico"))
     settings = get_settings()
     w = AudioPlayer(settings)
+
+    # Process any files passed by double-click from Explorer
+    try:
+        if len(sys.argv) > 1:
+            _process_startup_args(w, sys.argv[1:])
+    except Exception:
+        pass
+
     sys.exit(app.exec())
+

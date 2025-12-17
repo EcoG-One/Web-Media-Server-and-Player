@@ -2,13 +2,16 @@
 
 block_cipher = None
 
+added_files = [
+		('static/images', 'static/images'),
+		('icons', 'icons'),
+		('static', 'static'),]
+
 a = Analysis(
     ['ecoplayer.py'],
     pathex=[],
     binaries=[],
-    datas=[
-		('static', 'static'),
-		('icons', 'icons')],
+    datas=added_files,
     hiddenimports=['librosa', 'numba', 'soundfile'],
     hookspath=[],
     runtime_hooks=[],

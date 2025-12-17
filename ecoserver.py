@@ -46,6 +46,7 @@ SHUTDOWN_SECRET = os.getenv("SHUTDOWN_SECRET")
 APP_DIR = Path.home() / "Web-Media-Server-and-Player"
 APP_DIR.mkdir(exist_ok=True)
 SETTINGS_FILE = APP_DIR / "settings.json"
+LOG_DIR = APP_DIR / "logs"
 DB_PATH = APP_DIR / "music.db"
 COVERS_DB_PATH = APP_DIR / "covers.db"
 MUSIC_DIR = "/share/CACHEDEV1_DATA"  # Use only on NAS systems
@@ -104,7 +105,7 @@ def show_notification(title, message):
 def setup_logging():
     """Setup comprehensive logging configuration"""
     # Create logs directory if it doesn't exist
-    log_dir = Path("logs")
+    log_dir = Path(LOG_DIR)
     log_dir.mkdir(exist_ok=True)
 
     # Create formatters
