@@ -1,37 +1,31 @@
 
 
+import base64
+import logging
 import os
 import re
-import sys
+import signal
 import sqlite3
 import subprocess
-import logging
+import sys
 import traceback
-from pathlib import Path
-from flask import (
-    Flask,
-    render_template,
-    request,
-    jsonify,
-    redirect,
-    url_for,
-    send_file,
-    abort,
-)
-from mediafile import MediaFile
-from io import BytesIO
-import base64
-from threading import Thread
-from PIL import Image, ImageDraw
-from fuzzywuzzy import fuzz
 import webbrowser
-import signal
+from io import BytesIO
+from pathlib import Path
+from threading import Thread
+
 import librosa
 import numpy as np
-from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
+from flask import (abort, Flask, jsonify, redirect, render_template, request,
+                   send_file, url_for)
+from fuzzywuzzy import fuzz
+from mediafile import MediaFile
+from PIL import Image, ImageDraw
+
 from dlna_server import serve_audio_via_upnp
 from ecoserver_dlna_blueprint import dlna_bp
+from get_lyrics import LyricsPlugin
 
 if "--no-tray" not in sys.argv:
     from pystray import Icon, MenuItem, Menu
@@ -54,6 +48,7 @@ size = 256, 256
 results = None
 scan_for_lyrics = True
 silence_threshold_db = -46  # dB
+server = serve_audio_via_upnp("01 - Wahnsinn (Remastered 2006).flac")
 
 
 def run_flask():

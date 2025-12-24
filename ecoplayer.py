@@ -44,85 +44,47 @@ Entry Point:
 the `AudioPlayer` GUI.
 """
 
-import sys
+import asyncio
+import base64
+import json
 import os
+import re
 import sqlite3
-from fuzzywuzzy import fuzz
-from PySide6.QtCore import (
-    Qt,
-    QEvent,
-    QUrl,
-    QTimer,
-    QSize,
-    QRect,
-    Signal,
-    QThread,
-    Slot,
-    QMutex,
-)
-from PySide6.QtGui import (
-    QPixmap,
-    QTextCursor,
-    QImage,
-    QAction,
-    QIcon,
-    QKeySequence,
-    QKeyEvent,
-)
-from PySide6.QtWidgets import (
-    QApplication,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QPushButton,
-    QLabel,
-    QSlider,
-    QListWidget,
-    QFileDialog,
-    QTextEdit,
-    QListWidgetItem,
-    QMessageBox,
-    QComboBox,
-    QSpinBox,
-    QFormLayout,
-    QGroupBox,
-    QLineEdit,
-    QInputDialog,
-    QMenuBar,
-    QMenu,
-    QToolBar,
-    QStatusBar,
-    QProgressBar,
-    QFrame,
-    QCheckBox,
-    QStyle,
-    QWidgetAction,
-    QSizePolicy,
-    QDialog,
-)
-from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
-import qdarkstyle
-from mediafile import MediaFile
+import sys
+import threading
+import time
+import traceback
+import webbrowser
+from enum import Enum
 from pathlib import Path
 from random import shuffle
+import aiohttp
 import librosa
 import numpy as np
-import re
-from enum import Enum
-import json
-import asyncio
-import aiohttp
+import qdarkstyle
 import requests
-import base64
-import webbrowser
 import wikipedia
-from qdarkstyle import DarkPalette, LightPalette
-from get_lyrics import LyricsPlugin
 from dotenv import load_dotenv
+from fuzzywuzzy import fuzz
+from mediafile import MediaFile
+from PySide6.QtCore import (QEvent, QMutex, QRect, QSize, Qt, QThread, QTimer,
+                            QUrl, Signal, Slot)
+from PySide6.QtGui import (QAction, QIcon, QImage, QKeyEvent, QKeySequence,
+                           QPixmap, QTextCursor)
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
+                               QFileDialog, QFormLayout, QFrame, QGroupBox,
+                               QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+                               QListWidget, QListWidgetItem, QMenu, QMenuBar,
+                               QMessageBox, QProgressBar, QPushButton,
+                               QSizePolicy, QSlider, QSpinBox, QStatusBar,
+                               QStyle, QTextEdit, QToolBar, QVBoxLayout,
+                               QWidget, QWidgetAction)
+from qdarkstyle import DarkPalette, LightPalette
+
+from get_lyrics import LyricsPlugin
 from scanworker import ScanWorker
 from text import text_1, text_2, text_3, text_4, text_5, text_6, text_7, text_8
-import threading, traceback
-import time
 
 # Attempt to import VLC as an optional dependency for fallback playback
 try:
