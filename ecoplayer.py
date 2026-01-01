@@ -81,7 +81,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
                                QStyle, QTextEdit, QToolBar, QVBoxLayout,
                                QWidget, QWidgetAction)
 from qdarkstyle import DarkPalette, LightPalette
-
+import platform
 from get_lyrics import LyricsPlugin
 from scanworker import ScanWorker
 from text import text_1, text_2, text_3, text_4, text_5, text_6, text_7, text_8
@@ -190,6 +190,22 @@ def log_worker_action(action, worker=None):
             print("  worker.thread():", worker.thread())
         except Exception:
             pass
+
+def default_theme():
+    if platform.system() == "Windows":
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+            value = winreg.QueryValueEx(key, "AppsUseLightTheme")[0]
+            # value == 0 -> dark, 1 -> light
+            if value == 0:
+                return "dark"
+            else:
+                return "light"
+        except Exception:
+            return "default"
+    else:
+        return "default"
 
 
 def load_json(path: Path, default):
@@ -308,8 +324,13 @@ class WelcomeWizard(QDialog):
         self.label = QLabel("", self)
         self.label.setWordWrap(True)
         self.label.setStyleSheet(
-            "font-size: 12px; background: lightyellow; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
+            "font-size: 12px; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
         )
+        # In dark mode, if you want a highlight:
+        if w.dark_style == "dark":
+            self.label.setStyleSheet(
+                "font-size: 12px; color: white; background: #19232D; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
+            )
         self.layout.addWidget(self.label)
 
         # Buttons container
@@ -1130,9 +1151,9 @@ class AudioPlayer(QWidget):
         self.init_database()
         self.update_play_button()
         self.show()
-        if self.dark_style == "dark":
+        if self.dark_style == "dark" or default_theme() == "dark":
             self.set_dark_style()
-        elif self.dark_style == "light":
+        elif self.dark_style == "light" or default_theme() == "light":
             self.set_light_style()
         else:
             self.set_no_style()
@@ -1180,14 +1201,13 @@ class AudioPlayer(QWidget):
 
     def set_dark_style(self):
         self.dark_style = "dark"
-        # setup stylesheet
         app.setStyleSheet(qdarkstyle.load_stylesheet(palette=DarkPalette))
+        # Remove explicit color: black, background: light for dark mode
         self.lyrics_display.setStyleSheet(
-            "color: black; font-size: 18px; background: #E0F0FF; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
+            "font-size: 18px; background: #21314a; color: white; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
         )
         self.playlist_widget.setStyleSheet(
-            "QListView::item:selected{ background-color: blue;};"
-        )
+            "QListView::item:selected{ background-color: #324C64; };")
         dark_image_path = "static/images/buttons_dark.jpg"
         #  self.sub_images.load(dark_image_path)
         #   self.lbl.setPixmap(self.sub_images)
@@ -1261,6 +1281,8 @@ class AudioPlayer(QWidget):
         self.next_button.setFixedSize(QSize(50, 50))
 
     def set_no_style(self):
+        if default_theme() == "dark":
+            return
         self.dark_style = "default"
         # setup stylesheet
         app.setStyleSheet("")
