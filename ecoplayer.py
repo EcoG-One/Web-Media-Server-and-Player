@@ -49,7 +49,9 @@ import base64
 import json
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -67,8 +69,10 @@ import wikipedia
 from dotenv import load_dotenv
 from fuzzywuzzy import fuzz
 from mediafile import MediaFile
+from mutagen.id3 import ID3
+from mutagen.mp3 import MP3
 from PySide6.QtCore import (QEvent, QMutex, QRect, QSize, Qt, QThread, QTimer,
-                            QUrl, Signal, Slot)
+                            QUrl, Signal, Slot, qInstallMessageHandler)
 from PySide6.QtGui import (QAction, QIcon, QImage, QKeyEvent, QKeySequence,
                            QPixmap, QTextCursor)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -166,6 +170,15 @@ def qt_message_handler(msg_type, context, message):
     print("--- Python traceback (most recent call last) ---")
     traceback.print_stack(file=sys.stdout)
     print("=== end Qt message ===\n", flush=True)
+
+
+def qt_message_filter(msg_type, context, message):
+    if "Could not update timestamps for skipped samples." in str(message):
+        return
+    try:
+        print(message)
+    except Exception:
+        pass
 
 
 def log_player_action(action, player=None):
@@ -2103,6 +2116,9 @@ class AudioPlayer(QWidget):
                     song.display_text = (
                         f"{track['artist']} - {track['title']} ({track['album']})"
                     )
+                    if not song.is_remote and song.path:
+                        if not self._validate_mp3_for_load(song.path):
+                            continue
                     self.playlist.append(song)
                     item = QListWidgetItem(song.display_text)
                     self.playlist_widget.addItem(item)
@@ -2458,6 +2474,9 @@ class AudioPlayer(QWidget):
                     self.playlist_widget.setCurrentRow(idx)
                 else:
                     return
+            if not file.is_remote and file.path:
+                if not self._validate_mp3_for_load(file.path):
+                    return
             # path = file.path
             self.current_index = idx
             if file.is_remote:
@@ -2549,6 +2568,129 @@ class AudioPlayer(QWidget):
 
         return f"{artist} - {song_title} ({album})"
 
+    def _parse_itunsmpb(self, value):
+        parts = str(value).split()
+        if len(parts) < 3:
+            return None
+        try:
+            header_skipped = int(parts[1], 16)
+            tail_skipped = int(parts[2], 16)
+        except ValueError:
+            return None
+        return header_skipped, tail_skipped
+
+    def _ffmpeg_has_skipped_samples(self, file_path):
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return False
+
+        def _run_segment(args):
+            try:
+                result = subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+            except Exception:
+                return False
+            stderr = result.stderr or ""
+            return "skipped samples" in stderr.lower()
+
+        header_args = [
+            ffmpeg,
+            "-hide_banner",
+            "-v",
+            "warning",
+            "-ss",
+            "0",
+            "-t",
+            "1",
+            "-i",
+            file_path,
+            "-f",
+            "null",
+            "-",
+        ]
+        tail_args = [
+            ffmpeg,
+            "-hide_banner",
+            "-v",
+            "warning",
+            "-sseof",
+            "-1",
+            "-t",
+            "1",
+            "-i",
+            file_path,
+            "-f",
+            "null",
+            "-",
+        ]
+        return _run_segment(header_args) or _run_segment(tail_args)
+
+    def _get_mp3_skipped_samples(self, file_path):
+        try:
+            audio = MP3(file_path)
+            info = audio.info
+        except Exception as e:
+            self.status_bar.showMessage(
+                f"MP3 validation failed for {os.path.basename(file_path)}: {e}"
+            )
+            return None
+        header_skipped = int(getattr(info, "encoder_delay", 0) or 0)
+        tail_skipped = int(getattr(info, "encoder_padding", 0) or 0)
+        if header_skipped > 0 or tail_skipped > 0:
+            return header_skipped, tail_skipped
+
+        try:
+            tags = ID3(file_path)
+        except Exception:
+            return header_skipped, tail_skipped
+
+        if "TXXX:ENC_DELAY" in tags:
+            try:
+                header_skipped = int(str(tags["TXXX:ENC_DELAY"].text[0]))
+            except Exception:
+                pass
+        if "TXXX:ENC_PADDING" in tags:
+            try:
+                tail_skipped = int(str(tags["TXXX:ENC_PADDING"].text[0]))
+            except Exception:
+                pass
+        if header_skipped > 0 or tail_skipped > 0:
+            return header_skipped, tail_skipped
+
+        if "TXXX:iTunSMPB" in tags:
+            parsed = self._parse_itunsmpb(tags["TXXX:iTunSMPB"].text[0])
+            if parsed:
+                return parsed
+
+        return header_skipped, tail_skipped
+
+    def _validate_mp3_for_load(self, file_path):
+        if Path(file_path).suffix.lower() != ".mp3":
+            return True
+        skipped = self._get_mp3_skipped_samples(file_path)
+        if skipped is None:
+            return True
+        header_skipped, tail_skipped = skipped
+        if header_skipped > 0 or tail_skipped > 0:
+            self.status_bar.showMessage(
+                "Skipping MP3 with skipped samples "
+                f"(header={header_skipped}, tail={tail_skipped}): "
+                f"{os.path.basename(file_path)}"
+            )
+            return False
+        if self._ffmpeg_has_skipped_samples(file_path):
+            self.status_bar.showMessage(
+                "Skipping MP3 with skipped samples detected by ffmpeg: "
+                f"{os.path.basename(file_path)}"
+            )
+            return False
+        return True
+
     def show_playlist_menu(self, pos=None):
         menu = QFileDialog(self)
         menu.setFileMode(QFileDialog.ExistingFiles)
@@ -2632,6 +2774,9 @@ class AudioPlayer(QWidget):
                 or f.item_type == "artist"
                 or f.item_type == "album"
             ):  # if ext in audio_extensions:
+                if f.item_type == "song_title" and f.path:
+                    if not self._validate_mp3_for_load(f.path):
+                        continue
                 self.playlist.append(f)
                 item = QListWidgetItem(
                     f.display_text
@@ -2679,6 +2824,8 @@ class AudioPlayer(QWidget):
                 if not os.path.isabs(line):
                     line = os.path.abspath(os.path.join(os.path.dirname(path), line))
                 if os.path.isfile(line):
+                    if not self._validate_mp3_for_load(line):
+                        continue
                     audio = MediaFile(line)
                 else:
                     audio = None
@@ -2721,6 +2868,8 @@ class AudioPlayer(QWidget):
                         file_path = os.path.abspath(
                             os.path.join(os.path.dirname(path), file_path)
                         )
+                    if not self._validate_mp3_for_load(file_path):
+                        continue
                     song = ListItem()
                     song.item_type = "song_title"
                     song.path = file_path
@@ -2744,6 +2893,13 @@ class AudioPlayer(QWidget):
                 song.route = entry.get("route", "")
                 song.path = entry.get("path", "")
                 song.server = entry.get("server", "")
+                if (
+                    song.item_type == "song_title"
+                    and not song.is_remote
+                    and song.path
+                    and not self._validate_mp3_for_load(song.path)
+                ):
+                    continue
                 songs.append(song)
         except Exception as e:
             QMessageBox.critical(
@@ -2761,6 +2917,8 @@ class AudioPlayer(QWidget):
                     ext = Path(file).suffix.lower()
                     song = ListItem()
                     if ext in audio_extensions:
+                        if not self._validate_mp3_for_load(file_path):
+                            continue
                         song.item_type = "song_title"
                         song.display_text = self.get_basic_metadata(file_path)
                     elif ext in playlist_extensions:
@@ -4886,7 +5044,7 @@ def _process_startup_args(player: AudioPlayer, args):
             continue
 
 if __name__ == "__main__":
-    #  qInstallMessageHandler(qt_message_handler)
+    qInstallMessageHandler(qt_message_filter)
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon("static/images/favicon.ico"))
     settings = get_settings()
