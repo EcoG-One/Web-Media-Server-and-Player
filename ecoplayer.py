@@ -143,7 +143,7 @@ problematic_exts = {
 }
 
 # Supported playlist file extensions
-playlist_extensions = {".m3u", ".m3u8", ".cue", ".json"}
+playlist_extensions = {".m3u", ".m3u8", ".cue", ".eco"}
 
 # Additional utility functions and classes are defined below.
 
@@ -1803,9 +1803,9 @@ class AudioPlayer(QWidget):
             self,
             "Save Current Playlist",
             "",
-            "Jason Files (*.json);;Playlist Files (*.m3u8);;All Files (*)",
+            "Eco Files (*.eco);;Playlist Files (*.m3u8);;All Files (*)",
         )
-        if path.endswith("json"):
+        if path.endswith("eco"):
             pl = []
             for song in self.playlist:
                 jsong = {
@@ -2555,7 +2555,7 @@ class AudioPlayer(QWidget):
         menu.setNameFilters(
             [
                 "Audio files (*.mp3 *.flac *.ogg *.wav *.m4a *.aac *.wma *.opus)",
-                "Playlists (*.m3u *.m3u8 *.cue *.json)",
+                "Playlists (*.m3u *.m3u8 *.cue *.eco)",
                 "All files (*)",
             ]
         )
@@ -2613,8 +2613,8 @@ class AudioPlayer(QWidget):
                     self.playlist_label.setText(
                         f"Playlist: {os.path.basename(f.display_text)}"
                     )
-                elif ext == ".json":
-                    pl = self.load_json_playlist(f.path)
+                elif ext == ".eco":
+                    pl = self.load_eco_playlist(f.path)
                     self.playlist += pl
                     for i in pl:
                         item = QListWidgetItem(
@@ -2979,7 +2979,7 @@ class AudioPlayer(QWidget):
             )
             self.lyrics_display.highlight_line(idx)
         else:
-            self.lyrics_display.setText("No lyrics found.")
+            self.lyrics_display.setText("No lyrics found yet.")
 
     def prev_track(self):
         if self.current_index > 0:
@@ -4225,8 +4225,8 @@ class AudioPlayer(QWidget):
                 lines = self.load_m3u_playlist(playlist_path)
             elif ext == ".cue":
                 lines = self.load_cue_playlist(playlist_path)
-            elif ext == ".json":
-                lines = self.load_json_playlist(playlist_path)
+            elif ext == ".eco":
+                lines = self.load_eco_playlist(playlist_path)
             else:
                 QMessageBox.warning(
                     self, "Error!", f"Unsupported playlist format: {ext}"
