@@ -44,7 +44,6 @@ Entry Point:
 the `AudioPlayer` GUI.
 """
 
-import asyncio
 import base64
 import json
 import os
@@ -55,10 +54,8 @@ import threading
 import time
 import traceback
 import webbrowser
-from enum import Enum
 from pathlib import Path
 from random import shuffle
-import aiohttp
 import librosa
 import numpy as np
 import qdarkstyle
@@ -67,24 +64,28 @@ import wikipedia
 from dotenv import load_dotenv
 from fuzzywuzzy import fuzz
 from mediafile import MediaFile
-from PySide6.QtCore import (QEvent, QMutex, QRect, QSize, Qt, QThread, QTimer,
+from PySide6.QtCore import (QEvent, QRect, QSize, Qt, QThread, QTimer,
                             QUrl, Signal, Slot)
 from PySide6.QtGui import (QAction, QIcon, QImage, QKeyEvent, QKeySequence,
                            QPixmap, QTextCursor)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                                QFileDialog, QFormLayout, QFrame, QGroupBox,
                                QHBoxLayout, QInputDialog, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMenu, QMenuBar,
                                QMessageBox, QProgressBar, QPushButton,
                                QSizePolicy, QSlider, QSpinBox, QStatusBar,
                                QStyle, QTextEdit, QToolBar, QVBoxLayout,
-                               QWidget, QWidgetAction)
+                               QWidget)
 from qdarkstyle import DarkPalette, LightPalette
 import platform
+from ecoplayer_lyrics import LyricsDisplay, SynchronizedLyrics, TextEdit
+from ecoplayer_types import CheckBoxAction, ListItem, set_default_server
+from ecoplayer_wizard import WelcomeWizard
+from ecoplayer_workers import LocalMetaWorker, Worker
 from get_lyrics import LyricsPlugin
 from scanworker import ScanWorker
-from text import text_1, text_2, text_3, text_4, text_5, text_6, text_7, text_8
+from text import text_8
 
 # Attempt to import VLC as an optional dependency for fallback playback
 try:
@@ -244,260 +245,6 @@ def get_settings():
     return json_settings
 
 
-class ItemType(Enum):
-    PLAYLIST = "playlist"
-    SONG = "song"
-    ARTIST = "artist"
-    ALBUM = "album"
-    COVER = "cover"
-    DIRECTORY = "directory"
-
-    def set_item_type(self, item_type):
-        if not isinstance(item_type, ItemType):
-            raise ValueError("Invalid status value")
-        w.status_bar.showMessage(f"Status set to: {item_type.value}")
-
-
-class ListItem:
-    def __init__(self):
-        super().__init__()
-        self.is_remote = False
-        self.item_type = ItemType
-        self.display_text = "Unknown"
-        self.route = ""
-        self.path = ""
-        self.server = w.server
-
-    #   self.id = int
-
-    def absolute_path(self):
-        if self.is_remote:
-            abs_url = QUrl()
-            abs_url.setScheme("http")
-            abs_url.setHost(self.server)
-            abs_url.setPort(5000)
-            file_path = rf"/{self.route}/{self.path}"
-            abs_url.setPath(file_path)
-            return abs_url
-        else:
-            return QUrl.fromLocalFile(os.path.abspath(self.path))
-
-
-class CheckBoxAction(QWidgetAction):
-    def __init__(self, parent, text):
-        super(CheckBoxAction, self).__init__(parent)
-        layout = QHBoxLayout()
-        self.widget = QWidget()
-        label = QLabel(text)
-        label.setAlignment(Qt.AlignLeft)
-        layout.addWidget(QCheckBox())
-        layout.addWidget(label)
-        self.widget.setLayout(layout)
-        self.setDefaultWidget(self.widget)
-
-
-# --- Welcome Wizard Implementation ---
-class WelcomeWizard(QDialog):
-    """
-    Simple multi-step welcome wizard.
-
-    Steps:
-      1. "Welcome" - Cancel / Next
-      2. "Scanning" - Cancel / Scan / Next
-      3. "Ready" - Cancel / Next
-      4. "Connect to Another Computer" - Cancel / Connect to Remote / End Wizard
-      5. "Placeholder for Text 5" - End (and a 'Don't show again' checkbox)
-
-    The wizard will call AudioPlayer.scan_library and AudioPlayer.enter_server as requested.
-    """
-
-    def __init__(self, audio_player: "AudioPlayer"):
-        super().__init__(audio_player)
-        self.setWindowTitle("Welcome")
-        self.setModal(True)
-        self.audio = audio_player
-        self.step = 1
-        self.resize(500, 220)
-
-        self.layout = QVBoxLayout(self)
-
-        self.label = QLabel("", self)
-        self.label.setWordWrap(True)
-        self.label.setStyleSheet(
-            "font-size: 12px; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
-        )
-        # In dark mode, if you want a highlight:
-        if w.dark_style == "dark":
-            self.label.setStyleSheet(
-                "font-size: 12px; color: white; background: #19232D; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
-            )
-        self.layout.addWidget(self.label)
-
-        # Buttons container
-        self.button_box = QHBoxLayout()
-        self.layout.addLayout(self.button_box)
-
-        # For final step option
-        self.dont_show_checkbox = QCheckBox("Don't show this again", self)
-
-        self._build_step_ui()
-        self.update_step()
-
-    def _clear_buttons(self):
-        # Remove widgets from button box
-        while self.button_box.count():
-            item = self.button_box.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.setParent(None)
-                widget.deleteLater()
-
-    def _add_button(self, text, callback, default=False):
-        btn = QPushButton(text, self)
-        if default:
-            btn.setDefault(True)
-        btn.clicked.connect(callback)
-        self.button_box.addWidget(btn)
-        return btn
-
-    def _build_step_ui(self):
-        # Buttons are created dynamically per step in update_step
-        pass
-
-    def update_step(self):
-        self._clear_buttons()
-        # Remove checkbox if previously added
-        try:
-            self.layout.removeWidget(self.dont_show_checkbox)
-            self.dont_show_checkbox.setParent(None)
-        except Exception:
-            pass
-
-        if self.step == 1:
-            self.label.setText(text_1)
-            self._add_button("Cancel", self.reject)
-            self._add_button("Next", self.next_step, default=True)
-
-        elif self.step == 2:
-            self.label.setText(text_2)
-            self._add_button("Cancel", self.reject)
-            self._add_button("Back", self.back_step)
-            self._add_button("Scan", self._scan_async)
-            self._add_button("Next", self.next_step, default=True)
-
-        elif self.step == 3:
-            self.label.setText(text_3)
-            self._add_button("Cancel", self.reject)
-            self._add_button("Back", self.back_step)
-            self._add_button("Next", self.next_step, default=True)
-
-        elif self.step == 4:
-            self.label.setText(text_4)
-            self._add_button("Cancel", self.reject)
-            self._add_button("Back", self.back_step)
-            self._add_button("Connect", self._connect_remote)
-            self._add_button("Next", self.next_step, default=True)
-
-        elif self.step == 5:
-            self.label.setText(text_5)
-            self._add_button("Cancel", self.reject)
-            self._add_button("Back", self.back_step)
-            self._add_button("Scan", self._scan_remote)
-            self._add_button("Next", self.next_step, default=True)
-
-        elif self.step == 6:
-            self.label.setText(text_6)
-            self._add_button("Cancel", self.reject)
-            self._add_button("Back", self.back_step)
-            self._add_button("Next", self.next_step, default=True)
-
-        elif self.step == 7:
-            self.label.setText(text_7)
-            # Add the "Don't show again" checkbox
-            self.layout.addWidget(self.dont_show_checkbox)
-            self._add_button("Back", self.back_step)
-            self._add_button("End", self.finish_wizard, default=True)
-
-    def next_step(self):
-        if self.step < 7:
-            self.step += 1
-            self.update_step()
-        else:
-            self.finish_wizard()
-
-    def back_step(self):
-        if self.step > 1:
-            self.step -= 1
-            self.update_step()
-
-    def _scan_async(self):
-        """
-        Schedule scan_library to be called soon on the main event loop.
-        scan_library uses GUI dialogs, so it must run on the main thread.
-        We schedule it and continue (wizard remains open).
-        """
-        try:
-            QTimer.singleShot(0, lambda: self.audio.scan_library())
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to start library scan: {e}")
-
-    def _connect_remote(self):
-        """
-        Trigger connect to remote server flow.
-        This will open the server dialog on the main event loop.
-        """
-        try:
-            QTimer.singleShot(0, lambda: self.audio.enter_server())
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to open Connect to Remote: {e}")
-
-    def _scan_remote(self):
-        """
-        Schedule scan_remote_library to be called soon on the main event loop.
-        scan_library uses GUI dialogs, so it must run on the main thread.
-        We schedule it and continue (wizard remains open).
-        """
-        try:
-            QTimer.singleShot(0, lambda: self.audio.scan_remote_library())
-        except Exception as e:
-            QMessageBox.warning(
-                self, "Error", f"Failed to start remote library scan: {e}"
-            )
-
-    def finish_wizard(self):
-        # Persist "don't show again" option if checked
-        try:
-            settings = load_json(SETTINGS_FILE, default={})
-            if not isinstance(settings, dict):
-                settings = {}
-            settings["show_welcome"] = not self.dont_show_checkbox.isChecked()
-            # Ensure other known settings remain (merge defaults)
-            defaults = get_settings()
-            for k, v in defaults.items():
-                if k not in settings:
-                    settings[k] = v
-            save_json(SETTINGS_FILE, settings)
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Could not save settings: {e}")
-        self.accept()
-
-
-# --- End of Welcome Wizard Implementation ---
-
-
-class CheckBoxAction(QWidgetAction):
-    def __init__(self, parent, text):
-        super(CheckBoxAction, self).__init__(parent)
-        layout = QHBoxLayout()
-        self.widget = QWidget()
-        label = QLabel(text)
-        label.setAlignment(Qt.AlignLeft)
-        layout.addWidget(QCheckBox())
-        layout.addWidget(label)
-        self.widget.setLayout(layout)
-        self.setDefaultWidget(self.widget)
-
-
 class AudioPlayer(QWidget):
     request_search = Signal(str, str)
     request_reveal = Signal(ListItem)
@@ -537,6 +284,7 @@ class AudioPlayer(QWidget):
         self.pl_worker = None
         self.search_worker = None
         self.server = settings["server"]
+        set_default_server(self.server)
         self.api_url = self.remote_base = rf"http://{self.server}:5000"
         self.playlists = []
         self.dark_style = settings.get("style", "default")
@@ -1164,7 +912,9 @@ class AudioPlayer(QWidget):
         # Launch welcome wizard automatically if enabled in settings
         try:
             if self.settings.get("show_welcome", True) and len(sys.argv) == 1:
-                wizard = WelcomeWizard(self)
+                wizard = WelcomeWizard(
+                    self, load_json, save_json, get_settings, SETTINGS_FILE
+                )
                 if self.dark_style == "dark":
                     wizard.label.setStyleSheet(
                         "font-size: 12px; color: white; background: 19232D; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
@@ -1338,7 +1088,9 @@ class AudioPlayer(QWidget):
     def wizard(self):
         """Launch the welcome/setup wizard"""
         try:
-            wizard = WelcomeWizard(self)
+            wizard = WelcomeWizard(
+                self, load_json, save_json, get_settings, SETTINGS_FILE
+            )
             if self.dark_style == "dark":
                 wizard.label.setStyleSheet(
                     "font-size: 12px; color: white; background: 19232D; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
@@ -1544,6 +1296,7 @@ class AudioPlayer(QWidget):
         #   status_code = data['status']
         if data["status"] == 200:
             self.server = data["API_URL"]
+            set_default_server(self.server)
             self.playlist_widget.clear()
             self.api_url = self.remote_base = f"http://{self.server}:5000"
             save_json(
@@ -1830,7 +1583,7 @@ class AudioPlayer(QWidget):
                 QMessageBox.warning(self, "Error", f"Could not save file:\n{str(e)}")
 
     def show_instructions(self):
-        self.instructions = TextEdit()
+        self.instructions = TextEdit(text_8)
         if self.dark_style == "dark":
             self.instructions.setStyleSheet(
                 "font-size: 12px; color: white; background: #19232D; color: white; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
@@ -2966,7 +2719,10 @@ class AudioPlayer(QWidget):
         return
 
     def load_lyrics(self, file):
-        self.lyrics = SynchronizedLyrics(file)
+        self.lyrics = SynchronizedLyrics.from_metadata(
+            self.meta_data,
+            on_error=lambda msg: self.status_bar.showMessage(msg),
+        )
         self.lyrics_display.set_lyrics(self.lyrics.lines, self.lyrics.is_synchronized())
         self.update_lyrics_display()
 
@@ -4469,360 +4225,6 @@ class AudioPlayer(QWidget):
             },
         )
         self.close()
-
-
-class LocalMetaWorker(QThread):
-    """
-    Runs local audio metadata extraction off the GUI thread.
-    Expects an extractor callable that takes a single file_path arg and
-    returns the metadata dict (same structure as get_audio_metadata).
-    """
-
-    work_completed = Signal(dict)  # Emits {'retrieved_metadata': metadata}
-    work_error = Signal(str)
-    work_message = Signal(str)
-
-    def __init__(self, file_path: str, extractor_callable):
-        super().__init__()
-        self.file_path = file_path
-        self.extractor_callable = extractor_callable
-        self.mutex = QMutex()
-
-    def run(self):
-        try:
-            # Call the provided extractor (this will perform heavy work)
-            metadata = self.extractor_callable(self.file_path)
-            # Emit in same structure as your remote meta worker
-            self.work_completed.emit({"retrieved_metadata": metadata})
-        except Exception as e:
-            self.work_error.emit(str(e))
-
-
-class Worker(QThread):
-    """
-    Worker thread for handling asynchronous operations such as scanning, purging,
-    searching libraries, and interacting with remote servers. This class uses
-    PySide6's QThread to perform tasks in a separate thread to avoid blocking
-    the main GUI thread.
-
-    Attributes:
-        work_completed (Signal): Signal emitted when the work is successfully completed.
-        work_error (Signal): Signal emitted when an error occurs during the operation.
-        mutex (QMutex): Mutex to ensure thread-safe operations.
-        folder_path (str): Path to the folder being processed.
-        api_url (str): URL of the API endpoint for the operation.
-    """
-
-    # Define signals for communicating with the main thread
-    work_completed = Signal(dict)  # Emits scan result data
-    work_error = Signal(str)  # Emits error message
-
-    def __init__(self, folder_path, api_url):
-        """
-        Initialize the Worker thread with the folder path and API URL.
-
-        Args:
-            folder_path (str): Path to the folder to be processed.
-            api_url (str): URL of the API endpoint for the operation.
-        """
-        super().__init__()
-        self.mutex = QMutex()
-        self.folder_path = folder_path
-        self.api_url = api_url
-
-    def run(self):
-        """
-        Run the asynchronous work in a separate thread. This method is executed
-        when the thread starts. It handles exceptions and ensures proper cleanup.
-        """
-        result = None
-        try:
-            # Create new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            # Run the async scan
-            if self.api_url.endswith("scan_library"):
-                result = loop.run_until_complete(self.scan_library_async())
-            elif self.api_url.endswith("start"):
-                result = loop.run_until_complete(self.reveal_remote_song_async())
-            elif self.folder_path is None:
-                result = loop.run_until_complete(self.get_playlists_async())
-            elif isinstance(self.folder_path, dict):
-                result = loop.run_until_complete(self.search_async())
-            elif isinstance(self.folder_path, tuple):
-                result = loop.run_until_complete(self.purge_library_async())
-            elif self.folder_path == "meta":
-                result = loop.run_until_complete(self.get_metadata_async())
-            elif self.folder_path in {"song_title", "artist", "album"}:
-                result = loop.run_until_complete(self.get_songs_async())
-            elif self.folder_path == "pl":
-                result = loop.run_until_complete(self.get_pl_async())
-            elif self.folder_path == "server":
-                result = loop.run_until_complete(self.check_server_async())
-            else:
-                raise ValueError(f"Unknown folder_path value: {self.folder_path}")
-
-            # Emit success signal
-            self.work_completed.emit(result)
-
-        except Exception as e:
-            # Emit error signal
-            self.work_error.emit(str(e))
-            loop.close()
-            self.mutex.unlock()
-
-        finally:
-            loop.close()
-
-    async def scan_library_async(self):
-        """
-        Asynchronous function to scan the library. Uses aiohttp to interact
-        with the API endpoint for scanning the library.
-        """
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                self.api_url, json={"folder_path": self.folder_path}
-            ) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    raise Exception(f"Scan failed: {response.status}")
-
-    async def purge_library_async(self):
-        """
-        Asynchronous function to purge the library. Uses aiohttp to interact
-        with the API endpoint for purging the library.
-        """
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.api_url}/purge_library",
-                json={"folder_path": self.folder_path[1]},
-            ) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    raise Exception(f"Purge failed: {response.status}")
-
-    async def search_async(self):
-        """
-        Asynchronous function to search the library. Uses aiohttp to interact
-        with the API endpoint for searching the library.
-        """
-        async with aiohttp.ClientSession() as session:
-            async with session.get(self.api_url, params=self.folder_path) as response:
-                if response.status == 200:
-                    search_result = await response.json()
-                    result = {"search_result": search_result}
-                    return result
-                else:
-                    raise Exception(f"Search failed: {response.status}")
-
-    async def get_playlists_async(self):
-        """
-        Asynchronous function to retrieve playlists from the server. Uses aiohttp
-        to interact with the API endpoint for fetching playlists.
-        """
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{self.api_url}/get_playlists", timeout=5
-            ) as response:
-                if response.status == 200:
-                    retrieved_playlists = await response.json()
-                    result = {"retrieved_playlists": retrieved_playlists}
-                    return result
-                else:
-                    raise Exception(f"Failed to fetch playlists: {response.status}")
-
-    async def get_songs_async(self):
-        """
-        Asynchronous function to retrieve songs from the server. Uses aiohttp
-        to interact with the API endpoint for fetching songs.
-        """
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                self.api_url, params={"query": self.folder_path}
-            ) as response:
-                if response.status == 200:
-                    retrieved = await response.json()
-                    result = {"retrieved": retrieved}
-                    return result
-                else:
-                    raise Exception(f"Failed to fetch songs: {response.status}")
-
-    async def get_pl_async(self):
-        """
-        Asynchronous function to retrieve a specific playlist from the server.
-        Uses aiohttp to interact with the API endpoint for fetching the playlist.
-        """
-        async with aiohttp.ClientSession() as session:
-            async with session.get(self.api_url) as response:
-                if response.status == 200:
-                    retrieved_playlist = await response.json()
-                    result = {"pl": retrieved_playlist}
-                    return result
-                else:
-                    raise Exception(f"Failed to fetch playlist: {response.status}")
-
-    async def get_metadata_async(self):
-        """
-        Asynchronous function to retrieve metadata from the server. Uses aiohttp
-        to interact with the API endpoint for fetching metadata.
-        """
-        async with aiohttp.ClientSession() as session:
-            async with session.get(self.api_url) as response:
-                if response.status == 200:
-                    retrieved_metadata = await response.json()
-                    result = {"retrieved_metadata": retrieved_metadata}
-                    return result
-                elif response.status == 404:
-                    retrieved_metadata = {
-                        "album": "",
-                        "artist": "",
-                        "codec": "audio/flac 44.1kHz/16bits  860kbps",
-                        "duration": 0,
-                        "lyrics": "",
-                        "picture": None,
-                        "title": "Not Found",
-                        "year": "",
-                    }
-                    result = {"retrieved_metadata": retrieved_metadata}
-                    return result
-                else:
-                    raise Exception(f"Failed to fetch metadata: {response.status}")
-
-    async def check_server_async(self):
-        """
-        Asynchronous function to check if the server is valid and reachable.
-        Uses aiohttp to interact with the API endpoint for server validation.
-        """
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"http://{self.api_url}:5000", timeout=3
-            ) as response:
-                if response.status == 200:
-                    status = response.status
-                    return {"status": status, "API_URL": self.api_url}
-                else:
-                    raise Exception(f"Server check failed: {response.status}")
-
-    async def reveal_remote_song_async(self):
-        """
-        Asynchronous function to reveal the currently playing song on the remote server.
-        Uses aiohttp to interact with the API endpoint for revealing the song.
-        """
-        async with aiohttp.ClientSession() as session:
-            async with session.post(self.api_url, json=self.folder_path) as response:
-                if response.status == 200:
-                    answer = await response.json()
-                    result = {"answer": answer}
-                    return result
-                else:
-                    raise Exception(f"Failed to fetch songs: {response.status}")
-
-
-class SynchronizedLyrics:
-    def __init__(self, audio=None):
-        self.times = []
-        self.lines = []
-        self.raw_lyrics = ""
-
-        try:
-            if w.meta_data and "lyrics" in w.meta_data and w.meta_data["lyrics"]:
-                #       data = r.json()
-                self.raw_lyrics = w.meta_data["lyrics"]
-            else:
-                self.raw_lyrics = "--"
-        except Exception as e:
-            w.status_bar.showMessage("Remote lyrics fetch error:" + str(e))
-
-        self.parse_lyrics(self.raw_lyrics)
-
-    def parse_lyrics(self, lyrics_text):
-        time_tag = re.compile(r"\[(\d+):(\d+)(?:\.(\d+))?\]")
-        self.times = []
-        self.lines = []
-        for line in lyrics_text.splitlines():
-            matches = list(time_tag.finditer(line))
-            if matches:
-                lyric = time_tag.sub("", line).strip()
-                for m in matches:
-                    min, sec, ms = m.groups()
-                    total_ms = int(min) * 60 * 1000 + int(sec) * 1000 + int(ms or 0)
-                    self.times.append(total_ms)
-                    self.lines.append(lyric)
-            elif line.strip():
-                self.times.append(0)
-                self.lines.append(line.strip())
-
-    def get_current_line(self, pos_ms):
-        for i, t in enumerate(self.times):
-            if pos_ms < t:
-                return max(0, i - 1)
-        return len(self.lines) - 1 if self.lines else -1
-
-    def is_synchronized(self):
-        """Return True if lyrics are synchronized (have time tags)."""
-        # Synchronized if any time tag is nonzero
-        return any(t > 0 for t in self.times)
-
-
-class LyricsDisplay(QTextEdit):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.setReadOnly(True)
-        self.setStyleSheet(
-            "font-size: 18px; background: #E0F0FF; border-width: 2px; border-color: #7A7EA8; border-style: inset;"
-        )
-        self.current_line_idx = -1
-        self.lines = []
-        self.is_synchronized = False
-
-    def set_lyrics(self, lines, is_synchronized):
-        self.lines = lines
-        self.is_synchronized = is_synchronized
-        self.current_line_idx = -1
-        self.update_display(-1)
-
-    def update_display(self, highlight_idx):
-        html = ""
-        for idx, line in enumerate(self.lines):
-            if self.is_synchronized and idx == highlight_idx:
-                html += f"<div style='color: #3A89FF; font-weight: bold; background: #F5FBFF'>{line}</div>"
-            else:
-                html += f"<div>{line}</div>"
-        self.setHtml(html)
-        if self.is_synchronized and 0 <= highlight_idx < len(self.lines):
-            cursor = self.textCursor()
-            cursor.movePosition(QTextCursor.Start)
-            for _ in range(highlight_idx):
-                cursor.movePosition(QTextCursor.Down)
-            self.setTextCursor(cursor)
-            self.ensureCursorVisible()
-
-    def highlight_line(self, idx):
-        # Only highlight if lyrics are synchronized
-        if self.is_synchronized:
-            if idx != self.current_line_idx:
-                self.current_line_idx = idx
-                self.update_display(idx)
-        else:
-            # For unsynchronized lyrics, never highlight any line
-            if self.current_line_idx != -1:
-                self.current_line_idx = -1
-                self.update_display(-1)
-
-
-class TextEdit(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Instructions")
-        self.resize(1180, 780)
-        self.instructions_edit = QTextEdit(readOnly=True)
-        layout = QVBoxLayout()
-        layout.addWidget(self.instructions_edit)
-        self.setLayout(layout)
-        self.instructions_edit.setText(text_8)
 
 
 def _process_startup_args(player: AudioPlayer, args):
